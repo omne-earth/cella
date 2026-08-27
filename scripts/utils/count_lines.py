@@ -9,7 +9,7 @@ counting method is inspectable rather than a one-off shell pipeline.
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def split_source_and_tests(path: Path) -> tuple[int, int]:

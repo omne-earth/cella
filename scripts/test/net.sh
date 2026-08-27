@@ -31,7 +31,7 @@ if [ ! -f "$KERNEL" ] || [ ! -f "$DISK" ]; then
     exit 0
 fi
 if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-    echo "SKIP: $TAP is not configured with $HOST_IP -- run: sudo scripts/make_tap.sh $TAP $HOST_IP/24"
+    echo "SKIP: $TAP is not configured with $HOST_IP -- run: sudo scripts/setup/tap.sh $TAP $HOST_IP/24"
     exit 0
 fi
 

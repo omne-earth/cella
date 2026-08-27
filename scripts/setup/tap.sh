@@ -3,8 +3,8 @@
 # needs CAP_NET_ADMIN or root -- it just opens the TAP that's already
 # owned by your user.
 #
-# Usage: sudo scripts/make_tap.sh [tap-name] [host-cidr]
-#   sudo scripts/make_tap.sh tap0 192.168.200.1/24
+# Usage: sudo scripts/setup/tap.sh [tap-name] [host-cidr]
+#   sudo scripts/setup/tap.sh tap0 192.168.200.1/24
 
 set -euo pipefail
 

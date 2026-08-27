@@ -70,9 +70,10 @@ tests/
   virtio_block.rs         real descriptor-chain-driven virtio-blk tests
   virtio_mmio.rs            real virtio-mmio v2 protocol tests
 scripts/
-  make_tap.sh             one-time (per boot), needs sudo once
   jail.sh                  rootless bwrap wrapper, no jailer binary
-  bootstrap.sh                one-time Fedora host setup (runtime deps + tap0 + kvm check)
+  setup/
+    bootstrap.sh               one-time Fedora host setup (runtime deps + tap0 + kvm check)
+    tap.sh                       one-time (per boot) TAP device creation, needs sudo once
   build/
     assets.sh                 build a busybox rootfs + a bzImage kernel from source
     kernel-fragment.config      the driver set assets.sh needs beyond kernel defconfig
@@ -82,7 +83,8 @@ scripts/
   test/
     boot.sh / thaw.sh / net.sh     per-feature system tests against real KVM
     jail.sh / seccomp.sh            per-feature system tests, no KVM needed
-  count_lines.py               source-vs-tests line counting for `make lines`
+  utils/
+    count_lines.py               source-vs-tests line counting for `make lines`
 selinux/
   cella.te.example      policy sketch, reference only, not built here
 Makefile                  one target per significant feature -- see TESTING.md
@@ -234,7 +236,7 @@ state directory first and thaw the copy.
 - **Jail:** `scripts/jail.sh` wraps the binary in `bubblewrap`
   (`--unshare-user/pid/ipc/uts/cgroup`), binding in only the specific
   kernel/disk/state paths given on the command line, `/dev/kvm`, and
-  `/dev/net/tun`. No jailer binary, no root at runtime -- `make_tap.sh`
+  `/dev/net/tun`. No jailer binary, no root at runtime -- `scripts/setup/tap.sh`
   is the only step that needs `sudo`, once per boot, purely to create the
   TAP device (`CAP_NET_ADMIN`).
 - **seccomp:** `seccomp.rs` is a hand-rolled classic-BPF allowlist

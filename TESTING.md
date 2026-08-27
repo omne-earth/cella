@@ -82,7 +82,7 @@ Follow the `make thaw` / `scripts/test/thaw.sh` pattern:
 
 ## Line counts
 
-`make lines` (backed by `scripts/count_lines.py`, which separates real
+`make lines` (backed by `scripts/utils/count_lines.py`, which separates real
 source from inline `#[cfg(test)]` blocks rather than just running `wc
 -l` over everything):
 

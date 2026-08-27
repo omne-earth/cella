@@ -4,7 +4,7 @@
 # step is idempotent, so it's safe to re-run after e.g. a fresh install
 # or a new machine.
 #
-# Usage: scripts/bootstrap.sh
+# Usage: scripts/setup/bootstrap.sh
 set -euo pipefail
 
 if ! command -v dnf &>/dev/null; then
@@ -14,7 +14,7 @@ fi
 
 # rust/cargo/rustfmt/clippy: make build/debug/check/lint/fmt
 # bubblewrap: scripts/jail.sh
-# nftables/iproute: scripts/make_tap.sh
+# nftables/iproute: scripts/setup/tap.sh
 # curl: scripts/build/assets.sh (kernel/busybox source fetch)
 # iputils: scripts/test/net.sh (ping)
 # python3: make lines, scripts/build/assets.sh (kernel.org releases.json)

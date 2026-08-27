@@ -4,3 +4,4 @@ dist/
 .env
 .toolbox
 .claude
+__pycache__/

@@ -60,7 +60,7 @@ echo "PASS: jail.sh refuses to launch without required arguments"
 
 echo "--- probe 3: no ambient CAP_NET_ADMIN inside the jail ---"
 # The jail should not be able to create network devices -- that
-# capability was deliberately spent once, out of band, in make_tap.sh.
+# capability was deliberately spent once, out of band, in scripts/setup/tap.sh.
 if bwrap \
     --unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup \
     --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib /lib \

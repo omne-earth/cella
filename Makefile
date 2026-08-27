@@ -106,7 +106,7 @@ net: build dist ## Feature test: guest answers ICMP over the TAP after boot (scr
 	@touch .toolbox
 
 init: ## One-time host setup (Fedora): installs runtime deps, provisions the build toolbox, creates tap0, builds dist, checks /dev/kvm (needs sudo)
-	@$(SCRIPTS)/bootstrap.sh
+	@$(SCRIPTS)/setup/bootstrap.sh
 	@$(MAKE) .toolbox
 	@$(MAKE) setup-tap
 	@$(MAKE) dist
@@ -117,7 +117,7 @@ $(DIST)/bzImage $(DIST)/rootfs.ext4: | .toolbox
 dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
 
 setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once (name/CIDR from .env, see .env.example)
-	sudo $(SCRIPTS)/make_tap.sh $(CELLA_TAP) $(CELLA_TAP_CIDR)
+	sudo $(SCRIPTS)/setup/tap.sh $(CELLA_TAP) $(CELLA_TAP_CIDR)
 
 # --- Everything -----------------------------------------------------
 
@@ -126,7 +126,7 @@ test-all: test dist boot thaw net ## make test, plus every KVM-dependent feature
 	@echo "=== make test-all: done (see above for any SKIPs) ==="
 
 lines: ## Report source-only and source+test line counts (see also README's line-count section)
-	@python3 $(SCRIPTS)/count_lines.py
+	@python3 $(SCRIPTS)/utils/count_lines.py
 
 clean: ## cargo clean
 	$(CARGO) clean

@@ -1,6 +1,6 @@
 //! Minimal TAP wrapper.
 //!
-//! Opens an already-created TAP interface (see `scripts/make_tap.sh`) --
+//! Opens an already-created TAP interface (see `scripts/setup/tap.sh`) --
 //! this process never needs `CAP_NET_ADMIN` to create one, only read/write
 //! on the fd once it exists and is owned by the invoking user.
 
@@ -26,7 +26,7 @@ pub struct Tap {
 
 impl Tap {
     /// Attaches to an existing TAP interface `name` (created out-of-band,
-    /// see scripts/make_tap.sh). Requires only rw on /dev/net/tun and
+    /// see scripts/setup/tap.sh). Requires only rw on /dev/net/tun and
     /// that the interface is already owned by the calling user
     /// (`ip tuntap ... user $USER`).
     pub fn open(name: &str) -> io::Result<Self> {

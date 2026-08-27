@@ -28,7 +28,7 @@ if [ ! -f "$KERNEL" ] || [ ! -f "$DISK" ]; then
     exit 0
 fi
 if ! ip link show "$TAP" &>/dev/null; then
-    echo "SKIP: $TAP does not exist -- run: sudo scripts/make_tap.sh $TAP"
+    echo "SKIP: $TAP does not exist -- run: sudo scripts/setup/tap.sh $TAP"
     exit 0
 fi
 
