@@ -93,7 +93,7 @@ test: check lint unit-test integration-test test-jail test-seccomp ## Everything
 # cleanly if /dev/kvm, dist, or the TAP device aren't present, so
 # `make smoke` doesn't hard-fail without KVM.
 
-smoke-boot: build dist ## Boot a real kernel under KVM, watch for a kernel banner (scripts/test/boot.sh)
+smoke-boot: build dist ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
 	@$(SCRIPTS)/test/boot.sh
 
 smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/test/thaw.sh)

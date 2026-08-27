@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
-# Boots cella against a real kernel under real KVM and waits for signs
-# of life on the serial console. This is the one test in this repo that
-# actually exercises the boot path (GDT/page tables/bzImage load) end to
-# end -- everything else in tests/ and scripts/test-*.sh deliberately
+# Boots cella against a real kernel under real KVM and waits for a
+# *complete* boot -- root filesystem mounted, /sbin/init actually
+# running (rootfs-init.sh prints "cella-rootfs: init running" on
+# success) -- not just an early kernel banner. This is the one test in
+# this repo that actually exercises the boot path (GDT/page tables/
+# bzImage load, virtio-mmio device negotiation, root mount) end to end
+# -- everything else in tests/ and scripts/test-*.sh deliberately
 # avoids needing /dev/kvm.
 #
-# Honesty note (see README "What to check first"): the boot path has
-# never been run against real hardware by us. This script is what you'd
-# run to find out; a clean pass here is the strongest evidence available
-# that the loader is correct.
+# The kernel banner alone used to be the pass criterion here, which
+# was a real false positive for a long stretch of this project's
+# history: the guest was panicking on "unable to mount root fs" (no
+# VIRTIO_F_VERSION_1, see src/devices/virtio/mod.rs) well after
+# "Linux version" had already printed, and this test kept passing
+# through all of it.
+#
+# Honesty note (see README "What to check first"): distinguishing a
+# real regression from an environment issue (missing /dev/kvm, a bad
+# kernel/rootfs pairing) is still on you -- a clean pass here is strong
+# evidence the loader and device negotiation are correct, not proof
+# nothing downstream in the guest's own userspace is broken.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,15 +67,20 @@ echo "cella: booting (log: $LOG, timeout ${TIMEOUT_SECS}s)"
 PID=$!
 
 deadline=$((SECONDS + TIMEOUT_SECS))
-found=0
+kernel_seen=0
+init_seen=0
+exited_early=0
 while [ $SECONDS -lt $deadline ]; do
+    if grep -q "cella-rootfs: init running" "$LOG" 2>/dev/null; then
+        init_seen=1
+        break
+    fi
     if ! kill -0 "$PID" 2>/dev/null; then
-        echo "FAIL: process exited before producing kernel output"
+        exited_early=1
         break
     fi
     if grep -q "Linux version" "$LOG" 2>/dev/null; then
-        found=1
-        break
+        kernel_seen=1
     fi
     sleep 0.5
 done
@@ -78,9 +94,15 @@ echo "--- last 20 lines of serial output ---"
 tail -20 "$LOG" 2>/dev/null || true
 echo "---"
 
-if [ "$found" -eq 1 ]; then
-    echo "PASS: kernel banner observed on serial console"
+if [ "$init_seen" -eq 1 ]; then
+    echo "PASS: kernel booted, mounted root, and reached a running init (full boot confirmed)"
     exit 0
+elif [ "$exited_early" -eq 1 ]; then
+    echo "FAIL: process exited before reaching init (see stderr/serial log above)"
+    exit 1
+elif [ "$kernel_seen" -eq 1 ]; then
+    echo "FAIL: kernel banner observed, but never reached a running init within ${TIMEOUT_SECS}s -- likely stuck between boot and userspace (root mount, device negotiation, or init itself)"
+    exit 1
 elif [ -s "$LOG" ]; then
     echo "PARTIAL: some serial output but no kernel banner matched -- inspect the log above"
     exit 1

@@ -37,7 +37,7 @@ To also exercise the boot path, on a real Linux machine with KVM:
 ```sh
 make init          # once per host: deps, toolbox, tap0, dist
 make dist          # rootfs + kernel build (no-op if init already did it)
-make smoke-boot    # boots a real kernel, watches serial
+make smoke-boot    # boots a real kernel all the way to init
 make smoke-thaw    # boot -> freeze -> thaw -> verify
 make smoke-net     # best-effort ping over the TAP
 ```
@@ -52,7 +52,7 @@ Or all at once: `make smoke` (or `make test-all` for everything).
 | `make integration-test` | no | virtio-blk read/write/read-only-enforcement/capacity through **real descriptor chains** against a **real backing file**; the virtio-mmio v2 register protocol (magic/version/feature-negotiation/status-reset/queue-notify/config-space) against the **real `MmioTransport`**, with a mock `IrqLine` standing in for the one KVM ioctl this layer needs | `tests/virtio_block.rs`, `tests/virtio_mmio.rs` |
 | `make test-jail` | no | bwrap actually denies a path outside the bind set; `jail.sh` refuses to run without required args; no ambient `CAP_NET_ADMIN` inside the jail | `scripts/test/jail.sh` |
 | `make test-seccomp` | no | the **actual installed BPF filter** kills the process with `SIGSYS` on a disallowed syscall (not a simulation -- `install()` really runs, then a real forbidden syscall is really made) | `scripts/test/seccomp.sh`, hitting `cella --selftest-seccomp` |
-| `make smoke-boot` | **yes** | a real bzImage boots under real KVM far enough to print a kernel banner on the serial console -- the GDT/page-table/boot_params code path | `scripts/test/boot.sh` |
+| `make smoke-boot` | **yes** | a real bzImage boots under real KVM all the way to a running init -- GDT/page-table/boot_params, virtio-mmio device negotiation, and a successful root mount, not just an early kernel banner | `scripts/test/boot.sh` |
 | `make smoke-thaw` | **yes** | full lifecycle: boot, `SIGUSR1` freeze, sidecar file exists with no leftover `.tmp`, re-invoking the same command line thaws instead of re-booting, `state` is gone afterward (one-shot enforcement) | `scripts/test/thaw.sh` |
 | `make smoke-net` | **yes** | guest answers ICMP over the TAP after boot -- best-effort, depends on the test rootfs configuring networking from the `ip=` kernel parameter, which is unverified (see the script's own caveat) | `scripts/test/net.sh` |
 
