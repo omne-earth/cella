@@ -2,7 +2,7 @@
 # Orchestrates the full cryogenic freeze/thaw lifecycle against a real
 # VM under real KVM: boot -> freeze (SIGUSR1) -> verify the crash-safe
 # sidecar -> thaw (same command line, same --state-dir) -> verify
-# one-shot enforcement. `make thaw` is this script; nothing in the
+# one-shot enforcement. `make smoke-thaw` is this script; nothing in the
 # Makefile duplicates this logic.
 set -uo pipefail
 

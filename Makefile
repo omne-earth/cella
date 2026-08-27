@@ -12,26 +12,26 @@ CELLA_TAP_CIDR ?= 192.168.200.1/24
 .PHONY: help build debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist setup-tap \
-        boot thaw net jail seccomp \
+        smoke smoke-boot smoke-thaw smoke-net test-jail test-seccomp \
         clean distclean lines
 
 help: ## Show this help
 	@echo "cella -- build, lint, and test targets"
 	@echo ""
 	@echo "Build:"
-	@grep -hE '^(build|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@grep -hE '^(build|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
 	@echo ""
 	@echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
-	@grep -hE '^(unit-test|integration-test|selftest|test|jail|seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
 	@echo ""
-	@echo "Tests that need real KVM + a kernel/rootfs (one target per feature):"
-	@grep -hE '^(boot|thaw|net):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@echo "Smoke tests: real KVM, a real guest (one target per workflow):"
+	@grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
 	@echo ""
 	@echo "Setup:"
-	@grep -hE '^(init|dist|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@grep -hE '^(init|dist|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
 	@echo ""
 	@echo "Everything:"
-	@grep -hE '^(test-all|clean|distclean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@grep -hE '^(test-all|clean|distclean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
 
 # --- Build ------------------------------------------------------------
 
@@ -65,39 +65,46 @@ unit-test: ## cargo test --lib (inline #[cfg(test)] modules)
 integration-test: ## cargo test --tests (tests/*.rs, real virtio-mmio/blk logic, no KVM)
 	$(CARGO) test --tests
 
-selftest: build ## Sanity-run the seccomp self-test binary directly (see also: make seccomp)
+selftest: build ## Sanity-run the seccomp self-test binary directly (see also: make test-seccomp)
 	@./target/release/cella --selftest-seccomp; \
 	status=$$?; \
 	if [ $$status -eq 159 ]; then echo "OK: killed by SIGSYS as expected (exit $$status)"; \
 	else echo "UNEXPECTED exit $$status"; exit 1; fi
 
-jail: build ## Feature test: rootless bwrap jail actually confines the process (scripts/test/jail.sh)
+test-jail: build ## Rootless bwrap jail actually confines the process (scripts/test/jail.sh)
 	@$(SCRIPTS)/test/jail.sh
 
-seccomp: build ## Feature test: the real BPF filter kills a disallowed syscall (scripts/test/seccomp.sh)
+test-seccomp: build ## The real BPF filter kills a disallowed syscall (scripts/test/seccomp.sh)
 	@$(SCRIPTS)/test/seccomp.sh
 
-test: check lint unit-test integration-test jail seccomp ## Everything above: build hygiene + all no-KVM tests
+test: check lint unit-test integration-test test-jail test-seccomp ## Everything above: build hygiene + all no-KVM tests
 	@echo ""
 	@echo "=== make test: all no-KVM checks passed ==="
 
-# --- Tests that need real KVM + a kernel/rootfs ------------------------
+# --- Smoke tests: real KVM, a real guest, real workflows ---------------
 #
-# One target per significant feature that only exists once you can
-# actually run a guest: boot, freeze/thaw, networking. Each is a thin
-# `make` wrapper around a script that does the real orchestration --
-# see scripts/test/boot.sh, scripts/test/thaw.sh, scripts/test/net.sh.
-# All three SKIP (exit 0) cleanly if /dev/kvm, dist, or the TAP device
-# aren't present, so `make test-all` doesn't hard-fail without KVM.
+# Named smoke-* rather than bare boot/thaw/net: these aren't the
+# operations themselves (that's `scripts/jail.sh` for actually running
+# cella, `kill -USR1` for actually freezing it -- see README), they're
+# pass/fail checks that those workflows still work end to end. One
+# target per significant workflow, each a thin `make` wrapper around a
+# script that does the real orchestration -- see scripts/test/boot.sh,
+# scripts/test/thaw.sh, scripts/test/net.sh. All three SKIP (exit 0)
+# cleanly if /dev/kvm, dist, or the TAP device aren't present, so
+# `make smoke` doesn't hard-fail without KVM.
 
-boot: build dist ## Feature test: boot a real kernel under KVM, watch for a kernel banner (scripts/test/boot.sh)
+smoke-boot: build dist ## Boot a real kernel under KVM, watch for a kernel banner (scripts/test/boot.sh)
 	@$(SCRIPTS)/test/boot.sh
 
-thaw: build dist ## Feature test: boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/test/thaw.sh)
+smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/test/thaw.sh)
 	@$(SCRIPTS)/test/thaw.sh
 
-net: build dist ## Feature test: guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
+smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	@$(SCRIPTS)/test/net.sh
+
+smoke: smoke-boot smoke-thaw smoke-net ## All three smoke-* targets (skips gracefully without KVM)
+	@echo ""
+	@echo "=== make smoke: done (see above for any SKIPs) ==="
 
 # --- Setup --------------------------------------------------------------
 
@@ -121,7 +128,7 @@ setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once (name/C
 
 # --- Everything -----------------------------------------------------
 
-test-all: test dist boot thaw net ## make test, plus every KVM-dependent feature test (skips gracefully without KVM)
+test-all: test dist smoke ## make test, plus every KVM smoke test (skips gracefully without KVM)
 	@echo ""
 	@echo "=== make test-all: done (see above for any SKIPs) ==="
 

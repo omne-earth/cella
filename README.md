@@ -128,7 +128,7 @@ a Linux host. No `/dev/kvm` is required to build, only to run.
 
 `make dist` builds both a minimal rootfs and a minimal bzImage
 kernel from real upstream source, into `dist/` -- which is what
-`make boot` / `make thaw` / `make net` use. There's no shortcut for
+`make smoke-boot` / `make smoke-thaw` / `make smoke-net` use. There's no shortcut for
 either: no microVM project publishes a prebuilt bzImage with cella's
 exact driver set (virtio-mmio/blk/net + 8250 serial built in, nothing
 from a module or an initrd -- see `boot/x86_64.rs`), and pairing an
@@ -175,7 +175,7 @@ scripts/jail.sh \
   --cmdline "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=192.168.200.2::192.168.200.1:255.255.255.0::eth0:off"
 ```
 
-(`make boot` / `make thaw` / `make net` run equivalent commands
+(`make smoke-boot` / `make smoke-thaw` / `make smoke-net` run equivalent commands
 automatically as pass/fail system tests -- see `TESTING.md`.)
 
 Freeze it from another terminal:
@@ -255,7 +255,7 @@ state directory first and thaw the copy.
 
 ## What to check first if you try to actually boot this
 
-`make boot` (see `TESTING.md`) is the actual repro script -- point it at
+`make smoke-boot` (see `TESTING.md`) is the actual repro script -- point it at
 `/dev/kvm` and it tells you exactly where things stand. In rough order
 of "most likely to be wrong, given no hardware testing":
 
@@ -280,8 +280,8 @@ of "most likely to be wrong, given no hardware testing":
    chains -- not a guarantee they match every guest driver's exact
    expectations, but a much stronger footing than the boot path has.
 5. Freeze/thaw and seccomp are lower-risk still: both are fully unit- and
-   system-tested without needing a real guest at all (`make thaw`,
-   `make seccomp`) -- the register-restore ioctl sequence in `vcpu.rs`
+   system-tested without needing a real guest at all (`make smoke-thaw`,
+   `make test-seccomp`) -- the register-restore ioctl sequence in `vcpu.rs`
    is the one piece of freeze/thaw that only real KVM exercises.
 
 ## Explicitly out of scope

@@ -33,8 +33,8 @@ if [ -f "$OUT/bzImage" ] && [ -f "$OUT/rootfs.ext4" ]; then
 fi
 
 if [ ! -f /run/.toolboxenv ]; then
-    command -v toolbox &>/dev/null || { echo "cella: 'toolbox' not found -- run: make bootstrap" >&2; exit 1; }
-    [ -f "$HERE/.toolbox" ] || { echo "cella: build toolbox not set up -- run: make bootstrap (or: make .toolbox)" >&2; exit 1; }
+    command -v toolbox &>/dev/null || { echo "cella: 'toolbox' not found -- run: make init" >&2; exit 1; }
+    [ -f "$HERE/.toolbox" ] || { echo "cella: build toolbox not set up -- run: make init (or: make .toolbox)" >&2; exit 1; }
     echo "cella: entering the cella-build toolbox to build assets"
     exec toolbox run -c cella-build "$HERE/scripts/build/assets.sh"
 fi

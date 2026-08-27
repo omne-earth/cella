@@ -4,7 +4,7 @@
 //! real KVM without touching the real boot path until one is known to
 //! work.
 //!
-//! `make boot` failed with `gdt: Kvm(Error(22))` (EINVAL). The
+//! `make smoke-boot` failed with `gdt: Kvm(Error(22))` (EINVAL). The
 //! hypothesis: setup_gdt's KVM_SET_SREGS call sets CS.L=1 (a 64-bit code
 //! segment) while EFER.LMA/CR0.PG are still off (they're only enabled
 //! later, in setup_long_mode's *separate* KVM_SET_SREGS call) -- an

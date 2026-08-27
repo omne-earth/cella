@@ -14,7 +14,7 @@ set -euo pipefail
 TOOLBOX=cella-build
 
 if ! command -v toolbox &>/dev/null; then
-    echo "cella: 'toolbox' not found -- run: make bootstrap" >&2
+    echo "cella: 'toolbox' not found -- run: make init" >&2
     exit 1
 fi
 
