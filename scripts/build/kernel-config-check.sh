@@ -64,6 +64,38 @@ for line in open(config):
     elif m := re.match(r'^# (CONFIG_[A-Z0-9_]+) is not set$', line):
         have[m.group(1)] = 'n'
 
+# Symbols the guest needs that the fragment never mentions, because
+# defconfig already supplies them. Trimming defconfig is exactly how one
+# of these gets cut by accident -- CONFIG_TTY in particular becomes
+# user-settable the moment CONFIG_EXPERT is on, and taking it would kill
+# the serial console that is the only channel out of the guest.
+MUST_KEEP = {
+    "CONFIG_NETDEVICES":  "virtio_net's parent menu (VIRTIO_NET sits here, not under ETHERNET)",
+    "CONFIG_INET":        "IPv4, without which ip= and ICMP are meaningless",
+    "CONFIG_KVM_GUEST":   "kvmclock; without it the guest has no wall-clock source at all",
+    "CONFIG_PARAVIRT":    "prerequisite for kvmclock",
+    "CONFIG_PARAVIRT_CLOCK": "the pvclock structure kvmclock reads",
+    "CONFIG_X86_TSC":     "the TSC that kvmclock and freeze/thaw both depend on",
+    "CONFIG_TTY":         "the serial console -- the only channel out of the guest",
+    "CONFIG_BLOCK":       "block layer, hence virtio-blk and the ext4 root",
+    "CONFIG_BINFMT_ELF":  "running busybox at all",
+    "CONFIG_PROC_FS":     "/proc, which our init mounts",
+    "CONFIG_SYSFS":       "/sys, which our init mounts",
+}
+
+missing = [
+    (sym, why) for sym, why in sorted(MUST_KEEP.items())
+    if have.get(sym, "n") == "n"
+]
+if missing:
+    print("\nBROKEN -- the guest needs these and they are OFF:")
+    for sym, why in missing:
+        print(f"  {sym}: {why}")
+    print("\nSomething in the fragment cut one of these, directly or by dependency.")
+    sys.exit(1)
+
+print(f"{len(MUST_KEEP)} must-keep symbols verified present (time, RNG, network, console, root).")
+
 bad = []
 for sym, expected in sorted(want.items()):
     # A symbol absent from .config entirely is off -- either not set or
