@@ -195,8 +195,10 @@ RAM file being reopened).
 Guest RAM is a `MAP_SHARED` file from the moment the VM boots
 (`memory.rs`) -- it's simultaneously "the memory KVM runs the guest
 against" and "the on-disk freeze image." Freezing is `msync` plus a
-small sidecar file (`freeze.rs`) holding vCPU registers, FPU state,
-LAPIC, MSRs, and the kvmclock. Thawing re-`mmap`s the same RAM file and
+small sidecar file (`freeze.rs`) holding vCPU registers, FPU state
+(including the XSAVE area and XCR0), LAPIC, MSRs, the kvmclock, and the
+interrupt hardware that lives in KVM rather than in guest RAM: both PICs,
+the IOAPIC, and the PIT. Thawing re-`mmap`s the same RAM file and
 replays that sidecar back into a fresh KVM VM.
 
 Two properties fall out of this on purpose:
@@ -210,7 +212,9 @@ Two properties fall out of this on purpose:
   On thaw we restore the kvmclock and each vCPU's TSC to their frozen
   values (not the host's current wall time), so both the guest's
   monotonic clock *and* its wall clock resume exactly where they left
-  off: frozen at T, thawed, still T. The TSC restore is a direct `wrmsr`
+  off: frozen at T, thawed, still T -- `make probe-freeze-thaw-clock`
+  measures exactly this, and reports ~0 guest-perceived seconds across a
+  6s real freeze. The TSC restore is a direct `wrmsr`
   to `MSR_IA32_TSC` via `KVM_SET_MSRS`, which is *only* correct because
   there's exactly one vCPU: KVM's TSC-synchronization heuristics exist
   to keep multiple vCPUs' counters aligned with each other, and that

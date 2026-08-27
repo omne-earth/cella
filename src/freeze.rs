@@ -20,10 +20,18 @@ use std::path::{Path, PathBuf};
 
 use kvm_bindings::kvm_clock_data;
 
-use crate::vcpu::VcpuState;
+use crate::vcpu::{IrqChipState, VcpuState, SAVED_MSR_COUNT};
 
 const MAGIC: &[u8; 8] = b"MVMMFRZ1";
-const FORMAT_VERSION: u32 = 1;
+// The version of the sidecar format. Version 2 added
+// MSR_IA32_TSC_DEADLINE to SAVED_MSRS. Version 3 added the irqchip and
+// PIT state. Version 4 added the xsave and xcrs blocks. Each of these
+// changes moves all data that comes after it in the file. Therefore a
+// binary must not read a sidecar that has a different version.
+// read_state compares the version and refuses the file if it does not
+// agree. No sidecar files exist at an older version, but this check is
+// what makes that assumption safe.
+const FORMAT_VERSION: u32 = 4;
 
 pub struct HostCheck {
     pub tsc_khz: u32,
@@ -34,6 +42,7 @@ pub struct FrozenState {
     pub tsc_khz: u32,
     pub vcpu: VcpuState,
     pub clock: kvm_clock_data,
+    pub irqchip: IrqChipState,
 }
 
 #[allow(dead_code)] // fields read via {:?} in error messages, not field access
@@ -85,6 +94,7 @@ pub fn write_state(
     host: &HostCheck,
     vcpu: &VcpuState,
     clock: &kvm_clock_data,
+    irqchip: &IrqChipState,
 ) -> Result<(), Error> {
     fs::create_dir_all(dir)?;
     let tmp = state_tmp_path(dir);
@@ -106,12 +116,20 @@ pub fn write_state(
         f.write_all(as_bytes(&vcpu.mp_state))?;
         f.write_all(as_bytes(&vcpu.lapic))?;
         f.write_all(as_bytes(&vcpu.events))?;
+        f.write_all(as_bytes(&vcpu.xsave_region))?;
+        f.write_all(as_bytes(&vcpu.xcrs))?;
         for (index, data) in &vcpu.msrs {
             f.write_all(&index.to_le_bytes())?;
             f.write_all(&0u32.to_le_bytes())?; // pad
             f.write_all(&data.to_le_bytes())?;
         }
         f.write_all(as_bytes(clock))?;
+        // Write these blocks at the end of the file. This keeps the
+        // offsets of all data above them the same as in version 2.
+        f.write_all(as_bytes(&irqchip.pic_master))?;
+        f.write_all(as_bytes(&irqchip.pic_slave))?;
+        f.write_all(as_bytes(&irqchip.ioapic))?;
+        f.write_all(as_bytes(&irqchip.pit))?;
     }
     f.sync_all()?;
     drop(f);
@@ -170,8 +188,10 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
     let mp_state = unsafe { from_bytes(take(std::mem::size_of::<kvm_bindings::kvm_mp_state>())?) };
     let lapic = unsafe { from_bytes(take(std::mem::size_of::<kvm_bindings::kvm_lapic_state>())?) };
     let events = unsafe { from_bytes(take(std::mem::size_of::<kvm_bindings::kvm_vcpu_events>())?) };
+    let xsave_region = unsafe { from_bytes(take(std::mem::size_of::<[u32; 1024]>())?) };
+    let xcrs = unsafe { from_bytes(take(std::mem::size_of::<kvm_bindings::kvm_xcrs>())?) };
 
-    let mut msrs = [(0u32, 0u64); 16];
+    let mut msrs = [(0u32, 0u64); SAVED_MSR_COUNT];
     for slot in &mut msrs {
         let index = u32::from_le_bytes(take(4)?.try_into().unwrap());
         let _pad = take(4)?;
@@ -180,6 +200,16 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
     }
 
     let clock = unsafe { from_bytes(take(std::mem::size_of::<kvm_clock_data>())?) };
+
+    let irqchip = unsafe {
+        let sz = std::mem::size_of::<kvm_bindings::kvm_irqchip>();
+        IrqChipState {
+            pic_master: from_bytes(take(sz)?),
+            pic_slave: from_bytes(take(sz)?),
+            ioapic: from_bytes(take(sz)?),
+            pit: from_bytes(take(std::mem::size_of::<kvm_bindings::kvm_pit_state2>())?),
+        }
+    };
 
     Ok(FrozenState {
         mem_size,
@@ -192,8 +222,11 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
             lapic,
             events,
             msrs,
+            xsave_region,
+            xcrs,
         },
         clock,
+        irqchip,
     })
 }
 
@@ -224,7 +257,8 @@ pub fn is_frozen(dir: &Path) -> bool {
 mod tests {
     use super::*;
     use kvm_bindings::{
-        kvm_fpu, kvm_lapic_state, kvm_mp_state, kvm_regs, kvm_sregs, kvm_vcpu_events,
+        kvm_fpu, kvm_irqchip, kvm_lapic_state, kvm_mp_state, kvm_pit_state2, kvm_regs, kvm_sregs,
+        kvm_vcpu_events, kvm_xcrs,
     };
 
     fn tmp_dir(name: &str) -> PathBuf {
@@ -233,12 +267,36 @@ mod tests {
         d
     }
 
+    /// Make an IrqChipState that has known values. The chip ids and the
+    /// PIT count let the round-trip test show that these bytes go to the
+    /// file and come back correctly. A test that only reads a file of the
+    /// correct length does not show this.
+    fn sample_irqchip() -> IrqChipState {
+        let mut pit = kvm_pit_state2::default();
+        pit.channels[0].count = 12345;
+        IrqChipState {
+            pic_master: kvm_irqchip {
+                chip_id: 0,
+                ..Default::default()
+            },
+            pic_slave: kvm_irqchip {
+                chip_id: 1,
+                ..Default::default()
+            },
+            ioapic: kvm_irqchip {
+                chip_id: 2,
+                ..Default::default()
+            },
+            pit,
+        }
+    }
+
     fn sample_vcpu_state() -> VcpuState {
         let mut lapic_regs = [0i8; 1024];
         lapic_regs[0] = 42;
         lapic_regs[1023] = -7;
 
-        let mut msrs = [(0u32, 0u64); 16];
+        let mut msrs = [(0u32, 0u64); SAVED_MSR_COUNT];
         for (i, slot) in msrs.iter_mut().enumerate() {
             *slot = (0x1000 + i as u32, 0xdead_beef_0000_0000 + i as u64);
         }
@@ -259,6 +317,8 @@ mod tests {
             lapic: kvm_lapic_state { regs: lapic_regs },
             events: kvm_vcpu_events::default(),
             msrs,
+            xsave_region: [0u32; 1024],
+            xcrs: kvm_xcrs::default(),
         }
     }
 
@@ -276,7 +336,15 @@ mod tests {
         };
         let host = HostCheck { tsc_khz: 2_500_000 };
 
-        write_state(&dir, 256 * 1024 * 1024, &host, &vcpu, &clock).unwrap();
+        write_state(
+            &dir,
+            256 * 1024 * 1024,
+            &host,
+            &vcpu,
+            &clock,
+            &sample_irqchip(),
+        )
+        .unwrap();
         assert!(is_frozen(&dir));
 
         let read_back = read_state(&dir).unwrap();
@@ -290,6 +358,11 @@ mod tests {
         assert_eq!(read_back.vcpu.events, vcpu.events);
         assert_eq!(read_back.vcpu.msrs, vcpu.msrs);
         assert_eq!(read_back.clock, clock);
+        // The irqchip and PIT block comes after the clock. These checks
+        // also show that the data above the block did not move.
+        assert_eq!(read_back.irqchip.pit.channels[0].count, 12345);
+        assert_eq!(read_back.irqchip.pic_slave.chip_id, 1);
+        assert_eq!(read_back.irqchip.ioapic.chip_id, 2);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -308,6 +381,7 @@ mod tests {
             &HostCheck { tsc_khz: 1 },
             &vcpu,
             &clock,
+            &sample_irqchip(),
         )
         .unwrap();
 
@@ -347,6 +421,7 @@ mod tests {
             &HostCheck { tsc_khz: 1 },
             &vcpu,
             &clock,
+            &sample_irqchip(),
         )
         .unwrap();
 
@@ -383,6 +458,7 @@ mod tests {
             tsc_khz: 2_500_000,
             vcpu: sample_vcpu_state(),
             clock: kvm_clock_data::default(),
+            irqchip: sample_irqchip(),
         };
         assert!(check_hardware(&frozen, 2_500_000).is_ok());
         assert!(matches!(

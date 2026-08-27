@@ -126,6 +126,19 @@ fn main() {
         seccomp::selftest_provoke_kill();
     }
 
+    // Print the contents of a frozen sidecar. Use this option to examine
+    // freeze and thaw problems, because there is no debugger in the
+    // guest. This code does not use KVM or the devices. Therefore it runs
+    // before the code that makes them. A thaw that is successful deletes
+    // the state file. Therefore you must dump the state before you thaw
+    // it, not after.
+    if std::env::args().nth(1).as_deref() == Some("--dump-state") {
+        let dir = std::env::args()
+            .nth(2)
+            .unwrap_or_else(|| usage_error("--dump-state needs a state directory"));
+        dump_state(&PathBuf::from(dir));
+    }
+
     let args = parse_args();
     let frozen = freeze::is_frozen(&args.state_dir);
 
@@ -223,6 +236,12 @@ fn main() {
             .unwrap_or_else(|e| fatal(&format!("restoring vcpu state: {e:?}")));
         vcpu::restore_vm_clock(&vm, &frozen_state.clock)
             .unwrap_or_else(|e| fatal(&format!("restoring clock: {e:?}")));
+        // The code above made a new irqchip and a new PIT. This call puts
+        // back the IOAPIC routing and the PIT programming that the guest
+        // set before the freeze. Without this call, a halted guest waits
+        // for a timer interrupt that does not occur.
+        vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
+            .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
         freeze::finalize_thaw(&args.state_dir)
             .unwrap_or_else(|e| fatal(&format!("finalizing thaw: {e}")));
         eprintln!("cella: thawed {:?}", args.state_dir);
@@ -347,11 +366,20 @@ fn do_freeze(
     let vcpu_state =
         vcpu::save(vcpu_fd).unwrap_or_else(|e| fatal(&format!("saving vcpu state: {e:?}")));
     let clock = vcpu::save_vm_clock(vm).unwrap_or_else(|e| fatal(&format!("saving clock: {e:?}")));
+    let irqchip =
+        vcpu::save_irqchip(vm).unwrap_or_else(|e| fatal(&format!("saving irqchip/PIT: {e:?}")));
     let tsc_khz = vcpu_fd.get_tsc_khz().unwrap_or(0);
 
     let host_check = freeze::HostCheck { tsc_khz };
-    freeze::write_state(state_dir, mem_size_bytes, &host_check, &vcpu_state, &clock)
-        .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
+    freeze::write_state(
+        state_dir,
+        mem_size_bytes,
+        &host_check,
+        &vcpu_state,
+        &clock,
+        &irqchip,
+    )
+    .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
 
     eprintln!("cella: frozen");
 }
@@ -379,6 +407,137 @@ fn install_sigio_handler() {
         sa.sa_flags = 0;
         libc::sigaction(libc::SIGIO, &sa, std::ptr::null_mut());
     }
+}
+
+/// Print the contents of a frozen sidecar, then exit. The output shows
+/// the fields that control if a thawed guest can continue: the address of
+/// the next instruction, the halt state, and the timer and clock state.
+fn dump_state(dir: &PathBuf) -> ! {
+    let st = match freeze::read_state(dir) {
+        Ok(s) => s,
+        Err(e) => fatal(&format!("reading state from {dir:?}: {e:?}")),
+    };
+
+    println!("state dir:   {dir:?}");
+    println!("mem_size:    {} MiB", st.mem_size / (1024 * 1024));
+    println!("tsc_khz:     {}", st.tsc_khz);
+    println!();
+    println!(
+        "mp_state:    {} ({})",
+        st.vcpu.mp_state.mp_state,
+        match st.vcpu.mp_state.mp_state {
+            0 => "RUNNABLE",
+            3 => "HALTED -- the vCPU was in HLT, so it needs an interrupt to run again",
+            other => {
+                if other == 1 {
+                    "UNINITIALIZED"
+                } else {
+                    "other"
+                }
+            }
+        }
+    );
+    println!("rip:         {:#018x}", st.vcpu.regs.rip);
+    println!("rsp:         {:#018x}", st.vcpu.regs.rsp);
+    println!(
+        "rflags:      {:#x} (IF={})",
+        st.vcpu.regs.rflags,
+        (st.vcpu.regs.rflags >> 9) & 1
+    );
+    println!(
+        "cr0/cr3/cr4: {:#x} / {:#x} / {:#x}",
+        st.vcpu.sregs.cr0, st.vcpu.sregs.cr3, st.vcpu.sregs.cr4
+    );
+    println!("efer:        {:#x}", st.vcpu.sregs.efer);
+    println!();
+    // Decode the LAPIC timer registers. MSR_IA32_TSC_DEADLINE reads 0
+    // when the LVT timer is not in TSC-deadline mode. Therefore a value of
+    // 0 does not show that no timer is in operation. The timer mode and
+    // the two count registers show if a timer was in operation at the
+    // freeze.
+    let reg = |off: usize| -> u32 {
+        let b = &st.vcpu.lapic.regs;
+        u32::from_le_bytes([
+            b[off] as u8,
+            b[off + 1] as u8,
+            b[off + 2] as u8,
+            b[off + 3] as u8,
+        ])
+    };
+    let lvtt = reg(0x320);
+    let mode = match (lvtt >> 17) & 0x3 {
+        0 => "one-shot",
+        1 => "periodic",
+        2 => "TSC-deadline",
+        _ => "reserved",
+    };
+    println!("LAPIC timer:");
+    println!(
+        "  LVTT       {lvtt:#010x}  vector {} mode {mode} masked {}",
+        lvtt & 0xff,
+        (lvtt >> 16) & 1
+    );
+    println!("  TMICT      {:#010x}  (initial count)", reg(0x380));
+    println!(
+        "  TMCCT      {:#010x}  (current count -- 0 means nothing is counting down)",
+        reg(0x390)
+    );
+    println!("  TDCR       {:#010x}  (divide config)", reg(0x3e0));
+    println!(
+        "  SPIV       {:#010x}  (APIC software-enabled bit 8 = {})",
+        reg(0xf0),
+        (reg(0xf0) >> 8) & 1
+    );
+    println!();
+    println!(
+        "kvmclock:    {} ns (flags {:#x})",
+        st.clock.clock, st.clock.flags
+    );
+    println!();
+    println!("MSRs:");
+    let tsc = st
+        .vcpu
+        .msrs
+        .iter()
+        .find(|(i, _)| *i == 0x10)
+        .map(|(_, d)| *d)
+        .unwrap_or(0);
+    for (index, data) in &st.vcpu.msrs {
+        let name = match *index {
+            0x0000_0010 => "MSR_IA32_TSC",
+            0xc000_0080 => "MSR_EFER",
+            0x0000_001b => "MSR_IA32_APICBASE",
+            0x0000_0174 => "MSR_IA32_SYSENTER_CS",
+            0x0000_0175 => "MSR_IA32_SYSENTER_ESP",
+            0x0000_0176 => "MSR_IA32_SYSENTER_EIP",
+            0xc000_0081 => "MSR_STAR",
+            0xc000_0082 => "MSR_LSTAR",
+            0xc000_0083 => "MSR_CSTAR",
+            0xc000_0084 => "MSR_SYSCALL_MASK",
+            0xc000_0102 => "MSR_KERNEL_GS_BASE",
+            0x4b56_4d00 => "MSR_KVM_WALL_CLOCK_NEW",
+            0x4b56_4d01 => "MSR_KVM_SYSTEM_TIME_NEW",
+            0x4b56_4d02 => "MSR_KVM_ASYNC_PF_EN",
+            0x4b56_4d03 => "MSR_KVM_STEAL_TIME",
+            0x4b56_4d04 => "MSR_KVM_PV_EOI_EN",
+            0x0000_06e0 => "MSR_IA32_TSC_DEADLINE",
+            _ => "(unknown)",
+        };
+        print!("  {index:#010x} {name:<24} {data:#018x}");
+        if *index == 0x0000_06e0 {
+            if *data == 0 {
+                print!("  <- ZERO: no timer was armed at freeze, so restoring it arms nothing");
+            } else if *data < tsc {
+                print!(
+                    "  <- already past the frozen TSC ({tsc:#x}): should fire immediately on thaw"
+                );
+            } else {
+                print!("  <- {} TSC ticks in the future", data - tsc);
+            }
+        }
+        println!();
+    }
+    std::process::exit(0);
 }
 
 fn fatal(msg: &str) -> ! {
