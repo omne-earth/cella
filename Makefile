@@ -32,12 +32,25 @@ DIST := dist
 CELLA_TAP ?= tap0
 CELLA_TAP_CIDR ?= 192.168.200.1/24
 
+# Pinned, not resolved at build time. assets.sh used to ask kernel.org
+# for the current longterm release on every single run, which means the
+# kernel could -- and did -- move out from under a measurement
+# mid-investigation: an RTC boot-time comparison silently spanned
+# 6.18.46 -> 6.18.47 because the rebuild happened to cross a point
+# release. `make dist` is now reproducible. Override either in .env (see
+# the -include above) or on the command line to bump or bisect; find the
+# current longterm at https://www.kernel.org/releases.json.
+KERNEL_VERSION ?= 6.18.47
+BUSYBOX_VERSION ?= 1.37.0
+export KERNEL_VERSION BUSYBOX_VERSION
+
 .PHONY: help build debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel lines \
-        probe-sregs probe-wallclock probe-freeze-thaw-clock
+        probe-sregs probe-wallclock probe-freeze-thaw-clock \
+        kernel-config-check
 
 help: ## Show this help
 	$(LOG)
@@ -53,7 +66,7 @@ help: ## Show this help
 	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
-	grep -hE '^(init|dist|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(init|dist|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Everything:"
 	grep -hE '^(test-all|clean|distclean|distclean-kernel|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -180,6 +193,10 @@ $(DIST)/bzImage $(DIST)/rootfs.ext4: | .toolbox
 	$(SCRIPTS)/build/assets.sh
 
 dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
+
+kernel-config-check: ## Resolve kernel-fragment.config against defconfig and report any line kconfig silently overruled (seconds, no compile)
+	$(LOG)
+	$(SCRIPTS)/build/kernel-config-check.sh
 
 setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once (name/CIDR from .env, see .env.example)
 	$(LOG)
