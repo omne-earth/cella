@@ -607,14 +607,42 @@ fn dump_state(dir: &PathBuf) -> ! {
                     println!("  tsc_to_system_mul: {:#x}", u32at(24));
                     println!("  tsc_shift:         {}", buf[28] as i8);
                     println!("  flags:             {flags:#04x}");
-                    println!(
-                        "    TSC_STABLE    {}",
-                        if flags & 1 != 0 {
-                            "set. The guest does not run the watchdog against the TSC."
-                        } else {
-                            "NOT set. The guest runs the watchdog against the TSC."
-                        }
-                    );
+                    // State what the bit means, and do not state what the
+                    // guest does. The two are no longer the same: cella
+                    // passes tsc=reliable, thus the guest does not run the
+                    // watchdog even when this bit is clear.
+                    if flags & 1 != 0 {
+                        println!(
+                            "    TSC_STABLE    set. The host KVM declares the TSC of the \
+                             guest stable."
+                        );
+                    } else {
+                        println!(
+                            "    TSC_STABLE    not set. The host KVM does not declare the \
+                             TSC of the guest"
+                        );
+                        println!(
+                            "                  stable, because the TSC of the host is not \
+                             stable. cella"
+                        );
+                        println!(
+                            "                  cannot change this bit: KVM writes the page \
+                             at every"
+                        );
+                        println!(
+                            "                  update. Linux runs the clocksource watchdog \
+                             against the TSC"
+                        );
+                        println!(
+                            "                  when this bit is clear, unless the command \
+                             line contains"
+                        );
+                        println!(
+                            "                  tsc=reliable or tsc=nowatchdog. cella passes \
+                             tsc=reliable"
+                        );
+                        println!("                  (see src/config.rs).");
+                    }
                     println!(
                         "    GUEST_STOPPED {}",
                         if flags & 2 != 0 { "set" } else { "not set" }
