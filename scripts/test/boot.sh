@@ -12,7 +12,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$HERE/.."
+ROOT="$HERE/../.."
 BIN="${CELLA_BIN:-$ROOT/target/release/cella}"
 KERNEL="${CELLA_TEST_KERNEL:-$ROOT/dist/bzImage}"
 DISK="${CELLA_TEST_DISK:-$ROOT/dist/rootfs.ext4}"

@@ -71,11 +71,11 @@ selftest: build ## Sanity-run the seccomp self-test binary directly (see also: m
 	if [ $$status -eq 159 ]; then echo "OK: killed by SIGSYS as expected (exit $$status)"; \
 	else echo "UNEXPECTED exit $$status"; exit 1; fi
 
-jail: build ## Feature test: rootless bwrap jail actually confines the process (scripts/test-jail.sh)
-	@$(SCRIPTS)/test-jail.sh
+jail: build ## Feature test: rootless bwrap jail actually confines the process (scripts/test/jail.sh)
+	@$(SCRIPTS)/test/jail.sh
 
-seccomp: build ## Feature test: the real BPF filter kills a disallowed syscall (scripts/test-seccomp.sh)
-	@$(SCRIPTS)/test-seccomp.sh
+seccomp: build ## Feature test: the real BPF filter kills a disallowed syscall (scripts/test/seccomp.sh)
+	@$(SCRIPTS)/test/seccomp.sh
 
 test: check lint unit-test integration-test jail seccomp ## Everything above: build hygiene + all no-KVM tests
 	@echo ""
@@ -86,18 +86,18 @@ test: check lint unit-test integration-test jail seccomp ## Everything above: bu
 # One target per significant feature that only exists once you can
 # actually run a guest: boot, freeze/thaw, networking. Each is a thin
 # `make` wrapper around a script that does the real orchestration --
-# see scripts/boot.sh, scripts/thaw.sh, scripts/net.sh. All three SKIP
-# (exit 0) cleanly if /dev/kvm, dist, or the TAP device aren't present,
-# so `make test-all` doesn't hard-fail in an environment without KVM.
+# see scripts/test/boot.sh, scripts/test/thaw.sh, scripts/test/net.sh.
+# All three SKIP (exit 0) cleanly if /dev/kvm, dist, or the TAP device
+# aren't present, so `make test-all` doesn't hard-fail without KVM.
 
-boot: build dist ## Feature test: boot a real kernel under KVM, watch for a kernel banner (scripts/boot.sh)
-	@$(SCRIPTS)/boot.sh
+boot: build dist ## Feature test: boot a real kernel under KVM, watch for a kernel banner (scripts/test/boot.sh)
+	@$(SCRIPTS)/test/boot.sh
 
-thaw: build dist ## Feature test: boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/thaw.sh)
-	@$(SCRIPTS)/thaw.sh
+thaw: build dist ## Feature test: boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/test/thaw.sh)
+	@$(SCRIPTS)/test/thaw.sh
 
-net: build dist ## Feature test: guest answers ICMP over the TAP after boot (scripts/net.sh, best-effort)
-	@$(SCRIPTS)/net.sh
+net: build dist ## Feature test: guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
+	@$(SCRIPTS)/test/net.sh
 
 # --- Setup --------------------------------------------------------------
 

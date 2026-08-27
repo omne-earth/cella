@@ -7,7 +7,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$HERE/.."
+ROOT="$HERE/../.."
 BIN="${CELLA_BIN:-$ROOT/target/release/cella}"
 KERNEL="${CELLA_TEST_KERNEL:-$ROOT/dist/bzImage}"
 DISK="${CELLA_TEST_DISK:-$ROOT/dist/rootfs.ext4}"
@@ -60,7 +60,11 @@ kill -0 "$PID" 2>/dev/null || fail "process exited during boot (see $TMP/boot.er
 echo "PASS: process is running after ${BOOT_WAIT_SECS}s"
 
 echo "--- step 2: freeze ---"
-"$HERE/freeze.sh" "$PID"
+# Cryogenic freeze: SIGUSR1 tells cella to write its frozen state and
+# exit; re-running the same command line against the same --state-dir
+# then thaws instead of booting (step 3, below).
+kill -USR1 "$PID"
+echo "cella: sent freeze signal to pid $PID (it will exit once the state file is written)"
 deadline=$((SECONDS + FREEZE_TIMEOUT_SECS))
 while kill -0 "$PID" 2>/dev/null; do
     [ $SECONDS -lt $deadline ] || fail "process did not exit within ${FREEZE_TIMEOUT_SECS}s of SIGUSR1"

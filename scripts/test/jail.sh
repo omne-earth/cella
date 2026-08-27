@@ -5,7 +5,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${CELLA_BIN:-$HERE/../target/release/cella}"
+BIN="${CELLA_BIN:-$HERE/../../target/release/cella}"
 
 if ! command -v bwrap >/dev/null; then
     echo "SKIP: bubblewrap not installed"
@@ -49,7 +49,7 @@ echo "--- probe 2: jail.sh's own bind set matches --state-dir/--disk, nothing el
 # jail.sh should refuse to run without cella's required args (fails
 # fast, before ever calling bwrap) -- this is jail.sh's own input
 # validation, exercised for real.
-if "$HERE/jail.sh" --tap tap0 >/tmp/jail_missing_args.$$ 2>&1; then
+if "$HERE/../jail.sh" --tap tap0 >/tmp/jail_missing_args.$$ 2>&1; then
     echo "FAIL: jail.sh should have refused to run without --state-dir/--disk"
     cat /tmp/jail_missing_args.$$
     rm -f /tmp/jail_missing_args.$$

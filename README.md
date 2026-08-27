@@ -72,7 +72,6 @@ tests/
 scripts/
   make_tap.sh             one-time (per boot), needs sudo once
   jail.sh                  rootless bwrap wrapper, no jailer binary
-  freeze.sh                 send SIGUSR1 to a running cella
   bootstrap.sh                one-time Fedora host setup (runtime deps + tap0 + kvm check)
   build/
     assets.sh                 build a busybox rootfs + a bzImage kernel from source
@@ -80,8 +79,9 @@ scripts/
     busybox-fragment.config      static-link override for assets.sh's busybox build
     rootfs.sh                     /sbin/init installed into the built rootfs
     toolbox.sh                     creates/provisions the cella-build toolbox
-  boot.sh / thaw.sh / net.sh  per-feature system tests against real KVM
-  test-jail.sh / test-seccomp.sh   per-feature system tests, no KVM needed
+  test/
+    boot.sh / thaw.sh / net.sh     per-feature system tests against real KVM
+    jail.sh / seccomp.sh            per-feature system tests, no KVM needed
   count_lines.py               source-vs-tests line counting for `make lines`
 selinux/
   cella.te.example      policy sketch, reference only, not built here
@@ -161,8 +161,8 @@ mkfs.ext4 rootfs.img
 ## Run
 
 ```sh
-make init                                    # once per host: deps, toolbox, tap0
-make dist                                 # or use your own kernel/disk
+make init          # once per host: deps, toolbox, tap0, dist
+make dist          # or use your own kernel/disk
 
 scripts/jail.sh \
   --state-dir ./vm1 \
@@ -179,7 +179,7 @@ automatically as pass/fail system tests -- see `TESTING.md`.)
 Freeze it from another terminal:
 
 ```sh
-scripts/freeze.sh $(pgrep -f 'target/release/cella')
+kill -USR1 $(pgrep -f 'target/release/cella')
 ```
 
 Run the exact same `jail.sh` command again against the same

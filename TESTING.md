@@ -35,11 +35,11 @@ Expected output ends with:
 To also exercise the boot path, on a real Linux machine with KVM:
 
 ```sh
-make init                                    # once per host: deps, toolbox, tap0
-make dist                                         # rootfs fetch + kernel build, one-time
-make boot                                          # boots a real kernel, watches serial
-make thaw                                          # boot -> freeze -> thaw -> verify
-make net                                           # best-effort ping over the TAP
+make init          # once per host: deps, toolbox, tap0, dist
+make dist          # rootfs + kernel build (no-op if init already did it)
+make boot          # boots a real kernel, watches serial
+make thaw          # boot -> freeze -> thaw -> verify
+make net           # best-effort ping over the TAP
 ```
 
 Or all at once: `make test-all`.
@@ -50,11 +50,11 @@ Or all at once: `make test-all`.
 |---|---|---|---|
 | `make unit-test` | no | GDT/page-table bit-packing; freeze/thaw sidecar round-trip, corruption handling, one-shot enforcement; the BPF program's logic (every allowed syscall resolves to ALLOW, everything else to KILL) | inline `#[cfg(test)]` in `src/boot/x86_64.rs`, `src/freeze.rs`, `src/seccomp.rs` |
 | `make integration-test` | no | virtio-blk read/write/read-only-enforcement/capacity through **real descriptor chains** against a **real backing file**; the virtio-mmio v2 register protocol (magic/version/feature-negotiation/status-reset/queue-notify/config-space) against the **real `MmioTransport`**, with a mock `IrqLine` standing in for the one KVM ioctl this layer needs | `tests/virtio_block.rs`, `tests/virtio_mmio.rs` |
-| `make jail` | no | bwrap actually denies a path outside the bind set; `jail.sh` refuses to run without required args; no ambient `CAP_NET_ADMIN` inside the jail | `scripts/test-jail.sh` |
-| `make seccomp` | no | the **actual installed BPF filter** kills the process with `SIGSYS` on a disallowed syscall (not a simulation -- `install()` really runs, then a real forbidden syscall is really made) | `scripts/test-seccomp.sh`, hitting `cella --selftest-seccomp` |
-| `make boot` | **yes** | a real bzImage boots under real KVM far enough to print a kernel banner on the serial console -- the GDT/page-table/boot_params code path | `scripts/boot.sh` |
-| `make thaw` | **yes** | full lifecycle: boot, `SIGUSR1` freeze, sidecar file exists with no leftover `.tmp`, re-invoking the same command line thaws instead of re-booting, `state` is gone afterward (one-shot enforcement) | `scripts/thaw.sh` |
-| `make net` | **yes** | guest answers ICMP over the TAP after boot -- best-effort, depends on the test rootfs configuring networking from the `ip=` kernel parameter, which is unverified (see the script's own caveat) | `scripts/net.sh` |
+| `make jail` | no | bwrap actually denies a path outside the bind set; `jail.sh` refuses to run without required args; no ambient `CAP_NET_ADMIN` inside the jail | `scripts/test/jail.sh` |
+| `make seccomp` | no | the **actual installed BPF filter** kills the process with `SIGSYS` on a disallowed syscall (not a simulation -- `install()` really runs, then a real forbidden syscall is really made) | `scripts/test/seccomp.sh`, hitting `cella --selftest-seccomp` |
+| `make boot` | **yes** | a real bzImage boots under real KVM far enough to print a kernel banner on the serial console -- the GDT/page-table/boot_params code path | `scripts/test/boot.sh` |
+| `make thaw` | **yes** | full lifecycle: boot, `SIGUSR1` freeze, sidecar file exists with no leftover `.tmp`, re-invoking the same command line thaws instead of re-booting, `state` is gone afterward (one-shot enforcement) | `scripts/test/thaw.sh` |
+| `make net` | **yes** | guest answers ICMP over the TAP after boot -- best-effort, depends on the test rootfs configuring networking from the `ip=` kernel parameter, which is unverified (see the script's own caveat) | `scripts/test/net.sh` |
 
 ## Why the KVM-dependent tests are separate, not skipped-by-default unit tests
 
@@ -67,7 +67,7 @@ exited before printing anything is a fail) and print exactly why.
 
 ## Adding a new feature test
 
-Follow the `make thaw` / `scripts/thaw.sh` pattern:
+Follow the `make thaw` / `scripts/test/thaw.sh` pattern:
 
 1. Write `scripts/<feature>.sh`: check preconditions and `SKIP` (exit 0)
    if unmet, build what it needs via `$BIN`/`$SCRIPTS` variables (so it
