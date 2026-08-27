@@ -180,7 +180,18 @@ fn main() {
     let disk_copy = tmp.join("disk.img");
     std::fs::copy(&disk, &disk_copy).expect("copy disk");
 
-    let cmdline = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6";
+    // CELLA_EXTRA_CMDLINE appends to the kernel command line. Use it to
+    // test a change to the time configuration of the guest without an
+    // edit to this file.
+    let extra = std::env::var("CELLA_EXTRA_CMDLINE").unwrap_or_default();
+    let cmdline = format!(
+        "console=ttyS0 reboot=k panic=1 pci=off tsc=unstable clocksource=kvm-clock root=/dev/vda rw \
+         virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 {extra}"
+    );
+    let cmdline = cmdline.trim().to_string();
+    if !extra.is_empty() {
+        println!("extra kernel command line: {extra}");
+    }
 
     // --- step 1: boot, collect a few heartbeats ---
     let boot_log = tmp.join("boot.log");
@@ -197,7 +208,7 @@ fn main() {
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")
-        .arg(cmdline)
+        .arg(&cmdline)
         .stdout(Stdio::from(
             File::create(&boot_log).expect("create boot log"),
         ))
@@ -286,7 +297,7 @@ fn main() {
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")
-        .arg(cmdline)
+        .arg(&cmdline)
         .stdout(Stdio::from(
             File::create(&thaw_log).expect("create thaw log"),
         ))
@@ -300,6 +311,52 @@ fn main() {
     let deadline = Instant::now() + THAW_TIMEOUT;
     let guest_after = wait_for_heartbeats(&thaw_log, &mut child2, 1, deadline);
     let still_running = matches!(child2.try_wait(), Ok(None));
+
+    // Measure the rate of the clock of the guest after the thaw. The
+    // values above show only the step at the thaw. A guest can restore
+    // the correct time and then run its clock at the wrong rate.
+    //
+    // The method is a least-squares fit of the monotonic clock of the
+    // guest against the clock of the host. A comparison of the first and
+    // last value gives an error of one heartbeat period, which is 1 s and
+    // is larger than any rate error that this test can find. The fit uses
+    // the host time at which each new heartbeat becomes visible, and it
+    // averages the observation delay over all samples.
+    let post_secs: u64 = std::env::var("CELLA_POST_THAW_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    if post_secs > 0 {
+        let t0 = Instant::now();
+        let mut samples: Vec<(f64, f64)> = Vec::new();
+        let mut last_seen = f64::MIN;
+        while t0.elapsed() < Duration::from_secs(post_secs) {
+            if let Some(u) = read_uptimes(&thaw_log).last().copied() {
+                if u > last_seen {
+                    last_seen = u;
+                    samples.push((t0.elapsed().as_secs_f64(), u));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if samples.len() >= 3 {
+            let n = samples.len() as f64;
+            let mx = samples.iter().map(|s| s.0).sum::<f64>() / n;
+            let my = samples.iter().map(|s| s.1).sum::<f64>() / n;
+            let num: f64 = samples.iter().map(|s| (s.0 - mx) * (s.1 - my)).sum();
+            let den: f64 = samples.iter().map(|s| (s.0 - mx).powi(2)).sum();
+            let slope = num / den;
+            println!("rate of the guest clock after the thaw:");
+            println!(
+                "  {} samples over {:.0} s of host time",
+                samples.len(),
+                samples.last().unwrap().0
+            );
+            println!("  guest seconds per host second: {slope:.6}");
+            println!("  error: {:+.0} ppm", (slope - 1.0) * 1e6);
+            println!();
+        }
+    }
 
     let thaw_stderr = read_file(&thaw_err);
     let thaw_stdout = read_file(&thaw_log);

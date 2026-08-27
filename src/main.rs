@@ -60,7 +60,22 @@ fn parse_args() -> Args {
     let mut tap = None;
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
-    let mut cmdline = "console=ttyS0 reboot=k panic=1 pci=off".to_string();
+    // tsc=unstable and clocksource=kvm-clock are part of the design, not
+    // a workaround for a message in the log.
+    //
+    // cella rewinds the TSC of the guest at every thaw (see vcpu.rs).
+    // Therefore the TSC is not a monotonic reference in this VM, and the
+    // guest must not use it as one. kvm-clock is the single source of
+    // time: cella restores it exactly, and KVM re-establishes the anchor
+    // of the pvclock page at the thaw.
+    //
+    // Without these two arguments the clocksource watchdog of the guest
+    // compares the TSC against kvm-clock after a thaw, finds a difference
+    // of 5 ms to 27 ms, and marks the TSC unstable. That watchdog exists
+    // to find faults in hardware. Here the difference comes from a change
+    // that cella makes on purpose.
+    let mut cmdline =
+        "console=ttyS0 reboot=k panic=1 pci=off tsc=unstable clocksource=kvm-clock".to_string();
     let mut mem_mb = 256u64;
 
     let mut it = std::env::args().skip(1);

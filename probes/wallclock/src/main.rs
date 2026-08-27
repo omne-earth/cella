@@ -207,7 +207,7 @@ fn main() {
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")
-        .arg("console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6")
+        .arg("console=ttyS0 reboot=k panic=1 pci=off tsc=unstable clocksource=kvm-clock root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6")
         .stdout(Stdio::from(File::create(&log_path).expect("create log file")))
         .stderr(Stdio::from(
             File::create(tmp.join("boot.err")).expect("create err file"),
