@@ -3,6 +3,11 @@ SHELL := /usr/bin/env bash
 CARGO ?= cargo
 SCRIPTS := scripts
 
+# Local overrides, not committed -- copy .env.example to .env to change these.
+-include .env
+CELLA_TAP ?= tap0
+CELLA_TAP_CIDR ?= 192.168.200.1/24
+
 .PHONY: help build debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         bootstrap fetch-assets setup-tap \
@@ -95,15 +100,15 @@ net: build ## Feature test: guest answers ICMP over the TAP after boot (scripts/
 
 # --- Setup --------------------------------------------------------------
 
-bootstrap: ## One-time host setup (Fedora): installs system deps, checks /dev/kvm (needs sudo)
+bootstrap: ## One-time host setup (Fedora): installs system deps, creates tap0, checks /dev/kvm (needs sudo)
 	@$(SCRIPTS)/bootstrap.sh
+	@$(MAKE) setup-tap
 
 fetch-assets: ## Download the public test kernel/rootfs used by boot/thaw/net targets
 	@$(SCRIPTS)/fetch-assets.sh
 
-setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once
-	@echo "This needs root once, for CAP_NET_ADMIN, to create the TAP device:"
-	@echo "  sudo $(SCRIPTS)/make_tap.sh tap0 192.168.200.1/24"
+setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once (name/CIDR from .env, see .env.example)
+	sudo $(SCRIPTS)/make_tap.sh $(CELLA_TAP) $(CELLA_TAP_CIDR)
 
 # --- Everything -----------------------------------------------------
 
