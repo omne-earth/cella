@@ -19,9 +19,12 @@ SHELL := /bin/bash
 # the whole recipe to be a single shell. Leading `@` silences make's own
 # echo of the recipe text (the header line below says what ran instead).
 # Target names with a `/` in them (dist/bzImage) become `dist_bzImage`
-# so the log path stays one level deep.
+# so the log path stays one level deep. The sentinel also sets
+# CELLA_LOG_FILE, thus a recipe can name its own log file. logs-clean
+# needs this, because `tee` creates the file after the recipe starts and
+# a listing of the directory does not always contain it yet.
 LOGDIR := .logs
-LOG = @mkdir -p $(LOGDIR); exec > >(tee -a "$(LOGDIR)/$(subst /,_,$@)-$$(date +%Y%m%d-%H%M%S).log") 2>&1; echo "=== make $@ -- $$(date -Is) ==="
+LOG = @mkdir -p $(LOGDIR); CELLA_LOG_FILE="$(LOGDIR)/$(subst /,_,$@)-$$(date +%Y%m%d-%H%M%S).log"; exec > >(tee -a "$$CELLA_LOG_FILE") 2>&1; echo "=== make $@ -- $$(date -Is) ==="
 
 CARGO ?= cargo
 SCRIPTS := scripts
@@ -48,7 +51,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
         unit-test integration-test selftest test test-all \
         init dist setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
-        clean distclean distclean-kernel distclean-rootfs lines \
+        clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock \
         kernel-config-check
 
@@ -69,7 +72,7 @@ help: ## Show this help
 	grep -hE '^(init|dist|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Everything:"
-	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Probes: one-off diagnostics, run by hand, not part of test/smoke:"
 	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -212,6 +215,37 @@ test-all: test dist smoke ## make test, plus every KVM smoke test (skips gracefu
 lines: ## Report source-only and source+test line counts (see also README's line-count section)
 	$(LOG)
 	python3 $(SCRIPTS)/utils/count_lines.py
+
+logs-clean: ## Delete the run logs in .logs/, and keep the newest one for each target
+	$(LOG)
+	# The sentinel writes .logs/<target>-<date>-<time>.log at every run,
+	# thus the directory grows without limit. This target keeps the newest
+	# log for each target and deletes the rest. The timestamp sorts in the
+	# same order as the time, therefore the last name of a group is the
+	# newest file.
+	#
+	# The name of the target is the file name without the final
+	# "-<date>-<time>.log". A glob must not be used to group the files:
+	# "test-*.log" also matches "test-jail-...log" and
+	# "test-seccomp-...log", and an earlier version of this target deleted
+	# those files for that reason.
+	cd $(LOGDIR)
+	keep=$$(ls -1 *.log 2>/dev/null | sort | awk '{ t = $$0; sub(/-[0-9]{8}-[0-9]{6}\.log$$/, "", t); newest[t] = $$0 } END { for (k in newest) print newest[k] }')
+	deleted=0
+	own=$$(basename "$$CELLA_LOG_FILE")
+	for f in $$(ls -1 *.log 2>/dev/null); do
+		# Never delete the log of this run. `tee` may create it after the
+		# listing above, therefore it is not always in the keep list.
+		if [ "$$f" = "$$own" ]; then
+			continue
+		fi
+		case " $$(echo $$keep) " in
+		*" $$f "*) ;;
+		*) rm -f "$$f"; deleted=$$((deleted + 1)) ;;
+		esac
+	done
+	kept=$$(echo "$$keep" | grep -c . || true)
+	echo "cella: kept $$kept log(s), one for each target, and deleted $$deleted older log(s)"
 
 clean: ## cargo clean
 	$(LOG)
