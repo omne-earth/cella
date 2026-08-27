@@ -5,7 +5,7 @@ SCRIPTS := scripts
 
 .PHONY: help build debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
-        fetch-assets setup-tap \
+        bootstrap fetch-assets setup-tap \
         boot thaw net jail seccomp \
         clean distclean lines
 
@@ -22,7 +22,7 @@ help: ## Show this help
 	@grep -hE '^(boot|thaw|net):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
 	@echo ""
 	@echo "Setup:"
-	@grep -hE '^(fetch-assets|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@grep -hE '^(bootstrap|fetch-assets|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
 	@echo ""
 	@echo "Everything:"
 	@grep -hE '^(test-all|clean|distclean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
@@ -94,6 +94,9 @@ net: build ## Feature test: guest answers ICMP over the TAP after boot (scripts/
 	@$(SCRIPTS)/net.sh
 
 # --- Setup --------------------------------------------------------------
+
+bootstrap: ## One-time host setup (Fedora): installs system deps, checks /dev/kvm (needs sudo)
+	@$(SCRIPTS)/bootstrap.sh
 
 fetch-assets: ## Download the public test kernel/rootfs used by boot/thaw/net targets
 	@$(SCRIPTS)/fetch-assets.sh
