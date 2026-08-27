@@ -35,8 +35,8 @@ Expected output ends with:
 To also exercise the boot path, on a real Linux machine with KVM:
 
 ```sh
-sudo scripts/make_tap.sh tap0 192.168.200.1/24   # once per boot
-make fetch-assets                                 # ~80 MB, one-time
+make init                                    # once per host: deps, toolbox, tap0
+make build-assets                                 # rootfs fetch + kernel build, one-time
 make boot                                          # boots a real kernel, watches serial
 make thaw                                          # boot -> freeze -> thaw -> verify
 make net                                           # best-effort ping over the TAP

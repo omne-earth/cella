@@ -10,7 +10,7 @@ CELLA_TAP_CIDR ?= 192.168.200.1/24
 
 .PHONY: help build debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
-        bootstrap fetch-assets setup-tap \
+        init build-assets setup-tap \
         boot thaw net jail seccomp \
         clean distclean lines
 
@@ -27,7 +27,7 @@ help: ## Show this help
 	@grep -hE '^(boot|thaw|net):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
 	@echo ""
 	@echo "Setup:"
-	@grep -hE '^(bootstrap|fetch-assets|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@grep -hE '^(init|build-assets|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
 	@echo ""
 	@echo "Everything:"
 	@grep -hE '^(test-all|clean|distclean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
@@ -100,19 +100,24 @@ net: build ## Feature test: guest answers ICMP over the TAP after boot (scripts/
 
 # --- Setup --------------------------------------------------------------
 
-bootstrap: ## One-time host setup (Fedora): installs system deps, creates tap0, checks /dev/kvm (needs sudo)
+.toolbox: ## Sentinel: creates + provisions the cella-build toolbox (kernel build toolchain lives there, not on the host)
+	$(SCRIPTS)/toolbox-setup.sh
+	@touch .toolbox
+
+init: ## One-time host setup (Fedora): installs runtime deps, provisions the build toolbox, creates tap0, checks /dev/kvm (needs sudo)
 	@$(SCRIPTS)/bootstrap.sh
+	@$(MAKE) .toolbox
 	@$(MAKE) setup-tap
 
-fetch-assets: ## Download the public test kernel/rootfs used by boot/thaw/net targets
-	@$(SCRIPTS)/fetch-assets.sh
+build-assets: .toolbox ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox)
+	@$(SCRIPTS)/build-assets.sh
 
 setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once (name/CIDR from .env, see .env.example)
 	sudo $(SCRIPTS)/make_tap.sh $(CELLA_TAP) $(CELLA_TAP_CIDR)
 
 # --- Everything -----------------------------------------------------
 
-test-all: test fetch-assets boot thaw net ## make test, plus every KVM-dependent feature test (skips gracefully without KVM)
+test-all: test build-assets boot thaw net ## make test, plus every KVM-dependent feature test (skips gracefully without KVM)
 	@echo ""
 	@echo "=== make test-all: done (see above for any SKIPs) ==="
 

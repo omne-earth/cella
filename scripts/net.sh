@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # Boots the guest with a static IP on the TAP subnet and pings it from
-# the host. Best-effort: whether this passes depends on the test rootfs
-# actually bringing up networking from the `ip=` kernel parameter, which
-# we have not verified for the asset scripts/fetch-assets.sh downloads
-# (see that script's own caveat). A SKIP or FAIL here says less about
-# cella's virtio-net code than scripts/test-jail.sh or the tests/
-# integration tests do -- those exercise the same code paths without
-# depending on a specific guest userspace.
+# the host. Networking here is entirely in-kernel -- the ip= cmdline
+# param is applied by CONFIG_IP_PNP_STATIC before our /sbin/init even
+# runs (see scripts/kernel-fragment.config / rootfs-init.sh), and ICMP
+# replies need no userspace daemon either. So unlike a downloaded
+# rootfs of unknown provenance, a FAIL here is a real signal about
+# cella's virtio-net TX/RX path, not a guest-userspace question.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/.."
 BIN="${CELLA_BIN:-$ROOT/target/release/cella}"
-KERNEL="${CELLA_TEST_KERNEL:-$ROOT/assets/hello-vmlinux.bin}"
-DISK="${CELLA_TEST_DISK:-$ROOT/assets/test-rootfs.ext4}"
+KERNEL="${CELLA_TEST_KERNEL:-$ROOT/assets/bzImage}"
+DISK="${CELLA_TEST_DISK:-$ROOT/assets/rootfs.ext4}"
 TAP="${CELLA_TEST_TAP:-tap0}"
 HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
 GUEST_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
@@ -28,7 +27,7 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 if [ ! -f "$KERNEL" ] || [ ! -f "$DISK" ]; then
-    echo "SKIP: test assets not found -- run: make fetch-assets"
+    echo "SKIP: test assets not found -- run: make build-assets"
     exit 0
 fi
 if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
@@ -48,7 +47,7 @@ trap 'kill %1 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
     --disk "$TMP/disk.img" \
     --tap "$TAP" \
     --mem-mb 128 \
-    --cmdline "console=ttyS0 reboot=k panic=1 pci=off ip=${GUEST_IP}::${HOST_IP}:255.255.255.0::eth0:off" \
+    --cmdline "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=${GUEST_IP}::${HOST_IP}:255.255.255.0::eth0:off" \
     >"$TMP/boot.log" 2>"$TMP/boot.err" &
 PID=$!
 
@@ -65,10 +64,7 @@ if ping -c 3 -W 2 "$GUEST_IP" >"$TMP/ping.log" 2>&1; then
     echo "PASS: guest at $GUEST_IP answered ICMP over $TAP"
     exit_code=0
 else
-    echo "FAIL (or SKIP-worthy): no ICMP reply from $GUEST_IP -- likely the test rootfs" \
-         "didn't configure networking from the ip= parameter, not necessarily a" \
-         "virtio-net bug. See tests/virtio_block.rs / net.rs's TX/RX logic review" \
-         "in the README for the code-level check instead."
+    echo "FAIL: no ICMP reply from $GUEST_IP"
     cat "$TMP/ping.log"
     exit_code=1
 fi

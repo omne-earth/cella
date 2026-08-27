@@ -73,7 +73,12 @@ scripts/
   make_tap.sh             one-time (per boot), needs sudo once
   jail.sh                  rootless bwrap wrapper, no jailer binary
   freeze.sh                 send SIGUSR1 to a running cella
-  fetch-assets.sh            download a public test kernel/rootfs
+  build-assets.sh            build a busybox rootfs + a bzImage kernel from source
+  kernel-fragment.config      the driver set build-assets.sh needs beyond kernel defconfig
+  busybox-fragment.config      static-link override for build-assets.sh's busybox build
+  rootfs-init.sh                /sbin/init installed into the built rootfs
+  bootstrap.sh                 one-time Fedora host setup (runtime deps + tap0 + kvm check)
+  toolbox-setup.sh              creates/provisions the cella-build toolbox (kernel build toolchain)
   boot.sh / thaw.sh / net.sh  per-feature system tests against real KVM
   test-jail.sh / test-seccomp.sh   per-feature system tests, no KVM needed
   count_lines.py               source-vs-tests line counting for `make lines`
@@ -118,20 +123,35 @@ a Linux host. No `/dev/kvm` is required to build, only to run.
 
 ## Getting a kernel and a disk image
 
-`make fetch-assets` downloads a small, real, public x86_64 kernel and
-rootfs (Firecracker's own hello-world CI test assets -- see
-`scripts/fetch-assets.sh`) into `assets/`, which is what `make boot` /
-`make thaw` / `make net` use. For your own kernel:
+`make build-assets` builds both a minimal rootfs and a minimal bzImage
+kernel from real upstream source, into `assets/` -- which is what
+`make boot` / `make thaw` / `make net` use. There's no shortcut for
+either: no microVM project publishes a prebuilt bzImage with cella's
+exact driver set (virtio-mmio/blk/net + 8250 serial built in, nothing
+from a module or an initrd -- see `boot/x86_64.rs`), and pairing an
+arbitrary downloaded rootfs with a from-scratch kernel/init risks
+mismatches that are hard to tell apart from real bugs. So
+`scripts/build-assets.sh` builds a static busybox (with
+`scripts/rootfs-init.sh` as `/sbin/init`) and a kernel (with
+`scripts/kernel-fragment.config` merged onto `x86_64_defconfig`) that
+are provably matched to each other and to cella's boot path. The
+actual compiling happens inside the `cella-build` toolbox
+(`make .toolbox`, chained into `make init`) so the host itself
+never needs a build toolchain.
+
+For your own kernel instead, the essentials are the same as
+`scripts/kernel-fragment.config`: `CONFIG_VIRTIO_MMIO`,
+`CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES` (this is what lets
+`virtio_mmio.device=...` on the cmdline stand in for the ACPI/DT
+discovery a firmware-booted guest would get), `CONFIG_VIRTIO_BLK`,
+`CONFIG_VIRTIO_NET`, `CONFIG_SERIAL_8250(_CONSOLE)`, and a filesystem
+driver for your rootfs. ACPI/PCI can stay on (see the fragment's own
+comment) since cella boots with `pci=off` and no ACPI tables either
+way.
+
+For a disk image, any raw filesystem image works, e.g.:
 
 ```sh
-# A microvm-oriented kernel config (virtio-mmio, no legacy hardware) is
-# what you want; Firecracker's guides publish known-good configs, or
-# build your own with make menuconfig starting from a minimal defconfig.
-# The essentials: CONFIG_VIRTIO_MMIO, CONFIG_VIRTIO_BLK, CONFIG_VIRTIO_NET,
-# CONFIG_SERIAL_8250, CONFIG_SERIAL_8250_CONSOLE, a filesystem for your
-# rootfs, and *no* CONFIG_ACPI / CONFIG_PCI required.
-
-# A disk image: any raw filesystem image works, e.g.
 dd if=/dev/zero of=rootfs.img bs=1M count=512
 mkfs.ext4 rootfs.img
 # populate it (mount loopback, debootstrap/pacstrap/podman export, etc.)
@@ -140,16 +160,16 @@ mkfs.ext4 rootfs.img
 ## Run
 
 ```sh
-sudo scripts/make_tap.sh tap0 192.168.200.1/24   # once per boot
-make fetch-assets                                 # or use your own kernel/disk
+make init                                    # once per host: deps, toolbox, tap0
+make build-assets                                 # or use your own kernel/disk
 
 scripts/jail.sh \
   --state-dir ./vm1 \
-  --kernel ./assets/hello-vmlinux.bin \
-  --disk ./assets/test-rootfs.ext4 \
+  --kernel ./assets/bzImage \
+  --disk ./assets/rootfs.ext4 \
   --tap tap0 \
   --mem-mb 256 \
-  --cmdline "console=ttyS0 reboot=k panic=1 pci=off ip=192.168.200.2::192.168.200.1:255.255.255.0::eth0:off"
+  --cmdline "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=192.168.200.2::192.168.200.1:255.255.255.0::eth0:off"
 ```
 
 (`make boot` / `make thaw` / `make net` run equivalent commands
