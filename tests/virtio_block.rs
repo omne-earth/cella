@@ -38,8 +38,7 @@ fn write_header(mem: &GuestMemoryMmap, req_type: u32, sector: u64) {
 }
 
 fn temp_disk(name: &str, contents: &[u8]) -> std::path::PathBuf {
-    let path =
-        std::env::temp_dir().join(format!("cella-test-disk-{}-{name}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("cella-test-disk-{}-{name}", std::process::id()));
     let mut f = std::fs::File::create(&path).unwrap();
     f.write_all(contents).unwrap();
     f.sync_all().unwrap();
