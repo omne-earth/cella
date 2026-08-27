@@ -36,7 +36,7 @@ CELLA_TAP_CIDR ?= 192.168.200.1/24
         unit-test integration-test selftest test test-all \
         init dist setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
-        clean distclean lines \
+        clean distclean distclean-kernel lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock
 
 help: ## Show this help
@@ -56,7 +56,7 @@ help: ## Show this help
 	grep -hE '^(init|dist|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Everything:"
-	grep -hE '^(test-all|clean|distclean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(test-all|clean|distclean|distclean-kernel|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Probes: one-off diagnostics, run by hand, not part of test/smoke:"
 	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -203,6 +203,15 @@ clean: ## cargo clean
 distclean: clean ## clean + remove built dist/ assets
 	$(LOG)
 	rm -rf $(DIST)
+
+distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds the kernel (for a kernel-fragment.config change)
+	$(LOG)
+	# Deliberately narrower than distclean: the cached kernel source tree
+	# in target/kernel-build survives, so the rebuild is incremental, and
+	# so does dist/rootfs.ext4 -- a config change to the kernel is no
+	# reason to rebuild busybox and the rootfs image too.
+	rm -f $(DIST)/bzImage
+	echo "cella: removed $(DIST)/bzImage -- next 'make dist' rebuilds the kernel"
 
 # --- Probes ---------------------------------------------------------
 #
