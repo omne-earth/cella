@@ -160,9 +160,19 @@ smoke-boot: build dist ## Boot a real kernel under KVM all the way to a running 
 	$(LOG)
 	$(SCRIPTS)/test/boot.sh
 
-smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/test/thaw.sh)
+smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check, then the clock probe
 	$(LOG)
 	$(SCRIPTS)/test/thaw.sh
+	# The script checks that the process and the sidecar survive a thaw.
+	# It cannot see whether the guest keeps its time, and a guest that
+	# resumes with a dead timer looked identical to a healthy one for the
+	# whole history of this test. The probe measures that, so it runs
+	# here as well.
+	#
+	# CELLA_POST_THAW_SECS=0 leaves out the measurement of the clock rate,
+	# which takes 30 s and answers a question that a smoke test does not
+	# ask. Run `make probe-freeze-thaw-clock` for the full measurement.
+	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0
 
 smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	$(LOG)
@@ -278,10 +288,15 @@ distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds 
 # or code-reading alone -- each is a real, self-contained program
 # (probes/<name>/) that exercises real KVM ioctls or a real cella boot
 # and reports what actually happens, not what should happen. NOT part
-# of `make test`/`make smoke`: these are one-off investigation tools
-# for chasing a specific bug, not routine regression checks, and some
-# are expected to legitimately FAIL until the bug they're chasing is
-# fixed -- that's the point, a concrete measurement instead of a guess.
+# Most of these are one-off investigation tools for a specific bug, and
+# not routine regression checks. Some are expected to fail until the bug
+# that they measure is fixed. That is the purpose: a measurement instead
+# of a guess.
+#
+# probe-freeze-thaw-clock is the exception. `make smoke-thaw` runs it,
+# because the shell script cannot see whether the guest keeps its time
+# across a thaw, and a guest that resumed with no timer passed that
+# script for the whole history of this test.
 # Add a new one under probes/<name>/ (its own Cargo.toml + src/main.rs)
 # and a target here when the next one of these comes up.
 

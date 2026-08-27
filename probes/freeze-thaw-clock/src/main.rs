@@ -41,6 +41,11 @@
 //!   CELLA_BIN, CELLA_TEST_KERNEL, CELLA_TEST_DISK, CELLA_TEST_TAP
 //!                          The same meaning as in the smoke tests.
 //!
+//! `make smoke-thaw` runs this probe after scripts/test/thaw.sh. The
+//! script checks that a thaw restores the process and the sidecar. This
+//! probe checks that the thaw restores the time of the guest, which the
+//! script cannot see.
+//!
 //! Run: cargo run --manifest-path probes/freeze-thaw-clock/Cargo.toml
 //! (needs dist/bzImage + dist/rootfs.ext4 -- `make dist` -- and a
 //! configured tap0 -- `make setup-tap`)
@@ -208,6 +213,24 @@ fn main() {
     }
     if !kernel.is_file() || !disk.is_file() {
         fail("test assets missing -- run: make dist");
+    }
+
+    // Skip, and do not fail, when this machine cannot run a guest. This
+    // probe is part of `make smoke-thaw`, and the smoke tests skip in the
+    // same conditions, so that `make smoke` passes on a machine with no
+    // KVM and no tap device.
+    let kvm_ok = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/kvm")
+        .is_ok();
+    if !kvm_ok {
+        println!("SKIP: no read and write access to /dev/kvm on this machine");
+        std::process::exit(0);
+    }
+    if !std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
+        println!("SKIP: {tap} does not exist -- run: make setup-tap");
+        std::process::exit(0);
     }
 
     let tmp = std::env::temp_dir().join(format!(
@@ -421,6 +444,31 @@ fn main() {
     let thaw_stdout = read_file(&thaw_log);
     let _ = child2.kill();
     let _ = child2.wait();
+
+    // Report the clock of the host. It decides what the result below
+    // means. KVM sets PVCLOCK_TSC_STABLE_BIT in the pvclock page of the
+    // guest only when the TSC of the host is stable. A host that reports
+    // a clocksource other than "tsc", or that does not offer "tsc" at
+    // all, is a host on which that bit stays clear, and the guest then
+    // runs the clocksource watchdog against its TSC unless the command
+    // line stops it.
+    let host_cs = std::fs::read_to_string(
+        "/sys/devices/system/clocksource/clocksource0/current_clocksource",
+    )
+    .unwrap_or_else(|_| "unknown".into());
+    let host_avail = std::fs::read_to_string(
+        "/sys/devices/system/clocksource/clocksource0/available_clocksource",
+    )
+    .unwrap_or_else(|_| "unknown".into());
+    println!("host clocksource: {} (available: {})", host_cs.trim(), host_avail.trim());
+    if host_avail.contains("tsc") {
+        println!("  The host offers the TSC. Expect PVCLOCK_TSC_STABLE_BIT to be set below.");
+    } else {
+        println!(
+            "  The host does not offer the TSC, therefore its own TSC is not stable.\n               Expect PVCLOCK_TSC_STABLE_BIT to be clear below. On such a host the guest\n               would report a clock fault after a thaw without tsc=reliable."
+        );
+    }
+    println!();
 
     // Show the pvclock flags from the freeze image on every path. Linux
     // runs the clocksource watchdog against the TSC only when
