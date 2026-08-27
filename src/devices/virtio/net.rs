@@ -11,7 +11,7 @@ use virtio_queue::{Queue, QueueOwnedT, QueueT};
 use vm_memory::{Bytes, GuestMemoryMmap};
 
 use super::tap::Tap;
-use super::VirtioDevice;
+use super::{VirtioDevice, VIRTIO_F_VERSION_1};
 
 const QUEUE_RX: u16 = 0;
 const QUEUE_TX: u16 = 1;
@@ -118,7 +118,7 @@ impl VirtioDevice for Net {
     }
 
     fn features(&self) -> u64 {
-        VIRTIO_NET_F_MAC
+        VIRTIO_F_VERSION_1 | VIRTIO_NET_F_MAC
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {

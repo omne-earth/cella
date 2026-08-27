@@ -13,7 +13,7 @@ use std::path::Path;
 use virtio_queue::{Queue, QueueT};
 use vm_memory::{Bytes, GuestMemoryMmap};
 
-use super::VirtioDevice;
+use super::{VirtioDevice, VIRTIO_F_VERSION_1};
 
 const SECTOR_SIZE: u64 = 512;
 
@@ -66,11 +66,7 @@ impl VirtioDevice for Block {
     }
 
     fn features(&self) -> u64 {
-        if self.read_only {
-            VIRTIO_BLK_F_RO
-        } else {
-            0
-        }
+        VIRTIO_F_VERSION_1 | if self.read_only { VIRTIO_BLK_F_RO } else { 0 }
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {

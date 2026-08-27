@@ -172,7 +172,7 @@ scripts/jail.sh \
   --disk ./dist/rootfs.ext4 \
   --tap tap0 \
   --mem-mb 256 \
-  --cmdline "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=192.168.200.2::192.168.200.1:255.255.255.0::eth0:off"
+  --cmdline "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=192.168.200.2::192.168.200.1:255.255.255.0::eth0:off"
 ```
 
 (`make smoke-boot` / `make smoke-thaw` / `make smoke-net` run equivalent commands

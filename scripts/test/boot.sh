@@ -51,7 +51,7 @@ echo "cella: booting (log: $LOG, timeout ${TIMEOUT_SECS}s)"
     --disk "$TMP/disk.img" \
     --tap "$TAP" \
     --mem-mb 128 \
-    --cmdline "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6" \
+    --cmdline "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6" \
     >"$LOG" 2>"$TMP/stderr.log" &
 PID=$!
 

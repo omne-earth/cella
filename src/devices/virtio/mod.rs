@@ -9,6 +9,13 @@ use vm_memory::GuestMemoryMmap;
 pub const VIRTIO_ID_NET: u32 = 1;
 pub const VIRTIO_ID_BLOCK: u32 = 2;
 
+/// Mandatory for any device on a "modern" (non-legacy) transport --
+/// which virtio-mmio *version 2* (see mmio.rs's MMIO_VERSION) always
+/// is. Without this bit, virtio_finalize_features() on the guest side
+/// rejects the device outright: it reads device_features once and
+/// never writes anything back, so negotiation just silently stops.
+pub const VIRTIO_F_VERSION_1: u64 = 1 << 32;
+
 /// A virtio device backend. The transport (`mmio.rs`) owns queue
 /// configuration and register plumbing; this trait is only the
 /// device-specific behaviour: feature bits, config space, and processing
@@ -20,7 +27,7 @@ pub trait VirtioDevice: Send {
         256
     }
     fn features(&self) -> u64 {
-        0 // no VIRTIO_F_VERSION_1 assumed: legacy-ish minimal transport, no offloads
+        VIRTIO_F_VERSION_1
     }
     fn ack_features(&mut self, _features: u64) {}
     fn read_config(&self, _offset: u64, data: &mut [u8]) {

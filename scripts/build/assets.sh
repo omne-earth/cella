@@ -23,7 +23,7 @@
 # present -- rm just the one you want rebuilt.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$HERE/dist"
 mkdir -p "$OUT"
 
@@ -84,7 +84,13 @@ else
     rm -rf "$ROOTDIR"
     mkdir -p "$ROOTDIR"/bin "$ROOTDIR"/sbin "$ROOTDIR"/proc "$ROOTDIR"/sys "$ROOTDIR"/dev
     cp busybox "$ROOTDIR/bin/busybox"
-    "$ROOTDIR/bin/busybox" --install -s "$ROOTDIR/bin"
+    # Hardlinks, not -s (symlinks): busybox --install writes symlink
+    # targets as the *absolute path it was invoked with*, which here is
+    # a host build path that doesn't exist inside the guest -- every
+    # applet (including /bin/sh) would be a dangling symlink. Hardlinks
+    # share the inode directly, no path to resolve, and cost nothing
+    # extra on disk since they share blocks.
+    "$ROOTDIR/bin/busybox" --install "$ROOTDIR/bin"
     install -m 0755 "$HERE/scripts/build/rootfs.sh" "$ROOTDIR/sbin/init"
 
     IMG="$RBUILD/rootfs.ext4"
