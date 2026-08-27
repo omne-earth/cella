@@ -42,7 +42,18 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// times the heartbeat interval (1s, see rootfs-init.sh) so a guest
 /// that *did* leak real time would show an unmistakable jump, not
 /// something explainable by heartbeat-timing quantization.
-const FROZEN_REAL_SECS: u64 = 6;
+const FROZEN_REAL_SECS_DEFAULT: u64 = 6;
+
+/// The length of the freeze, in real seconds. Set CELLA_FROZEN_SECS to
+/// change it. A test of several lengths shows if an error is a step,
+/// which does not change with the length, or a rate error, which
+/// increases with the length.
+fn frozen_real_secs() -> u64 {
+    std::env::var("CELLA_FROZEN_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(FROZEN_REAL_SECS_DEFAULT)
+}
 /// How much guest-perceived time we tolerate across the freeze: a
 /// couple of heartbeat ticks' worth of slop, not the multi-second real
 /// gap we're deliberately creating.
@@ -256,8 +267,9 @@ fn main() {
         .unwrap_or_else(|e| format!("(could not dump frozen state: {e})"));
 
     // --- step 3: stay frozen for a real, known interval ---
-    println!("step 3: staying frozen for {FROZEN_REAL_SECS}s of real time...");
-    std::thread::sleep(Duration::from_secs(FROZEN_REAL_SECS));
+    let frozen_secs = frozen_real_secs();
+    println!("step 3: staying frozen for {frozen_secs}s of real time...");
+    std::thread::sleep(Duration::from_secs(frozen_secs));
 
     // --- step 4: thaw, observe the first post-thaw heartbeat ---
     // No --kernel: the state dir already has a frozen state, so cella
@@ -293,6 +305,22 @@ fn main() {
     let thaw_stdout = read_file(&thaw_log);
     let _ = child2.kill();
     let _ = child2.wait();
+
+    // Show the pvclock flags from the freeze image on every path. Linux
+    // runs the clocksource watchdog against the TSC only when
+    // PVCLOCK_TSC_STABLE_BIT is not set, so this flag decides whether the
+    // guest checks the TSC at all.
+    let mut in_pvclock = false;
+    for line in frozen_dump.lines() {
+        if line.starts_with("pvclock page") {
+            in_pvclock = true;
+        } else if in_pvclock && line.starts_with("kvmclock:") {
+            break;
+        }
+        if in_pvclock && !line.trim().is_empty() {
+            println!("  {line}");
+        }
+    }
 
     // Show the timing that the VMM measured. The delay between the read
     // of the TSC and the read of the kvmclock at the freeze must be equal

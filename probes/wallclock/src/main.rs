@@ -219,6 +219,20 @@ fn main() {
     let result = wait_for_heartbeat(&log_path, &mut child, deadline);
     let host_after = SystemTime::now();
 
+    // Control test. Set CELLA_OBSERVE_SECS to keep the guest running for
+    // this many seconds after the first heartbeat, with no freeze and no
+    // thaw. The clocksource watchdog in the guest runs twice per second.
+    // If the guest reports a clock error in this period, the error comes
+    // from the host or from the guest, and not from freeze and thaw.
+    let observe: u64 = std::env::var("CELLA_OBSERVE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if observe > 0 && result.is_some() {
+        println!("observing the guest for {observe}s with no freeze...");
+        std::thread::sleep(Duration::from_secs(observe));
+    }
+
     let _ = child.kill();
     let _ = child.wait();
 
@@ -227,6 +241,25 @@ fn main() {
     let log = read_log(&log_path);
     let ev = gather_evidence(&log);
     print_evidence(&ev);
+
+    // Report the same kernel errors that the freeze and thaw probe
+    // reports, so that the two results can be compared directly.
+    let complaints: Vec<&str> = log
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            let low = l.to_ascii_lowercase();
+            low.contains("unstable") || low.contains("watchdog") || low.contains("oops")
+        })
+        .collect();
+    if complaints.is_empty() {
+        println!("kernel clock errors while running: none");
+    } else {
+        println!("kernel clock errors while running ({}):", complaints.len());
+        for l in complaints.iter().take(6) {
+            println!("  {l}");
+        }
+    }
 
     // Kept on failure deliberately -- a drift number with no serial log
     // to look at is exactly the kind of un-diagnosable result these

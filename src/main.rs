@@ -556,6 +556,64 @@ fn dump_state(dir: &PathBuf) -> ! {
         reg(0xf0),
         (reg(0xf0) >> 8) & 1
     );
+    // Decode the pvclock page of the guest. MSR_KVM_SYSTEM_TIME_NEW holds
+    // the guest physical address of the page in its upper bits, and bit 0
+    // enables the page. The page is in guest RAM, thus the freeze image
+    // contains it.
+    //
+    // The flags byte is the important field. Linux runs the clocksource
+    // watchdog against the TSC only when PVCLOCK_TSC_STABLE_BIT is not
+    // set. If KVM clears that bit at a thaw, the guest starts to compare
+    // the TSC against kvm-clock, and a small step then marks the TSC
+    // unstable.
+    let system_time_msr = st
+        .vcpu
+        .msrs
+        .iter()
+        .find(|(i, _)| *i == 0x4b56_4d01)
+        .map(|(_, d)| *d)
+        .unwrap_or(0);
+    println!();
+    println!("pvclock page (from MSR_KVM_SYSTEM_TIME_NEW):");
+    if system_time_msr & 1 == 0 {
+        println!("  the page is not enabled");
+    } else {
+        let gpa = system_time_msr & !1u64;
+        println!("  guest physical address: {gpa:#x}");
+        match std::fs::File::open(freeze::ram_path(dir)) {
+            Ok(mut f) => {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut buf = [0u8; 32];
+                if f.seek(SeekFrom::Start(gpa)).is_ok() && f.read_exact(&mut buf).is_ok() {
+                    let u32at = |o: usize| u32::from_le_bytes(buf[o..o + 4].try_into().unwrap());
+                    let u64at = |o: usize| u64::from_le_bytes(buf[o..o + 8].try_into().unwrap());
+                    let flags = buf[30];
+                    println!("  version:           {}", u32at(0));
+                    println!("  tsc_timestamp:     {:#x}", u64at(8));
+                    println!("  system_time:       {} ns", u64at(16));
+                    println!("  tsc_to_system_mul: {:#x}", u32at(24));
+                    println!("  tsc_shift:         {}", buf[28] as i8);
+                    println!("  flags:             {flags:#04x}");
+                    println!(
+                        "    TSC_STABLE    {}",
+                        if flags & 1 != 0 {
+                            "set. The guest does not run the watchdog against the TSC."
+                        } else {
+                            "NOT set. The guest runs the watchdog against the TSC."
+                        }
+                    );
+                    println!(
+                        "    GUEST_STOPPED {}",
+                        if flags & 2 != 0 { "set" } else { "not set" }
+                    );
+                } else {
+                    println!("  could not read the page from the RAM file");
+                }
+            }
+            Err(e) => println!("  could not open the RAM file: {e}"),
+        }
+    }
+
     println!();
     println!(
         "kvmclock:    {} ns (flags {:#x})",
