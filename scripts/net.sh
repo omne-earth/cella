@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Boots the guest with a static IP on the TAP subnet and pings it from
+# the host. Best-effort: whether this passes depends on the test rootfs
+# actually bringing up networking from the `ip=` kernel parameter, which
+# we have not verified for the asset scripts/fetch-assets.sh downloads
+# (see that script's own caveat). A SKIP or FAIL here says less about
+# cella's virtio-net code than scripts/test-jail.sh or the tests/
+# integration tests do -- those exercise the same code paths without
+# depending on a specific guest userspace.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$HERE/.."
+BIN="${CELLA_BIN:-$ROOT/target/release/cella}"
+KERNEL="${CELLA_TEST_KERNEL:-$ROOT/assets/hello-vmlinux.bin}"
+DISK="${CELLA_TEST_DISK:-$ROOT/assets/test-rootfs.ext4}"
+TAP="${CELLA_TEST_TAP:-tap0}"
+HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
+GUEST_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
+BOOT_WAIT_SECS="${CELLA_BOOT_WAIT:-10}"
+
+if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+    echo "SKIP: no rw access to /dev/kvm on this machine"
+    exit 0
+fi
+if [ ! -x "$BIN" ]; then
+    echo "FAIL: $BIN not built (run: make build)"
+    exit 1
+fi
+if [ ! -f "$KERNEL" ] || [ ! -f "$DISK" ]; then
+    echo "SKIP: test assets not found -- run: make fetch-assets"
+    exit 0
+fi
+if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
+    echo "SKIP: $TAP is not configured with $HOST_IP -- run: sudo scripts/make_tap.sh $TAP $HOST_IP/24"
+    exit 0
+fi
+
+TMP="$(mktemp -d)"
+STATE_DIR="$TMP/state"
+mkdir -p "$STATE_DIR"
+cp "$DISK" "$TMP/disk.img"
+trap 'kill %1 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
+
+"$BIN" \
+    --state-dir "$STATE_DIR" \
+    --kernel "$KERNEL" \
+    --disk "$TMP/disk.img" \
+    --tap "$TAP" \
+    --mem-mb 128 \
+    --cmdline "console=ttyS0 reboot=k panic=1 pci=off ip=${GUEST_IP}::${HOST_IP}:255.255.255.0::eth0:off" \
+    >"$TMP/boot.log" 2>"$TMP/boot.err" &
+PID=$!
+
+echo "cella: waiting ${BOOT_WAIT_SECS}s for the guest to bring up networking"
+sleep "$BOOT_WAIT_SECS"
+
+if ! kill -0 "$PID" 2>/dev/null; then
+    echo "FAIL: process exited during boot"
+    cat "$TMP/boot.err"
+    exit 1
+fi
+
+if ping -c 3 -W 2 "$GUEST_IP" >"$TMP/ping.log" 2>&1; then
+    echo "PASS: guest at $GUEST_IP answered ICMP over $TAP"
+    exit_code=0
+else
+    echo "FAIL (or SKIP-worthy): no ICMP reply from $GUEST_IP -- likely the test rootfs" \
+         "didn't configure networking from the ip= parameter, not necessarily a" \
+         "virtio-net bug. See tests/virtio_block.rs / net.rs's TX/RX logic review" \
+         "in the README for the code-level check instead."
+    cat "$TMP/ping.log"
+    exit_code=1
+fi
+
+kill "$PID" 2>/dev/null
+wait "$PID" 2>/dev/null
+exit "$exit_code"

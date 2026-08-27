@@ -1,0 +1,40 @@
+[package]
+name = "cella"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal x86_64 KVM microVM: virtio-blk + virtio-net + serial, with cryogenic freeze/thaw."
+
+[lib]
+name = "cella"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cella"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+# Raw KVM ioctls/struct layouts are load-bearing correctness: a wrong struct
+# size silently produces a wrong ioctl request number. We use the vetted
+# rust-vmm crates for this layer instead of hand-rolling it blind.
+kvm-ioctls = "0.19"
+kvm-bindings = { version = "0.10", features = ["fam-wrappers"] }
+vm-memory = { version = "0.16", features = ["backend-mmap"] }
+linux-loader = { version = "0.13", features = ["bzimage", "elf"] }
+vm-superio = "0.8"
+virtio-queue = "0.14"
+
+[profile.release]
+panic = "abort"
+lto = true
+
+[dev-dependencies]
+# Transitively pulled in by virtio-queue already; listed explicitly so
+# tests/ can name VRING_DESC_F_* constants directly.
+virtio-bindings = "0.2"
+# test-utils gates virtio-queue's mock descriptor-chain builder, which
+# our integration tests use to drive Block/Net exactly the way
+# MmioTransport does on a real QueueNotify. Cargo's per-target feature
+# resolution (edition 2021, resolver v2) keeps this out of `cargo build
+# --release`'s dependency graph.
+virtio-queue = { version = "0.14", features = ["test-utils"] }

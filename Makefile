@@ -1,0 +1,118 @@
+SHELL := /usr/bin/env bash
+
+CARGO ?= cargo
+SCRIPTS := scripts
+
+.PHONY: help build debug check lint fmt fmt-check \
+        unit-test integration-test selftest test test-all \
+        fetch-assets setup-tap \
+        boot thaw net jail seccomp \
+        clean distclean lines
+
+help: ## Show this help
+	@echo "cella -- build, lint, and test targets"
+	@echo ""
+	@echo "Build:"
+	@grep -hE '^(build|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@echo ""
+	@echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
+	@grep -hE '^(unit-test|integration-test|selftest|test|jail|seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@echo ""
+	@echo "Tests that need real KVM + a kernel/rootfs (one target per feature):"
+	@grep -hE '^(boot|thaw|net):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@echo ""
+	@echo "Setup:"
+	@grep -hE '^(fetch-assets|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@echo ""
+	@echo "Everything:"
+	@grep -hE '^(test-all|clean|distclean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+
+# --- Build ------------------------------------------------------------
+
+build: ## Release build (target/release/cella)
+	$(CARGO) build --release
+
+debug: ## Debug build (target/debug/cella), faster to compile
+	$(CARGO) build
+
+check: ## cargo check, no codegen
+	$(CARGO) check --all-targets
+
+lint: fmt-check ## cargo clippy (all targets) + fmt-check
+	$(CARGO) clippy --all-targets
+
+fmt: ## Apply cargo fmt
+	$(CARGO) fmt
+
+fmt-check: ## Verify formatting without changing files (CI-friendly)
+	$(CARGO) fmt -- --check
+
+# --- Tests that need no /dev/kvm ---------------------------------------
+#
+# These are the ones that run in an ordinary container/CI runner. Split
+# per kind (unit vs. integration) so `make unit-test` stays fast during
+# iteration; `make test` runs everything in this section.
+
+unit-test: ## cargo test --lib (inline #[cfg(test)] modules)
+	$(CARGO) test --lib
+
+integration-test: ## cargo test --tests (tests/*.rs, real virtio-mmio/blk logic, no KVM)
+	$(CARGO) test --tests
+
+selftest: build ## Sanity-run the seccomp self-test binary directly (see also: make seccomp)
+	@./target/release/cella --selftest-seccomp; \
+	status=$$?; \
+	if [ $$status -eq 159 ]; then echo "OK: killed by SIGSYS as expected (exit $$status)"; \
+	else echo "UNEXPECTED exit $$status"; exit 1; fi
+
+jail: build ## Feature test: rootless bwrap jail actually confines the process (scripts/test-jail.sh)
+	@$(SCRIPTS)/test-jail.sh
+
+seccomp: build ## Feature test: the real BPF filter kills a disallowed syscall (scripts/test-seccomp.sh)
+	@$(SCRIPTS)/test-seccomp.sh
+
+test: check lint unit-test integration-test jail seccomp ## Everything above: build hygiene + all no-KVM tests
+	@echo ""
+	@echo "=== make test: all no-KVM checks passed ==="
+
+# --- Tests that need real KVM + a kernel/rootfs ------------------------
+#
+# One target per significant feature that only exists once you can
+# actually run a guest: boot, freeze/thaw, networking. Each is a thin
+# `make` wrapper around a script that does the real orchestration --
+# see scripts/boot.sh, scripts/thaw.sh, scripts/net.sh. All three SKIP
+# (exit 0) cleanly if /dev/kvm, assets, or the TAP device aren't present,
+# so `make test-all` doesn't hard-fail in an environment without KVM.
+
+boot: build ## Feature test: boot a real kernel under KVM, watch for a kernel banner (scripts/boot.sh)
+	@$(SCRIPTS)/boot.sh
+
+thaw: build ## Feature test: boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/thaw.sh)
+	@$(SCRIPTS)/thaw.sh
+
+net: build ## Feature test: guest answers ICMP over the TAP after boot (scripts/net.sh, best-effort)
+	@$(SCRIPTS)/net.sh
+
+# --- Setup --------------------------------------------------------------
+
+fetch-assets: ## Download the public test kernel/rootfs used by boot/thaw/net targets
+	@$(SCRIPTS)/fetch-assets.sh
+
+setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once
+	@echo "This needs root once, for CAP_NET_ADMIN, to create the TAP device:"
+	@echo "  sudo $(SCRIPTS)/make_tap.sh tap0 192.168.200.1/24"
+
+# --- Everything -----------------------------------------------------
+
+test-all: test fetch-assets boot thaw net ## make test, plus every KVM-dependent feature test (skips gracefully without KVM)
+	@echo ""
+	@echo "=== make test-all: done (see above for any SKIPs) ==="
+
+lines: ## Report source-only and source+test line counts (see also README's line-count section)
+	@python3 $(SCRIPTS)/count_lines.py
+
+clean: ## cargo clean
+	$(CARGO) clean
+
+distclean: clean ## clean + remove downloaded test assets
+	rm -rf assets
