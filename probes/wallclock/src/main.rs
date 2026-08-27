@@ -21,6 +21,11 @@
 //! That distinction is the whole point of running this rather than
 //! reasoning about which x86_platform hook wins.
 //!
+//! It reports the guest's RNG seeding ("random: crng init done") from
+//! the same log for the same reason: it is cheap to read off a boot we
+//! are doing anyway, and a kernel-config trim that broke entropy
+//! seeding would otherwise stay invisible until something blocked.
+//!
 //! Run: cargo run --manifest-path probes/wallclock/Cargo.toml
 //! (needs dist/bzImage + dist/rootfs.ext4 -- `make dist` -- and a
 //! configured tap0 -- `make setup-tap`)
@@ -103,6 +108,13 @@ struct Evidence {
     /// Anything RTC-related, including the failures that started this
     /// investigation ("Unable to read current time from RTC").
     rtc: Vec<String>,
+    /// "random: crng init done" and friends. Not a clock question, but
+    /// this probe already has a real boot log in hand and a working RNG
+    /// is a standing requirement for the guest -- cella emulates no
+    /// hwrng device, so the CRNG is seeded from RDRAND, and a config
+    /// trim that broke that would otherwise go unnoticed until
+    /// something in the guest blocked on entropy.
+    rng: Vec<String>,
 }
 
 fn gather_evidence(log: &str) -> Evidence {
@@ -110,6 +122,7 @@ fn gather_evidence(log: &str) -> Evidence {
         kvmclock_msrs: Vec::new(),
         clocksource: Vec::new(),
         rtc: Vec::new(),
+        rng: Vec::new(),
     };
     for line in log.lines() {
         let l = line.trim();
@@ -125,6 +138,9 @@ fn gather_evidence(log: &str) -> Evidence {
         }
         if lower.contains("rtc") {
             ev.rtc.push(l.to_string());
+        }
+        if lower.contains("crng") || lower.contains("random:") {
+            ev.rng.push(l.to_string());
         }
     }
     ev
@@ -145,6 +161,7 @@ fn print_evidence(ev: &Evidence) {
     print_section("kvm-clock", &ev.kvmclock_msrs);
     print_section("clocksource selection", &ev.clocksource);
     print_section("RTC", &ev.rtc);
+    print_section("RNG", &ev.rng);
     println!("---");
 }
 
