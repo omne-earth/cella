@@ -73,12 +73,13 @@ scripts/
   make_tap.sh             one-time (per boot), needs sudo once
   jail.sh                  rootless bwrap wrapper, no jailer binary
   freeze.sh                 send SIGUSR1 to a running cella
-  build-assets.sh            build a busybox rootfs + a bzImage kernel from source
-  kernel-fragment.config      the driver set build-assets.sh needs beyond kernel defconfig
-  busybox-fragment.config      static-link override for build-assets.sh's busybox build
-  rootfs-init.sh                /sbin/init installed into the built rootfs
-  bootstrap.sh                 one-time Fedora host setup (runtime deps + tap0 + kvm check)
-  toolbox-setup.sh              creates/provisions the cella-build toolbox (kernel build toolchain)
+  bootstrap.sh                one-time Fedora host setup (runtime deps + tap0 + kvm check)
+  build/
+    assets.sh                 build a busybox rootfs + a bzImage kernel from source
+    kernel-fragment.config      the driver set assets.sh needs beyond kernel defconfig
+    busybox-fragment.config      static-link override for assets.sh's busybox build
+    rootfs.sh                     /sbin/init installed into the built rootfs
+    toolbox.sh                     creates/provisions the cella-build toolbox
   boot.sh / thaw.sh / net.sh  per-feature system tests against real KVM
   test-jail.sh / test-seccomp.sh   per-feature system tests, no KVM needed
   count_lines.py               source-vs-tests line counting for `make lines`
@@ -131,16 +132,16 @@ exact driver set (virtio-mmio/blk/net + 8250 serial built in, nothing
 from a module or an initrd -- see `boot/x86_64.rs`), and pairing an
 arbitrary downloaded rootfs with a from-scratch kernel/init risks
 mismatches that are hard to tell apart from real bugs. So
-`scripts/build-assets.sh` builds a static busybox (with
-`scripts/rootfs-init.sh` as `/sbin/init`) and a kernel (with
-`scripts/kernel-fragment.config` merged onto `x86_64_defconfig`) that
+`scripts/build/assets.sh` builds a static busybox (with
+`scripts/build/rootfs.sh` as `/sbin/init`) and a kernel (with
+`scripts/build/kernel-fragment.config` merged onto `x86_64_defconfig`) that
 are provably matched to each other and to cella's boot path. The
 actual compiling happens inside the `cella-build` toolbox
 (`make .toolbox`, chained into `make init`) so the host itself
 never needs a build toolchain.
 
 For your own kernel instead, the essentials are the same as
-`scripts/kernel-fragment.config`: `CONFIG_VIRTIO_MMIO`,
+`scripts/build/kernel-fragment.config`: `CONFIG_VIRTIO_MMIO`,
 `CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES` (this is what lets
 `virtio_mmio.device=...` on the cmdline stand in for the ACPI/DT
 discovery a firmware-booted guest would get), `CONFIG_VIRTIO_BLK`,

@@ -2,7 +2,7 @@
 # Boots the guest with a static IP on the TAP subnet and pings it from
 # the host. Networking here is entirely in-kernel -- the ip= cmdline
 # param is applied by CONFIG_IP_PNP_STATIC before our /sbin/init even
-# runs (see scripts/kernel-fragment.config / rootfs-init.sh), and ICMP
+# runs (see scripts/build/kernel-fragment.config / rootfs.sh), and ICMP
 # replies need no userspace daemon either. So unlike a downloaded
 # rootfs of unknown provenance, a FAIL here is a real signal about
 # cella's virtio-net TX/RX path, not a guest-userspace question.

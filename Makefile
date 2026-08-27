@@ -102,7 +102,7 @@ net: build dist ## Feature test: guest answers ICMP over the TAP after boot (scr
 # --- Setup --------------------------------------------------------------
 
 .toolbox: ## Sentinel: creates + provisions the cella-build toolbox (kernel build toolchain lives there, not on the host)
-	$(SCRIPTS)/toolbox-setup.sh
+	$(SCRIPTS)/build/toolbox.sh
 	@touch .toolbox
 
 init: ## One-time host setup (Fedora): installs runtime deps, provisions the build toolbox, creates tap0, builds dist, checks /dev/kvm (needs sudo)
@@ -112,7 +112,7 @@ init: ## One-time host setup (Fedora): installs runtime deps, provisions the bui
 	@$(MAKE) dist
 
 $(DIST)/bzImage $(DIST)/rootfs.ext4: | .toolbox
-	@$(SCRIPTS)/build-assets.sh
+	@$(SCRIPTS)/build/assets.sh
 
 dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
 

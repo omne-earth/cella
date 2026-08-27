@@ -15,9 +15,9 @@ fi
 # rust/cargo/rustfmt/clippy: make build/debug/check/lint/fmt
 # bubblewrap: scripts/jail.sh
 # nftables/iproute: scripts/make_tap.sh
-# curl: scripts/build-assets.sh (kernel/busybox source fetch)
+# curl: scripts/build/assets.sh (kernel/busybox source fetch)
 # iputils: scripts/net.sh (ping)
-# python3: make lines, scripts/build-assets.sh (kernel.org releases.json)
+# python3: make lines, scripts/build/assets.sh (kernel.org releases.json)
 # podman/toolbox: make .toolbox -- the kernel/rootfs build toolchain
 # (gcc, bison, flex, e2fsprogs, ...) lives inside the cella-build
 # toolbox container provisioned from there, never on the host itself.

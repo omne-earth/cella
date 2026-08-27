@@ -11,7 +11,7 @@
 # module or an initrd.
 #
 # Both builds happen inside the 'cella-build' toolbox (see
-# scripts/toolbox-setup.sh / `make .toolbox`) -- this script re-execs
+# scripts/build/toolbox.sh / `make .toolbox`) -- this script re-execs
 # itself there. The host itself never needs a build toolchain, only
 # `toolbox`.
 #
@@ -36,7 +36,7 @@ if [ ! -f /run/.toolboxenv ]; then
     command -v toolbox &>/dev/null || { echo "cella: 'toolbox' not found -- run: make bootstrap" >&2; exit 1; }
     [ -f "$HERE/.toolbox" ] || { echo "cella: build toolbox not set up -- run: make bootstrap (or: make .toolbox)" >&2; exit 1; }
     echo "cella: entering the cella-build toolbox to build assets"
-    exec toolbox run -c cella-build "$HERE/scripts/build-assets.sh"
+    exec toolbox run -c cella-build "$HERE/scripts/build/assets.sh"
 fi
 
 # --- from here on we're inside the toolbox container ---
@@ -64,7 +64,7 @@ else
     fi
 
     cd "$SRC_DIR"
-    echo "cella: configuring busybox (defconfig + scripts/busybox-fragment.config)"
+    echo "cella: configuring busybox (defconfig + scripts/build/busybox-fragment.config)"
     # busybox's own scripts/kconfig/ doesn't ship merge_config.sh (that's
     # a Linux-kernel-specific addition), so apply the fragment directly.
     # oldconfig's parser keeps the *first* definition of a symbol in
@@ -73,8 +73,8 @@ else
     make defconfig >/dev/null
     while read -r sym; do
         [ -n "$sym" ] && sed -i "/^${sym}=/d; /^# ${sym} is not set\$/d" .config
-    done < <(grep -oE '^(CONFIG_[A-Z0-9_]+=|# CONFIG_[A-Z0-9_]+ is not set)' "$HERE/scripts/busybox-fragment.config" | grep -oE 'CONFIG_[A-Z0-9_]+')
-    cat "$HERE/scripts/busybox-fragment.config" >>.config
+    done < <(grep -oE '^(CONFIG_[A-Z0-9_]+=|# CONFIG_[A-Z0-9_]+ is not set)' "$HERE/scripts/build/busybox-fragment.config" | grep -oE 'CONFIG_[A-Z0-9_]+')
+    cat "$HERE/scripts/build/busybox-fragment.config" >>.config
     make oldconfig >/dev/null </dev/null
 
     echo "cella: building a static busybox (-j$(nproc))"
@@ -85,7 +85,7 @@ else
     mkdir -p "$ROOTDIR"/bin "$ROOTDIR"/sbin "$ROOTDIR"/proc "$ROOTDIR"/sys "$ROOTDIR"/dev
     cp busybox "$ROOTDIR/bin/busybox"
     "$ROOTDIR/bin/busybox" --install -s "$ROOTDIR/bin"
-    install -m 0755 "$HERE/scripts/rootfs-init.sh" "$ROOTDIR/sbin/init"
+    install -m 0755 "$HERE/scripts/build/rootfs.sh" "$ROOTDIR/sbin/init"
 
     IMG="$RBUILD/rootfs.ext4"
     rm -f "$IMG"
@@ -125,9 +125,9 @@ else
 fi
 
 cd "$SRC_DIR"
-echo "cella: configuring (x86_64_defconfig + scripts/kernel-fragment.config)"
+echo "cella: configuring (x86_64_defconfig + scripts/build/kernel-fragment.config)"
 make x86_64_defconfig >/dev/null
-scripts/kconfig/merge_config.sh -m .config "$HERE/scripts/kernel-fragment.config" >/dev/null
+scripts/kconfig/merge_config.sh -m .config "$HERE/scripts/build/kernel-fragment.config" >/dev/null
 make olddefconfig >/dev/null
 
 echo "cella: building bzImage (-j$(nproc))"

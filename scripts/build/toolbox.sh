@@ -4,7 +4,7 @@
 # e2fsprogs, ...). The host itself stays free of build dependencies --
 # `toolbox` (a thin podman wrapper) is the only thing
 # scripts/bootstrap.sh installs for this on the host.
-# scripts/build-assets.sh re-execs itself inside this container to
+# scripts/build/assets.sh re-execs itself inside this container to
 # actually build the kernel and rootfs.
 #
 # Idempotent: safe to re-run. Called by `make .toolbox` (see Makefile),
