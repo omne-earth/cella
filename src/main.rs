@@ -10,7 +10,7 @@
 //! plumbing that ties memory.rs / boot/x86_64.rs / vcpu.rs / devices/ /
 //! freeze.rs / seccomp.rs together.
 
-use cella::{boot, devices, freeze, memory, seccomp, vcpu};
+use cella::{boot, config, devices, freeze, memory, seccomp, vcpu};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,26 +60,8 @@ fn parse_args() -> Args {
     let mut tap = None;
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
-    // clocksource=kvm-clock makes kvm-clock the single source of time.
-    // cella restores kvm-clock exactly at a thaw, and KVM re-establishes
-    // the anchor of the pvclock page.
-    //
-    // tsc=reliable stops the clocksource watchdog of the guest. Without
-    // it, the watchdog compares the TSC against kvm-clock after a thaw,
-    // finds a difference of 5 ms to 27 ms, and marks the TSC unstable.
-    // The watchdog exists to find faults in hardware. Here the difference
-    // comes from a change that cella makes on purpose: cella rewinds the
-    // TSC at every thaw (see vcpu.rs).
-    //
-    // Note the limit of this value. tsc=reliable tells the guest that the
-    // TSC is a reliable timeline, and that is not true across a thaw. The
-    // guest is protected because clocksource=kvm-clock keeps kvm-clock
-    // selected, so the guest does not read the TSC for timekeeping.
-    // tsc=nowatchdog gives the same result at boot and makes no claim
-    // about the TSC. See the CELLA_TIME_ARGS comment in the Makefile for
-    // the measurements of each value.
-    let mut cmdline =
-        "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable clocksource=kvm-clock".to_string();
+    // The defaults are in cella::config, in one place.
+    let mut cmdline = config::default_cmdline();
     let mut mem_mb = 256u64;
 
     let mut it = std::env::args().skip(1);
@@ -143,6 +125,18 @@ fn main() {
     // for what the harness expects to observe.
     if std::env::args().nth(1).as_deref() == Some("--selftest-seccomp") {
         seccomp::selftest_provoke_kill();
+    }
+
+    // The shell scripts build their own command line, because they add
+    // the root filesystem and the virtio devices. They read the defaults
+    // from here, so that the values are not written a second time.
+    if std::env::args().nth(1).as_deref() == Some("--print-default-cmdline") {
+        println!("{}", config::default_cmdline());
+        std::process::exit(0);
+    }
+    if std::env::args().nth(1).as_deref() == Some("--print-time-args") {
+        println!("{}", config::DEFAULT_TIME_ARGS);
+        std::process::exit(0);
     }
 
     // Print the contents of a frozen sidecar. Use this option to examine

@@ -186,6 +186,29 @@ fn fail(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// Read a default from the cella binary. The values live in
+/// src/config.rs, and this probe must not write a second copy of them.
+/// The binary can print them, and the probe already requires it.
+fn ask_cella(bin: &Path, flag: &str) -> String {
+    let out = Command::new(bin)
+        .arg(flag)
+        .output()
+        .unwrap_or_else(|e| fail(&format!("running {} {flag}: {e}", bin.display())));
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn default_time_args(bin: &Path) -> String {
+    // The full default command line contains the base arguments and the
+    // time arguments. The time arguments are what this probe varies.
+    ask_cella(bin, "--print-time-args")
+}
+
+fn default_base_args(bin: &Path) -> String {
+    let full = ask_cella(bin, "--print-default-cmdline");
+    let time = default_time_args(bin);
+    full.replace(&time, "").trim().to_string()
+}
+
 fn main() {
     let root = repo_root();
     let bin = env_path("CELLA_BIN", root.join("target/release/cella"));
@@ -210,10 +233,17 @@ fn main() {
     // CELLA_TIME_ARGS holds the time arguments of cella. Set it to a
     // different value to compare the boot messages that each choice
     // produces.
-    let time_args = std::env::var("CELLA_TIME_ARGS")
-        .unwrap_or_else(|_| "tsc=reliable clocksource=kvm-clock".to_string());
+    // An unset or empty value uses the default of cella. The word "none"
+    // runs the guest with no time arguments at all, which is how the
+    // behaviour that these arguments correct can be seen again.
+    let time_args = match std::env::var("CELLA_TIME_ARGS") {
+        Ok(v) if v.trim() == "none" => String::new(),
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => default_time_args(&bin),
+    };
+    let base = default_base_args(&bin);
     let cmdline = format!(
-        "console=ttyS0 reboot=k panic=1 pci=off {time_args} root=/dev/vda rw \
+        "{base} {time_args} root=/dev/vda rw \
          virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
     );
     println!(

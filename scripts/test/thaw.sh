@@ -32,6 +32,10 @@ if ! ip link show "$TAP" &>/dev/null; then
     exit 0
 fi
 
+# The default command line comes from the binary, so that these
+# values are defined once. See src/config.rs.
+CELLA_DEFAULT_CMDLINE="$("$BIN" --print-default-cmdline)"
+
 TMP="$(mktemp -d)"
 STATE_DIR="$TMP/state"
 DISK_COPY="$TMP/disk.img"
@@ -49,7 +53,7 @@ RUN_ARGS=(
     --disk "$DISK_COPY"
     --tap "$TAP"
     --mem-mb 128
-    --cmdline "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable clocksource=kvm-clock root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
+    --cmdline "${CELLA_DEFAULT_CMDLINE} root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
 )
 
 fail() {
