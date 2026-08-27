@@ -1,28 +1,6 @@
-# Named directly rather than via `/usr/bin/env bash`: under .ONESHELL make
-# decides whether to strip per-line '@'/'-' prefixes by looking at SHELL's
-# basename, and "env" is not on its list of known Bourne-compatible shells.
 SHELL := /bin/bash
-# One shell per recipe (not per line), and a strict one: -e so a failing
-# step stops the recipe instead of the next line papering over it, -u so
-# a typo'd variable is an error rather than an empty string, -o pipefail
-# so a failure mid-pipeline isn't hidden by a successful `tee`/`sort` at
-# the end. .ONESHELL is what makes $(LOG), below, possible at all.
 .ONESHELL:
 .SHELLFLAGS := -ueo pipefail -c
-
-# Every recipe's first line is `$(LOG)`. It tees the whole recipe's
-# output -- stdout and stderr, including anything the scripts and probes
-# print -- into .logs/<target>-<timestamp>.log while still showing it on
-# the terminal, so a failed run always leaves evidence behind without
-# anyone having to remember to redirect. Only works under .ONESHELL: the
-# `exec` redirect has to apply to the rest of the recipe, which requires
-# the whole recipe to be a single shell. Leading `@` silences make's own
-# echo of the recipe text (the header line below says what ran instead).
-# Target names with a `/` in them (dist/bzImage) become `dist_bzImage`
-# so the log path stays one level deep. The sentinel also sets
-# CELLA_LOG_FILE, thus a recipe can name its own log file. logs-clean
-# needs this, because `tee` creates the file after the recipe starts and
-# a listing of the directory does not always contain it yet.
 LOGDIR := .logs
 LOG = @mkdir -p $(LOGDIR); CELLA_LOG_FILE="$(LOGDIR)/$(subst /,_,$@)-$$(date +%Y%m%d-%H%M%S).log"; exec > >(tee -a "$$CELLA_LOG_FILE") 2>&1; echo "=== make $@ -- $$(date -Is) ==="
 
@@ -35,14 +13,7 @@ DIST := dist
 CELLA_TAP ?= tap0
 CELLA_TAP_CIDR ?= 192.168.200.1/24
 
-# Pinned, not resolved at build time. assets.sh used to ask kernel.org
-# for the current longterm release on every single run, which means the
-# kernel could -- and did -- move out from under a measurement
-# mid-investigation: an RTC boot-time comparison silently spanned
-# 6.18.46 -> 6.18.47 because the rebuild happened to cross a point
-# release. `make dist` is now reproducible. Override either in .env (see
-# the -include above) or on the command line to bump or bisect; find the
-# current longterm at https://www.kernel.org/releases.json.
+# https://www.kernel.org/releases.json.
 KERNEL_VERSION ?= 6.18.47
 BUSYBOX_VERSION ?= 1.37.0
 export KERNEL_VERSION BUSYBOX_VERSION
@@ -74,7 +45,7 @@ help: ## Show this help
 	echo "Everything:"
 	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
-	echo "Probes: one-off diagnostics, run by hand, not part of test/smoke:"
+	echo "Probes: diagnostics, run by hand (smoke-thaw runs the freeze/thaw one):"
 	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 
 # --- Build ------------------------------------------------------------
@@ -105,9 +76,8 @@ fmt-check: ## Verify formatting without changing files (CI-friendly)
 
 # --- Tests that need no /dev/kvm ---------------------------------------
 #
-# These are the ones that run in an ordinary container/CI runner. Split
-# per kind (unit vs. integration) so `make unit-test` stays fast during
-# iteration; `make test` runs everything in this section.
+# These run in an ordinary container. `make unit-test` stays fast during
+# work on the code. `make test` runs everything in this section.
 
 unit-test: ## cargo test --lib (inline #[cfg(test)] modules)
 	$(LOG)
@@ -119,9 +89,8 @@ integration-test: ## cargo test --tests (tests/*.rs, real virtio-mmio/blk logic,
 
 selftest: build ## Sanity-run the seccomp self-test binary directly (see also: make test-seccomp)
 	$(LOG)
-	# `|| status=$$?` rather than a bare call: the whole point of this
-	# target is a binary that exits 159 (SIGSYS), which `set -e` would
-	# otherwise treat as a recipe failure before we can check for it.
+	# This binary must exit 159 (SIGSYS). `set -e` stops a recipe at such
+	# an exit, thus the code takes the status with `|| status=$$?`.
 	status=0
 	./target/release/cella --selftest-seccomp || status=$$?
 	if [ $$status -eq 159 ]; then
@@ -144,17 +113,7 @@ test: check lint unit-test integration-test test-jail test-seccomp ## Everything
 	echo ""
 	echo "=== make test: all no-KVM checks passed ==="
 
-# --- Smoke tests: real KVM, a real guest, real workflows ---------------
-#
-# Named smoke-* rather than bare boot/thaw/net: these aren't the
-# operations themselves (that's `scripts/jail.sh` for actually running
-# cella, `kill -USR1` for actually freezing it -- see README), they're
-# pass/fail checks that those workflows still work end to end. One
-# target per significant workflow, each a thin `make` wrapper around a
-# script that does the real orchestration -- see scripts/test/boot.sh,
-# scripts/test/thaw.sh, scripts/test/net.sh. All three SKIP (exit 0)
-# cleanly if /dev/kvm, dist, or the TAP device aren't present, so
-# `make smoke` doesn't hard-fail without KVM.
+# --- Smoke tests: required real KVM ---------------
 
 smoke-boot: build dist ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
 	$(LOG)
@@ -163,15 +122,10 @@ smoke-boot: build dist ## Boot a real kernel under KVM all the way to a running 
 smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check, then the clock probe
 	$(LOG)
 	$(SCRIPTS)/test/thaw.sh
-	# The script checks that the process and the sidecar survive a thaw.
-	# It cannot see whether the guest keeps its time, and a guest that
-	# resumes with a dead timer looked identical to a healthy one for the
-	# whole history of this test. The probe measures that, so it runs
-	# here as well.
-	#
-	# CELLA_POST_THAW_SECS=0 leaves out the measurement of the clock rate,
-	# which takes 30 s and answers a question that a smoke test does not
-	# ask. Run `make probe-freeze-thaw-clock` for the full measurement.
+	# The script cannot see whether the guest keeps its time. A guest that
+	# resumed with a dead timer passed the script in every run. The probe
+	# measures the time. CELLA_POST_THAW_SECS=0 leaves out the 30 s
+	# measurement of the clock rate.
 	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0
 
 smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
@@ -228,24 +182,11 @@ lines: ## Report source-only and source+test line counts (see also README's line
 
 logs-clean: ## Delete the run logs in .logs/, and keep the newest one for each target
 	$(LOG)
-	# The sentinel writes .logs/<target>-<date>-<time>.log at every run,
-	# thus the directory grows without limit. This target keeps the newest
-	# log for each target and deletes the rest. The timestamp sorts in the
-	# same order as the time, therefore the last name of a group is the
-	# newest file.
-	#
-	# The name of the target is the file name without the final
-	# "-<date>-<time>.log". A glob must not be used to group the files:
-	# "test-*.log" also matches "test-jail-...log" and
-	# "test-seccomp-...log", and an earlier version of this target deleted
-	# those files for that reason.
 	cd $(LOGDIR)
 	keep=$$(ls -1 *.log 2>/dev/null | sort | awk '{ t = $$0; sub(/-[0-9]{8}-[0-9]{6}\.log$$/, "", t); newest[t] = $$0 } END { for (k in newest) print newest[k] }')
 	deleted=0
 	own=$$(basename "$$CELLA_LOG_FILE")
 	for f in $$(ls -1 *.log 2>/dev/null); do
-		# Never delete the log of this run. `tee` may create it after the
-		# listing above, therefore it is not always in the keep list.
 		if [ "$$f" = "$$own" ]; then
 			continue
 		fi
@@ -267,123 +208,75 @@ distclean: clean ## clean + remove built dist/ assets
 
 distclean-rootfs: ## Remove just dist/rootfs.ext4, so the next `make dist` rebuilds the rootfs (for a rootfs.sh change)
 	$(LOG)
-	# The busybox build in target/rootfs-build survives, so the rebuild
-	# only assembles the image again.
+	# The busybox build in target/rootfs-build survives, thus the rebuild
+	# only assembles the image.
 	rm -f $(DIST)/rootfs.ext4
 	echo "cella: removed $(DIST)/rootfs.ext4 -- next 'make dist' rebuilds the rootfs"
 
 distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds the kernel (for a kernel-fragment.config change)
 	$(LOG)
-	# Deliberately narrower than distclean: the cached kernel source tree
-	# in target/kernel-build survives, so the rebuild is incremental, and
-	# so does dist/rootfs.ext4 -- a config change to the kernel is no
-	# reason to rebuild busybox and the rootfs image too.
 	rm -f $(DIST)/bzImage
 	echo "cella: removed $(DIST)/bzImage -- next 'make dist' rebuilds the kernel"
 
 # --- Probes ---------------------------------------------------------
 #
-# Standalone diagnostics for questions too fiddly (or too dependent on
-# real hardware/kernel behavior) to safely resolve from documentation
-# or code-reading alone -- each is a real, self-contained program
-# (probes/<name>/) that exercises real KVM ioctls or a real cella boot
-# and reports what actually happens, not what should happen. NOT part
-# Most of these are one-off investigation tools for a specific bug, and
-# not routine regression checks. Some are expected to fail until the bug
-# that they measure is fixed. That is the purpose: a measurement instead
-# of a guess.
+# To add a probe, make probes/<name>/ with its own Cargo.toml and
+# src/main.rs, and add a target here.
 #
-# probe-freeze-thaw-clock is the exception. `make smoke-thaw` runs it,
-# because the shell script cannot see whether the guest keeps its time
-# across a thaw, and a guest that resumed with no timer passed that
-# script for the whole history of this test.
-# Add a new one under probes/<name>/ (its own Cargo.toml + src/main.rs)
-# and a target here when the next one of these comes up.
-
-# Parameters for the probe targets. Each value below is the default that
-# cella uses. Every one is `?=`, therefore an environment variable or an
-# assignment on the command line takes precedence:
+# Parameters. Each is `?=`, thus the environment or the command line
+# takes precedence:
 #
 #   make probe-freeze-thaw-clock CELLA_FROZEN_SECS=45
-#   CELLA_EXTRA_CMDLINE="tsc=nowatchdog" make probe-freeze-thaw-clock
 #
-# CELLA_FROZEN_SECS
-#     probe-freeze-thaw-clock. The length of the freeze, in real seconds.
-#     The default of 6 is several times the heartbeat period of 1 s, thus
-#     a guest that let real time enter shows an obvious jump. Measurement
-#     shows that the error at the thaw does not change with this value, so
-#     a longer freeze gives no more information. Use 0 to thaw at once.
+# CELLA_FROZEN_SECS      6    the length of the freeze, in real seconds.
+#                             The error at the thaw does not change with
+#                             this value. Use 0 to thaw at once.
+# CELLA_POST_THAW_SECS   30   the length of the measurement of the clock
+#                             rate. /proc/uptime has a resolution of
+#                             10 ms, thus 30 s resolves 350 ppm. Use 0 to
+#                             leave the measurement out.
+# CELLA_OBSERVE_SECS     60   probe-wallclock. The length of the control
+#                             test, which runs the guest with no freeze.
+#                             The watchdog runs twice per second. Use 0
+#                             to leave the control test out.
+# CELLA_TIME_ARGS             the time arguments on the command line. An
+#                             unset or empty value uses the default of
+#                             cella, in src/config.rs. The word "none"
+#                             runs the guest with no time arguments.
+# CELLA_EXTRA_CMDLINE    ""   more arguments, after the time arguments.
 #
-# CELLA_POST_THAW_SECS
-#     probe-freeze-thaw-clock. The length of the measurement of the clock
-#     rate after the thaw, in real seconds. The probe fits the monotonic
-#     clock of the guest against the clock of the host over this period.
-#     /proc/uptime has a resolution of 10 ms, therefore 30 s gives a
-#     resolution of approximately 350 ppm. A shorter period gives a worse
-#     resolution. Use 0 to omit this measurement.
+# The probes also accept CELLA_BIN, CELLA_TEST_KERNEL, CELLA_TEST_DISK,
+# and CELLA_TEST_TAP, as the smoke tests do.
 #
-# CELLA_TIME_ARGS
-#     probe-freeze-thaw-clock and probe-wallclock. The time arguments on
-#     the kernel command line. An unset or empty value uses the default of
-#     cella, which is DEFAULT_TIME_ARGS in src/config.rs. That file is the
-#     only place where the value is written. Set this variable to compare
-#     the options, or to the word "none" to run with no time arguments.
+# Measured values for CELLA_TIME_ARGS, each with a freeze of 6 seconds.
+# cella rewinds the TSC at every thaw, thus the guest must not use the
+# TSC as a monotonic reference, and must not compare it against
+# kvm-clock:
 #
-#     cella rewinds the TSC of the guest at every thaw. The guest must
-#     therefore not use the TSC as a monotonic reference, and it must not
-#     compare the TSC against kvm-clock. These values were measured, each
-#     with a freeze of 6 real seconds:
+#   ""                                       the watchdog reports a skew
+#                                            of 5 ms to 27 ms after each
+#                                            thaw
+#   "tsc=reliable clocksource=kvm-clock trace_clock=local"
+#                                            the default. No fault, and
+#                                            no clock message at boot.
+#                                            tsc=reliable states that the
+#                                            TSC is reliable, which is
+#                                            not true across a thaw. The
+#                                            guest does not act on it,
+#                                            because clocksource=kvm-clock
+#                                            keeps kvm-clock selected.
+#   "tsc=unstable clocksource=kvm-clock"     no fault. One line at boot:
+#                                            "Marking TSC unstable due to
+#                                            boot parameter".
+#   "tsc=nowatchdog clocksource=kvm-clock"   no fault, and no line at
+#                                            boot. Makes no claim about
+#                                            the TSC.
 #
-#     ""  (no time arguments)
-#         The clocksource watchdog reports a skew of 5 ms to 27 ms after
-#         every thaw and marks the TSC unstable. Time stays correct for
-#         the guest, but the kernel reports a fault.
-#
-#     "tsc=unstable clocksource=kvm-clock"
-#         No fault after a thaw. The guest never uses the TSC for
-#         timekeeping. The kernel prints one line at boot: "tsc: Marking
-#         TSC unstable due to boot parameter". This statement is true for
-#         cella, because cella rewinds the TSC.
-#
-#     "tsc=nowatchdog clocksource=kvm-clock"
-#         No fault after a thaw, and no line at boot. The TSC stays a
-#         candidate clocksource but the kernel does not verify it.
-#         clocksource=kvm-clock keeps kvm-clock selected.
-#
-#     "tsc=reliable clocksource=kvm-clock trace_clock=local"
-#                                            (the default of cella)
-#         No fault after a thaw, and no line at boot. Note the limit of
-#         this value: it tells the guest that the TSC is a reliable
-#         timeline, and that is not true across a thaw. The guest is
-#         protected because clocksource=kvm-clock keeps kvm-clock
-#         selected, so the guest does not read the TSC for timekeeping.
-#
-#     Without trace_clock=local, one more line appears at boot with every
-#     value above: "Unstable clock detected, switching default tracing
-#     clock". The kernel prints it when sched_clock is not stable, which
-#     follows from the absence of PVCLOCK_TSC_STABLE_BIT in the pvclock
-#     page. The host KVM owns that bit and sets it only when the TSC of
-#     the host is stable. This host is a virtual machine and reports "TSCs
-#     unsynchronized". trace_clock=local keeps the per-CPU clock for the
-#     ftrace ring buffer and stops the message. The guest has one vCPU,
-#     thus the "global" clock gives it no benefit.
-#
-# CELLA_EXTRA_CMDLINE
-#     probe-freeze-thaw-clock. Text to append to the kernel command line,
-#     after the time arguments. The default is empty. Use it for
-#     arguments that are not about time.
-#
-# CELLA_OBSERVE_SECS
-#     probe-wallclock. The length of the control test, in real seconds.
-#     The probe keeps the guest running for this period with no freeze,
-#     and reports the clock errors of the kernel. This is the control for
-#     probe-freeze-thaw-clock: it shows whether an error comes from the
-#     freeze or from the host. The clocksource watchdog runs twice per
-#     second, thus the default of 60 gives approximately 120 rounds. Use
-#     0 to omit the control test.
-#
-# All probes also accept CELLA_BIN, CELLA_TEST_KERNEL, CELLA_TEST_DISK,
-# and CELLA_TEST_TAP, with the same meaning as in the smoke tests.
+# Without trace_clock=local the guest also prints "Unstable clock
+# detected, switching default tracing clock". That follows from the
+# absence of PVCLOCK_TSC_STABLE_BIT, which the host KVM owns and sets
+# only when the TSC of the host is stable.
+
 CELLA_FROZEN_SECS ?= 6
 CELLA_POST_THAW_SECS ?= 30
 CELLA_TIME_ARGS ?=
