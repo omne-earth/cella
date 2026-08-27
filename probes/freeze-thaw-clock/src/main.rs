@@ -229,6 +229,16 @@ fn main() {
     let guest_before = read_heartbeats(&boot_log).last().copied().unwrap_or(guest_before);
     println!("step 2: frozen (state file present). last pre-freeze guest wall-clock = {guest_before}");
 
+    // Dump the sidecar now, while the file exists. A thaw that is
+    // successful deletes it (see finalize_thaw). This is the only time at
+    // which the probe can read the state that the guest resumes from.
+    let frozen_dump = Command::new(&bin)
+        .arg("--dump-state")
+        .arg(&state_dir)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_else(|e| format!("(could not dump frozen state: {e})"));
+
     // --- step 3: stay frozen for a real, known interval ---
     println!("step 3: staying frozen for {FROZEN_REAL_SECS}s of real time...");
     std::thread::sleep(Duration::from_secs(FROZEN_REAL_SECS));
@@ -278,7 +288,20 @@ fn main() {
             // reading this as "the clock is broken" would send the next
             // hour of work at entirely the wrong subsystem.
             println!();
-            println!("--- diagnosis: guest is SILENT after thaw ---");
+            if thaw_stdout.is_empty() {
+                println!("--- diagnosis: guest is SILENT after thaw (no output at all) ---");
+            } else {
+                println!(
+                    "--- diagnosis: guest RESUMED but never ticked ({} bytes of output, no \
+                     heartbeat) ---",
+                    thaw_stdout.len()
+                );
+                println!(
+                    "    The guest runs. Therefore the problem is not the restore of the \
+                     vCPU\n    or of the interrupt hardware. The problem is what the guest \
+                     does after it starts."
+                );
+            }
             println!(
                 "  VMM reported a successful thaw: {}",
                 thaw_stderr.contains("thawed")
@@ -288,36 +311,103 @@ fn main() {
                 "  bytes of serial output produced after thaw: {}",
                 thaw_stdout.len()
             );
+
+            // Show which timer the guest selected. The probe reads this
+            // from the boot log of the guest. Do not assume the answer. A
+            // statement such as "Linux selects the TSC-deadline
+            // clockevent" needs evidence.
+            let boot = read_file(&boot_log);
+            let timer: Vec<&str> = boot
+                .lines()
+                .map(str::trim)
+                .filter(|l| {
+                    let low = l.to_ascii_lowercase();
+                    low.contains("tsc deadline")
+                        || low.contains("clockevent")
+                        || low.contains("lapic")
+                        || low.contains("apic timer")
+                })
+                .collect();
+            println!("  --- which timer the guest armed (from its own boot log) ---");
+            if timer.is_empty() {
+                println!("    (nothing matched -- cannot attribute the silence to a timer)");
+            }
+            for l in timer.iter().take(8) {
+                println!("    {l}");
+            }
+
+            println!("  --- what the guest was frozen from (sidecar dump) ---");
+            for line in frozen_dump.lines() {
+                println!("    {line}");
+            }
             println!("  --- thaw stderr ---");
             for l in tail(&thaw_stderr, 10) {
                 println!("  {l}");
             }
             if !thaw_stdout.is_empty() {
+                println!("  --- FIRST serial output after thaw (where a fault begins) ---");
+                for l in thaw_stdout.lines().take(20) {
+                    println!("  {l}");
+                }
                 println!("  --- last serial output after thaw ---");
-                for l in tail(&thaw_stdout, 10) {
+                for l in tail(&thaw_stdout, 6) {
                     println!("  {l}");
                 }
             }
             println!(
-                "\n  This is NOT evidence about kvmclock/KVM_SET_CLOCK. The heartbeat loop \
-                 needs `sleep 1` to return, which needs an armed LAPIC timer. Freeze/thaw \
-                 currently does not save:\n\
-                 \x20   - MSR_IA32_TSC_DEADLINE (0x6e0), the pending deadline for the \
-                 TSC-deadline LAPIC timer Linux almost certainly selected here -- it is not \
-                 in vcpu.rs's SAVED_MSRS, so KVM_SET_LAPIC restarts the timer from a zero \
-                 deadline and arms nothing.\n\
-                 \x20   - in-kernel irqchip + PIT state (KVM_GET/SET_IRQCHIP, \
-                 KVM_GET/SET_PIT2): main.rs builds a fresh irqchip on thaw, so the IOAPIC \
-                 redirection entries the guest programmed for IRQ 4/5/6 are gone.\n\
-                 \x20   - virtio device-model state: main.rs rebuilds MmioTransport::new on \
-                 thaw (status 0, queues not ready, next_avail 0) while the guest's drivers \
-                 believe both devices are live.\n\
-                 Rule those out before touching the clock restore."
+                "\n  The heartbeat loop calls `sleep 1`. That call needs a timer. \
+                 Therefore a guest\n  that resumes without a timer looks the same as a \
+                 guest that has a wrong clock.\n  This output is not evidence about \
+                 kvmclock or KVM_SET_CLOCK.\n\n  \
+                 This branch already restores these items. Read the dump above before you \
+                 examine them again:\n  \
+                 - MSR_IA32_TSC_DEADLINE. It reads 0 here, because this guest masks its \
+                 LAPIC timer and uses the PIT.\n  \
+                 - The irqchip and PIT state (KVM_GET/SET_IRQCHIP, KVM_GET/SET_PIT2). \
+                 This state is what lets the guest run again.\n  \
+                 - The xsave area and XCR0. Without them the guest gets an invalid-opcode \
+                 fault in AVX code.\n\n  \
+                 Freeze does not save the virtio device state. main.rs makes a new \
+                 MmioTransport at thaw. Its status is 0, its queues are not ready, and \
+                 next_avail is 0. The drivers in the guest expect both devices to be in \
+                 operation."
             );
             eprintln!("(logs kept: {})", tmp.display());
             std::process::exit(1);
         }
     };
+
+    // A guest can resume, run its timer, and keep the correct time, and
+    // also report an error about the thaw. If the probe shows only the
+    // time difference, it hides that error. The first error that this
+    // probe found after a thaw was of this type: the clocksource watchdog
+    // marked the TSC unstable. That is a defect in the clock, even when
+    // the time difference is correct.
+    let complaints: Vec<&str> = thaw_stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            let low = l.to_ascii_lowercase();
+            low.contains("unstable")
+                || low.contains("oops")
+                || low.contains("warning:")
+                || low.contains("bug:")
+                || low.contains("call trace")
+                || low.contains("watchdog")
+        })
+        .collect();
+    if complaints.is_empty() {
+        println!("post-thaw kernel complaints: none");
+    } else {
+        println!(
+            "post-thaw kernel complaints ({} lines) -- the guest resumed, but not cleanly:",
+            complaints.len()
+        );
+        for l in complaints.iter().take(8) {
+            println!("  {l}");
+        }
+    }
+    println!();
 
     let guest_delta = guest_after - guest_before;
     println!("step 4: thawed. first post-thaw guest wall-clock = {guest_after}, host = {host_at_thaw}");
