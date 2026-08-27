@@ -35,6 +35,7 @@ const ALLOWED: &[(u32, &str)] = &[
     (1,   "write: serial output, tap TX"),
     (3,   "close: dropping fds (block/tap on shutdown)"),
     (5,   "fstat: File::metadata (ram/state file sizing)"),
+    (332, "statx: fs::create_dir_all confirming an existing path is a directory, on some libc versions"),
     (8,   "lseek: buffered reads of the state file on thaw"),
     (9,   "mmap: guest RAM mapping, allocator growth"),
     (10,  "mprotect: allocator, guard pages"),
@@ -43,6 +44,7 @@ const ALLOWED: &[(u32, &str)] = &[
     (13,  "rt_sigaction: installing the freeze-request handler"),
     (14,  "rt_sigprocmask: signal mask save/restore around handler install"),
     (15,  "rt_sigreturn: returning from the freeze-request signal handler"),
+    (131, "sigaltstack: glibc/Rust runtime thread teardown when exiting after a freeze"),
     (16,  "ioctl: every KVM_* and the one-time TUNSETIFF"),
     (17,  "pread64: virtio-blk reads"),
     (18,  "pwrite64: virtio-blk writes"),
@@ -61,11 +63,19 @@ const ALLOWED: &[(u32, &str)] = &[
     (302, "prlimit64: std::fs / allocator introspection on some libcs"),
     (318, "getrandom: glibc/Rust runtime init"),
     (82,  "rename: atomic state.tmp -> state"),
+    (87,  "unlink: finalize_thaw removing the one-shot state file, on some libc versions"),
+    (263, "unlinkat: finalize_thaw removing the one-shot state file"),
 ];
-const SYNC_SYSCALLS: &[(u32, &str)] = &[(
-    74,
-    "fsync: state file and freeze-image directory durability",
-)];
+const SYNC_SYSCALLS: &[(u32, &str)] = &[
+    (
+        74,
+        "fsync: state file and freeze-image directory durability",
+    ),
+    (
+        26,
+        "msync: guest RAM durability before the state sidecar is written",
+    ),
+];
 
 pub fn install() -> io::Result<()> {
     let mut allowed: Vec<u32> = ALLOWED.iter().map(|(n, _)| *n).collect();
