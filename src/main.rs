@@ -141,6 +141,8 @@ fn main() {
 
     let args = parse_args();
     let frozen = freeze::is_frozen(&args.state_dir);
+    // Set at the thaw, and read immediately before the first KVM_RUN.
+    let mut thaw_clock_written: Option<std::time::Instant> = None;
 
     let mem_size_bytes = if frozen {
         // Thawing: mem size comes from the frozen state, not the CLI, so
@@ -232,16 +234,52 @@ fn main() {
                  frozen on a host with a different TSC frequency)"
             ));
         }
+        // The MSR batch at the end of `restore` contains MSR_IA32_TSC. The
+        // clock write follows it immediately.
+        //
+        // Both sequences give the same result. A test of the opposite
+        // sequence (clock first, then the vCPU state) gave a skew of 7 ms
+        // to 18 ms, which is the same range as this sequence. Therefore
+        // the sequence of these two calls is not the cause of the skew.
         vcpu::restore(&vcpu_fd, &frozen_state.vcpu)
             .unwrap_or_else(|e| fatal(&format!("restoring vcpu state: {e:?}")));
+        let t_after_restore = std::time::Instant::now();
         vcpu::restore_vm_clock(&vm, &frozen_state.clock)
             .unwrap_or_else(|e| fatal(&format!("restoring clock: {e:?}")));
+        let t_after_clock = std::time::Instant::now();
+        eprintln!(
+            "cella: thaw timing: TSC write to clock write {} us",
+            (t_after_clock - t_after_restore).as_micros()
+        );
+        thaw_clock_written = Some(t_after_clock);
         // The code above made a new irqchip and a new PIT. This call puts
         // back the IOAPIC routing and the PIT programming that the guest
         // set before the freeze. Without this call, a halted guest waits
         // for a timer interrupt that does not occur.
         vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
             .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
+        // Tell the guest that it was stopped. KVM sets PVCLOCK_GUEST_STOPPED
+        // in the pvclock page at the next update, which occurs at the
+        // first vCPU entry. Linux reads this flag in the kvmclock code and
+        // calls pvclock_touch_watchdogs(). This resets the clocksource
+        // watchdog and the soft-lockup watchdog for the interval that
+        // contains the freeze.
+        //
+        // Without this call the guest measures its TSC against kvm-clock
+        // across the freeze, finds a difference of 8 ms to 23 ms, and
+        // marks the TSC unstable. The difference does not come from the
+        // VMM: the delay from the read of the TSC to the read of the
+        // clock is 1 us, the delay between the two writes is 0 us, and
+        // the delay from the write of the clock to the first KVM_RUN is
+        // approximately 200 us.
+        //
+        // This call must come after the restore of MSR_KVM_SYSTEM_TIME_NEW,
+        // because KVM refuses the request if the pvclock page of the guest
+        // is not active.
+        if let Err(e) = vcpu_fd.kvmclock_ctrl() {
+            eprintln!("cella: warning: KVM_KVMCLOCK_CTRL failed: {e}");
+        }
+
         freeze::finalize_thaw(&args.state_dir)
             .unwrap_or_else(|e| fatal(&format!("finalizing thaw: {e}")));
         eprintln!("cella: thawed {:?}", args.state_dir);
@@ -265,6 +303,15 @@ fn main() {
 
     install_sigusr1_handler();
     seccomp::install().unwrap_or_else(|e| fatal(&format!("seccomp: {e}")));
+
+    // The guest starts to run at the first KVM_RUN in run_loop. Measure
+    // the delay from the write of the clock to that moment.
+    if let Some(t) = thaw_clock_written {
+        eprintln!(
+            "cella: thaw timing: clock write to first KVM_RUN {} us",
+            t.elapsed().as_micros()
+        );
+    }
 
     run_loop(
         vcpu_fd,
@@ -356,16 +403,37 @@ fn do_freeze(
     mem_size_bytes: u64,
 ) {
     eprintln!("cella: freezing to {:?}", state_dir);
+    // The guest stopped when KVM_RUN returned. Measure the delay from
+    // that moment to the read of the TSC and the kvmclock. The values
+    // that the code reads are the values at the read, not at the stop.
+    let t_stopped = std::time::Instant::now();
 
-    let _ = vcpu_fd.kvmclock_ctrl();
+    // Note: KVM_KVMCLOCK_CTRL is not called here. It sets a request on
+    // the vCPU, and KVM applies the request at the next update of the
+    // pvclock page. This vCPU does not run again, and the process exits.
+    // Therefore a call here has no effect. The thaw makes the call, on
+    // the new vCPU, before the guest runs.
 
     if let Err(e) = memory::sync_ram(mem) {
         fatal(&format!("msync guest RAM during freeze: {e}"));
     }
 
+    // Measure the delay between the read of the TSC and the read of the
+    // kvmclock. `save` reads the MSRs last, thus the end of `save` is
+    // when the code reads the TSC. The thaw must write the two values
+    // with the same delay between them. If the two delays are different,
+    // the guest sees a step between its TSC and its kvmclock.
+    let t_tsc = std::time::Instant::now();
     let vcpu_state =
         vcpu::save(vcpu_fd).unwrap_or_else(|e| fatal(&format!("saving vcpu state: {e:?}")));
+    let t_after_save = std::time::Instant::now();
     let clock = vcpu::save_vm_clock(vm).unwrap_or_else(|e| fatal(&format!("saving clock: {e:?}")));
+    let t_clock = std::time::Instant::now();
+    eprintln!(
+        "cella: freeze timing: guest stop to TSC read {} us, TSC read to clock read {} us",
+        (t_tsc - t_stopped).as_micros(),
+        (t_clock - t_after_save).as_micros()
+    );
     let irqchip =
         vcpu::save_irqchip(vm).unwrap_or_else(|e| fatal(&format!("saving irqchip/PIT: {e:?}")));
     let tsc_khz = vcpu_fd.get_tsc_khz().unwrap_or(0);

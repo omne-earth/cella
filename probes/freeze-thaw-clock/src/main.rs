@@ -278,6 +278,17 @@ fn main() {
     let _ = child2.kill();
     let _ = child2.wait();
 
+    // Show the timing that the VMM measured. The delay between the read
+    // of the TSC and the read of the kvmclock at the freeze must be equal
+    // to the delay between the two writes at the thaw. A difference
+    // between the two delays becomes a step in the clock of the guest.
+    let boot_err = read_file(&tmp.join("boot.err"));
+    for line in boot_err.lines().chain(thaw_stderr.lines()) {
+        if line.contains("timing:") {
+            println!("  {}", line.trim());
+        }
+    }
+
     let real_gap = host_at_thaw - host_at_freeze;
 
     // --- verdict ---
