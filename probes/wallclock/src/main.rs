@@ -211,7 +211,7 @@ fn main() {
     // different value to compare the boot messages that each choice
     // produces.
     let time_args = std::env::var("CELLA_TIME_ARGS")
-        .unwrap_or_else(|_| "tsc=unstable clocksource=kvm-clock".to_string());
+        .unwrap_or_else(|_| "tsc=reliable clocksource=kvm-clock".to_string());
     let cmdline = format!(
         "console=ttyS0 reboot=k panic=1 pci=off {time_args} root=/dev/vda rw \
          virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"

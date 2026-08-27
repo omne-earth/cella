@@ -60,22 +60,26 @@ fn parse_args() -> Args {
     let mut tap = None;
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
-    // tsc=unstable and clocksource=kvm-clock are part of the design, not
-    // a workaround for a message in the log.
+    // clocksource=kvm-clock makes kvm-clock the single source of time.
+    // cella restores kvm-clock exactly at a thaw, and KVM re-establishes
+    // the anchor of the pvclock page.
     //
-    // cella rewinds the TSC of the guest at every thaw (see vcpu.rs).
-    // Therefore the TSC is not a monotonic reference in this VM, and the
-    // guest must not use it as one. kvm-clock is the single source of
-    // time: cella restores it exactly, and KVM re-establishes the anchor
-    // of the pvclock page at the thaw.
+    // tsc=reliable stops the clocksource watchdog of the guest. Without
+    // it, the watchdog compares the TSC against kvm-clock after a thaw,
+    // finds a difference of 5 ms to 27 ms, and marks the TSC unstable.
+    // The watchdog exists to find faults in hardware. Here the difference
+    // comes from a change that cella makes on purpose: cella rewinds the
+    // TSC at every thaw (see vcpu.rs).
     //
-    // Without these two arguments the clocksource watchdog of the guest
-    // compares the TSC against kvm-clock after a thaw, finds a difference
-    // of 5 ms to 27 ms, and marks the TSC unstable. That watchdog exists
-    // to find faults in hardware. Here the difference comes from a change
-    // that cella makes on purpose.
+    // Note the limit of this value. tsc=reliable tells the guest that the
+    // TSC is a reliable timeline, and that is not true across a thaw. The
+    // guest is protected because clocksource=kvm-clock keeps kvm-clock
+    // selected, so the guest does not read the TSC for timekeeping.
+    // tsc=nowatchdog gives the same result at boot and makes no claim
+    // about the TSC. See the CELLA_TIME_ARGS comment in the Makefile for
+    // the measurements of each value.
     let mut cmdline =
-        "console=ttyS0 reboot=k panic=1 pci=off tsc=unstable clocksource=kvm-clock".to_string();
+        "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable clocksource=kvm-clock".to_string();
     let mut mem_mb = 256u64;
 
     let mut it = std::env::args().skip(1);

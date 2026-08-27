@@ -49,7 +49,7 @@ RUN_ARGS=(
     --disk "$DISK_COPY"
     --tap "$TAP"
     --mem-mb 128
-    --cmdline "console=ttyS0 reboot=k panic=1 pci=off tsc=unstable clocksource=kvm-clock root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
+    --cmdline "console=ttyS0 reboot=k panic=1 pci=off tsc=reliable clocksource=kvm-clock root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
 )
 
 fail() {

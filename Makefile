@@ -289,7 +289,7 @@ distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds 
 #         every thaw and marks the TSC unstable. Time stays correct for
 #         the guest, but the kernel reports a fault.
 #
-#     "tsc=unstable clocksource=kvm-clock"   (the default of cella)
+#     "tsc=unstable clocksource=kvm-clock"
 #         No fault after a thaw. The guest never uses the TSC for
 #         timekeeping. The kernel prints one line at boot: "tsc: Marking
 #         TSC unstable due to boot parameter". This statement is true for
@@ -300,10 +300,12 @@ distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds 
 #         candidate clocksource but the kernel does not verify it.
 #         clocksource=kvm-clock keeps kvm-clock selected.
 #
-#     "tsc=reliable clocksource=kvm-clock"
-#         No fault after a thaw, and no line at boot. Do not use this
-#         value. It tells the guest that the TSC is a reliable timeline,
-#         and that statement is false: cella rewinds the TSC at a thaw.
+#     "tsc=reliable clocksource=kvm-clock"   (the default of cella)
+#         No fault after a thaw, and no line at boot. Note the limit of
+#         this value: it tells the guest that the TSC is a reliable
+#         timeline, and that is not true across a thaw. The guest is
+#         protected because clocksource=kvm-clock keeps kvm-clock
+#         selected, so the guest does not read the TSC for timekeeping.
 #
 #     One line appears at boot with every value above: "Unstable clock
 #     detected, switching default tracing clock". It comes from
@@ -330,7 +332,7 @@ distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds 
 # and CELLA_TEST_TAP, with the same meaning as in the smoke tests.
 CELLA_FROZEN_SECS ?= 6
 CELLA_POST_THAW_SECS ?= 30
-CELLA_TIME_ARGS ?= tsc=unstable clocksource=kvm-clock
+CELLA_TIME_ARGS ?= tsc=reliable clocksource=kvm-clock
 CELLA_EXTRA_CMDLINE ?=
 CELLA_OBSERVE_SECS ?= 60
 export CELLA_FROZEN_SECS CELLA_POST_THAW_SECS CELLA_TIME_ARGS CELLA_EXTRA_CMDLINE
