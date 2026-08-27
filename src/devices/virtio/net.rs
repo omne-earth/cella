@@ -2,10 +2,11 @@
 //!
 //! We open the TAP with `IFF_VNET_HDR`, which means every frame the
 //! kernel hands us (and every frame we hand it) is already prefixed with
-//! a `virtio_net_hdr` -- the *same* 10-byte struct the virtio-net queues
-//! carry as the first descriptor. That means TX and RX both become "copy
-//! bytes between a descriptor chain and the TAP fd" with no header
-//! translation at all.
+//! a `virtio_net_hdr` -- the *same* struct the virtio-net queues carry
+//! at the start of each chain (12 bytes under VIRTIO_F_VERSION_1; the
+//! TAP is told so via TUNSETVNETHDRSZ, see tap.rs). That means TX and
+//! RX both become "copy bytes between a descriptor chain and the TAP
+//! fd" with no header translation at all.
 
 use virtio_queue::{Queue, QueueOwnedT, QueueT};
 use vm_memory::{Bytes, GuestMemoryMmap};

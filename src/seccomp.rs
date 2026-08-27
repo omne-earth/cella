@@ -32,6 +32,7 @@ const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
 #[rustfmt::skip]
 const ALLOWED: &[(u32, &str)] = &[
     (0,   "read: serial input path, tap RX"),
+    (7,   "poll: tap RX readiness check after each VM exit (poll_net_rx)"),
     (1,   "write: serial output, tap TX"),
     (3,   "close: dropping fds (block/tap on shutdown)"),
     (5,   "fstat: File::metadata (ram/state file sizing)"),

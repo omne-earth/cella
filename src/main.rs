@@ -37,6 +37,11 @@ extern "C" fn on_sigusr1(_: libc::c_int) {
     FREEZE_REQUESTED.store(true, Ordering::SeqCst);
 }
 
+// SIGIO from the TAP fd (see tap.rs). The handler's only job is to exist
+// without SA_RESTART so KVM_RUN returns EINTR; the run loop drains RX on
+// every pass, so there is no flag to set here.
+extern "C" fn on_sigio(_: libc::c_int) {}
+
 struct Args {
     state_dir: PathBuf,
     disk: PathBuf,
@@ -180,6 +185,10 @@ fn main() {
 
     let block = Block::new(&args.disk, args.disk_ro)
         .unwrap_or_else(|e| fatal(&format!("open disk {:?}: {e}", args.disk)));
+    // Must precede Tap::open (inside Net::new): the TAP fd is O_ASYNC,
+    // and SIGIO's default action is to terminate the process. A frame
+    // can arrive the instant the fd exists.
+    install_sigio_handler();
     let net = Net::new(&args.tap, args.mac)
         .unwrap_or_else(|e| fatal(&format!("open tap {:?}: {e}", args.tap)));
     let net_fd = net.tap_fd();
@@ -277,15 +286,7 @@ fn run_loop(
                     mem,
                 };
                 match vcpu::dispatch(exit, &mut devices) {
-                    vcpu::RunResult::Continue => {}
-                    vcpu::RunResult::Halted => {
-                        // Idle: give the net RX path a chance to run --
-                        // see devices/virtio/mmio.rs::poll_queue and
-                        // net.rs for why this is safe to call
-                        // unconditionally (a no-op if nothing is pending
-                        // or no RX buffers are posted).
-                        poll_net_rx(mmio_devices, net_transport_idx, net_fd, mem);
-                    }
+                    vcpu::RunResult::Continue | vcpu::RunResult::Halted => {}
                     vcpu::RunResult::Shutdown => {
                         eprintln!("cella: guest requested shutdown");
                         std::process::exit(0);
@@ -293,12 +294,20 @@ fn run_loop(
                 }
             }
             Err(e) if e.errno() == libc::EINTR => {
-                // Either FREEZE_REQUESTED just got set (checked at the
-                // top of the next iteration) or a spurious signal;
-                // either way, loop back around.
+                // FREEZE_REQUESTED just got set (checked at the top of
+                // the next iteration), or the TAP raised SIGIO because a
+                // frame arrived (drained below), or a spurious signal.
             }
             Err(e) => fatal(&format!("KVM_RUN: {e}")),
         }
+
+        // Drain host->guest frames on every pass. With the in-kernel
+        // irqchip an idle vCPU blocks *inside* KVM_RUN (HLT never
+        // reaches userspace), so the TAP fd's SIGIO (see tap.rs) is
+        // what forces the EINTR that lands us here; safe to call
+        // unconditionally -- a no-op if nothing is pending or no RX
+        // buffers are posted (see mmio.rs::poll_queue and net.rs).
+        poll_net_rx(mmio_devices, net_transport_idx, net_fd, mem);
     }
 }
 
@@ -357,6 +366,18 @@ fn install_sigusr1_handler() {
         // through it.
         sa.sa_flags = 0;
         libc::sigaction(libc::SIGUSR1, &sa, std::ptr::null_mut());
+    }
+}
+
+fn install_sigio_handler() {
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = on_sigio as *const () as usize;
+        libc::sigemptyset(&mut sa.sa_mask);
+        // No SA_RESTART, same as SIGUSR1: the whole point is the EINTR
+        // that lets the run loop drain TAP RX while the guest is idle.
+        sa.sa_flags = 0;
+        libc::sigaction(libc::SIGIO, &sa, std::ptr::null_mut());
     }
 }
 
