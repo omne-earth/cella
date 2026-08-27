@@ -146,6 +146,16 @@ make x86_64_defconfig >/dev/null
 scripts/kconfig/merge_config.sh -m .config "$HERE/scripts/build/kernel-fragment.config" >/dev/null
 make olddefconfig >/dev/null
 
+# Verify the resolved config before spending four minutes compiling it.
+# kconfig overrules a fragment silently, so "the fragment says X" and
+# "the kernel we are about to build does X" are different claims -- and
+# the failure mode that matters (cutting CONFIG_TTY, hence the serial
+# console, which is the only channel out of the guest) produces a kernel
+# that boots and says nothing at all. Cheap here, expensive to diagnose
+# later. Runs in-place: we are already inside the toolbox, so the
+# script's own re-exec guard is a no-op.
+"$HERE/scripts/build/kernel-config-check.sh"
+
 echo "cella: building bzImage (-j$(nproc))"
 make -j"$(nproc)" bzImage
 
