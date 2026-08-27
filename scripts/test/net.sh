@@ -39,7 +39,8 @@ TMP="$(mktemp -d)"
 STATE_DIR="$TMP/state"
 mkdir -p "$STATE_DIR"
 cp "$DISK" "$TMP/disk.img"
-trap 'kill %1 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
+PID=""
+trap 'kill "$PID" 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
 
 "$BIN" \
     --state-dir "$STATE_DIR" \

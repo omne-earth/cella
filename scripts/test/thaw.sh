@@ -37,7 +37,12 @@ STATE_DIR="$TMP/state"
 DISK_COPY="$TMP/disk.img"
 mkdir -p "$STATE_DIR"
 cp "$DISK" "$DISK_COPY"
-trap 'kill %1 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
+# Two processes get backgrounded over this script's life (boot, then
+# thaw) -- track both explicitly rather than relying on `kill %1`,
+# which can point at the wrong job once the first one's slot is reused.
+PID=""
+PID2=""
+trap 'kill "$PID" ${PID2:+"$PID2"} 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
 
 RUN_ARGS=(
     --state-dir "$STATE_DIR"

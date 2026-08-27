@@ -39,7 +39,8 @@ fi
 TMP="$(mktemp -d)"
 STATE_DIR="$TMP/state"
 LOG="$TMP/serial.log"
-trap 'kill %1 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
+PID=""
+trap 'kill "$PID" 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
 mkdir -p "$STATE_DIR"
 cp "$DISK" "$TMP/disk.img" # don't mutate the shared test asset
 

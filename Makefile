@@ -12,7 +12,7 @@ CELLA_TAP_CIDR ?= 192.168.200.1/24
 .PHONY: help build debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist setup-tap \
-        smoke smoke-boot smoke-thaw smoke-net test-jail test-seccomp \
+        smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
         clean distclean lines
 
 help: ## Show this help
@@ -25,7 +25,7 @@ help: ## Show this help
 	@grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
 	@echo ""
 	@echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	@grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
+	@grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
 	@echo ""
 	@echo "Setup:"
 	@grep -hE '^(init|dist|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
@@ -105,6 +105,9 @@ smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/tes
 smoke: smoke-boot smoke-thaw smoke-net ## All three smoke-* targets (skips gracefully without KVM)
 	@echo ""
 	@echo "=== make smoke: done (see above for any SKIPs) ==="
+
+smoke-clean: ## Kill any stray cella process left running by an interrupted smoke test
+	@pkill -f 'target/(release|debug)/cella' && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
 
 # --- Setup --------------------------------------------------------------
 
