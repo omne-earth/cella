@@ -56,6 +56,7 @@ mkdir -p "$STATE_DIR"
 cp "$DISK" "$TMP/disk.img" # don't mutate the shared test asset
 
 echo "cella: booting (log: $LOG, timeout ${TIMEOUT_SECS}s)"
+boot_start=$(date +%s.%N)
 "$BIN" \
     --state-dir "$STATE_DIR" \
     --kernel "$KERNEL" \
@@ -70,9 +71,11 @@ deadline=$((SECONDS + TIMEOUT_SECS))
 kernel_seen=0
 init_seen=0
 exited_early=0
+boot_elapsed=""
 while [ $SECONDS -lt $deadline ]; do
     if grep -q "cella-rootfs: init running" "$LOG" 2>/dev/null; then
         init_seen=1
+        boot_elapsed=$(awk -v s="$boot_start" -v e="$(date +%s.%N)" 'BEGIN { printf "%.2f", e - s }')
         break
     fi
     if ! kill -0 "$PID" 2>/dev/null; then
@@ -82,7 +85,7 @@ while [ $SECONDS -lt $deadline ]; do
     if grep -q "Linux version" "$LOG" 2>/dev/null; then
         kernel_seen=1
     fi
-    sleep 0.5
+    sleep 0.1
 done
 
 kill "$PID" 2>/dev/null
@@ -95,7 +98,7 @@ tail -20 "$LOG" 2>/dev/null || true
 echo "---"
 
 if [ "$init_seen" -eq 1 ]; then
-    echo "PASS: kernel booted, mounted root, and reached a running init (full boot confirmed)"
+    echo "PASS: kernel booted, mounted root, and reached a running init in ${boot_elapsed}s (full boot confirmed)"
     exit 0
 elif [ "$exited_early" -eq 1 ]; then
     echo "FAIL: process exited before reaching init (see stderr/serial log above)"
