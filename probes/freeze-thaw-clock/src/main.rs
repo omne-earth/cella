@@ -25,6 +25,22 @@
 //!   FROZEN   heartbeats resume at ~the pre-freeze value: time is
 //!            cryogenic, as designed.
 //!
+//! Parameters. The Makefile sets each one to the default of cella, and
+//! the same defaults are in this file, thus a direct run of the binary
+//! behaves in the same way.
+//!
+//!   CELLA_FROZEN_SECS      The length of the freeze, in real seconds.
+//!                          Default 6, which is several heartbeat
+//!                          periods. Use 0 to thaw at once.
+//!   CELLA_POST_THAW_SECS   The length of the measurement of the clock
+//!                          rate after the thaw. Default 30, which gives
+//!                          a resolution of approximately 350 ppm. Use 0
+//!                          to omit the measurement.
+//!   CELLA_EXTRA_CMDLINE    Text to append to the kernel command line.
+//!                          Empty by default.
+//!   CELLA_BIN, CELLA_TEST_KERNEL, CELLA_TEST_DISK, CELLA_TEST_TAP
+//!                          The same meaning as in the smoke tests.
+//!
 //! Run: cargo run --manifest-path probes/freeze-thaw-clock/Cargo.toml
 //! (needs dist/bzImage + dist/rootfs.ext4 -- `make dist` -- and a
 //! configured tap0 -- `make setup-tap`)
@@ -184,9 +200,22 @@ fn main() {
     // test a change to the time configuration of the guest without an
     // edit to this file.
     let extra = std::env::var("CELLA_EXTRA_CMDLINE").unwrap_or_default();
+    // CELLA_TIME_ARGS holds the time arguments of cella. Set it to an
+    // empty string to run without them, and to see the behaviour that
+    // they correct.
+    let time_args = std::env::var("CELLA_TIME_ARGS")
+        .unwrap_or_else(|_| "tsc=unstable clocksource=kvm-clock".to_string());
     let cmdline = format!(
-        "console=ttyS0 reboot=k panic=1 pci=off tsc=unstable clocksource=kvm-clock root=/dev/vda rw \
+        "console=ttyS0 reboot=k panic=1 pci=off {time_args} root=/dev/vda rw \
          virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 {extra}"
+    );
+    println!(
+        "time arguments: {}",
+        if time_args.trim().is_empty() {
+            "(none)"
+        } else {
+            time_args.trim()
+        }
     );
     let cmdline = cmdline.trim().to_string();
     if !extra.is_empty() {

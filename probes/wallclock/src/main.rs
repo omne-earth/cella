@@ -26,6 +26,19 @@
 //! are doing anyway, and a kernel-config trim that broke entropy
 //! seeding would otherwise stay invisible until something blocked.
 //!
+//! Parameters. The Makefile sets each one to the default of cella, and
+//! the same defaults are in this file, thus a direct run of the binary
+//! behaves in the same way.
+//!
+//!   CELLA_OBSERVE_SECS     The length of the control test, in real
+//!                          seconds. The probe keeps the guest running
+//!                          with no freeze and reports the clock errors
+//!                          of the kernel. Default 60, which is
+//!                          approximately 120 rounds of the clocksource
+//!                          watchdog. Use 0 to omit the control test.
+//!   CELLA_BIN, CELLA_TEST_KERNEL, CELLA_TEST_DISK, CELLA_TEST_TAP
+//!                          The same meaning as in the smoke tests.
+//!
 //! Run: cargo run --manifest-path probes/wallclock/Cargo.toml
 //! (needs dist/bzImage + dist/rootfs.ext4 -- `make dist` -- and a
 //! configured tap0 -- `make setup-tap`)
@@ -194,6 +207,24 @@ fn main() {
     std::fs::copy(&disk, &disk_copy).expect("copy disk");
     let log_path = tmp.join("boot.log");
 
+    // CELLA_TIME_ARGS holds the time arguments of cella. Set it to a
+    // different value to compare the boot messages that each choice
+    // produces.
+    let time_args = std::env::var("CELLA_TIME_ARGS")
+        .unwrap_or_else(|_| "tsc=unstable clocksource=kvm-clock".to_string());
+    let cmdline = format!(
+        "console=ttyS0 reboot=k panic=1 pci=off {time_args} root=/dev/vda rw \
+         virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
+    );
+    println!(
+        "time arguments: {}",
+        if time_args.trim().is_empty() {
+            "(none)"
+        } else {
+            time_args.trim()
+        }
+    );
+
     let host_before = SystemTime::now();
     let mut child = Command::new(&bin)
         .arg("--state-dir")
@@ -207,7 +238,7 @@ fn main() {
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")
-        .arg("console=ttyS0 reboot=k panic=1 pci=off tsc=unstable clocksource=kvm-clock root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6")
+        .arg(&cmdline)
         .stdout(Stdio::from(File::create(&log_path).expect("create log file")))
         .stderr(Stdio::from(
             File::create(tmp.join("boot.err")).expect("create err file"),
@@ -227,7 +258,7 @@ fn main() {
     let observe: u64 = std::env::var("CELLA_OBSERVE_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or(60);
     if observe > 0 && result.is_some() {
         println!("observing the guest for {observe}s with no freeze...");
         std::thread::sleep(Duration::from_secs(observe));

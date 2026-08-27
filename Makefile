@@ -251,6 +251,91 @@ distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds 
 # Add a new one under probes/<name>/ (its own Cargo.toml + src/main.rs)
 # and a target here when the next one of these comes up.
 
+# Parameters for the probe targets. Each value below is the default that
+# cella uses. Every one is `?=`, therefore an environment variable or an
+# assignment on the command line takes precedence:
+#
+#   make probe-freeze-thaw-clock CELLA_FROZEN_SECS=45
+#   CELLA_EXTRA_CMDLINE="tsc=nowatchdog" make probe-freeze-thaw-clock
+#
+# CELLA_FROZEN_SECS
+#     probe-freeze-thaw-clock. The length of the freeze, in real seconds.
+#     The default of 6 is several times the heartbeat period of 1 s, thus
+#     a guest that let real time enter shows an obvious jump. Measurement
+#     shows that the error at the thaw does not change with this value, so
+#     a longer freeze gives no more information. Use 0 to thaw at once.
+#
+# CELLA_POST_THAW_SECS
+#     probe-freeze-thaw-clock. The length of the measurement of the clock
+#     rate after the thaw, in real seconds. The probe fits the monotonic
+#     clock of the guest against the clock of the host over this period.
+#     /proc/uptime has a resolution of 10 ms, therefore 30 s gives a
+#     resolution of approximately 350 ppm. A shorter period gives a worse
+#     resolution. Use 0 to omit this measurement.
+#
+# CELLA_TIME_ARGS
+#     probe-freeze-thaw-clock and probe-wallclock. The time arguments on
+#     the kernel command line. The default is the default of cella. Set it
+#     to a different value to compare the options, or to an empty string
+#     to run without any of them.
+#
+#     cella rewinds the TSC of the guest at every thaw. The guest must
+#     therefore not use the TSC as a monotonic reference, and it must not
+#     compare the TSC against kvm-clock. These values were measured, each
+#     with a freeze of 6 real seconds:
+#
+#     ""  (no time arguments)
+#         The clocksource watchdog reports a skew of 5 ms to 27 ms after
+#         every thaw and marks the TSC unstable. Time stays correct for
+#         the guest, but the kernel reports a fault.
+#
+#     "tsc=unstable clocksource=kvm-clock"   (the default of cella)
+#         No fault after a thaw. The guest never uses the TSC for
+#         timekeeping. The kernel prints one line at boot: "tsc: Marking
+#         TSC unstable due to boot parameter". This statement is true for
+#         cella, because cella rewinds the TSC.
+#
+#     "tsc=nowatchdog clocksource=kvm-clock"
+#         No fault after a thaw, and no line at boot. The TSC stays a
+#         candidate clocksource but the kernel does not verify it.
+#         clocksource=kvm-clock keeps kvm-clock selected.
+#
+#     "tsc=reliable clocksource=kvm-clock"
+#         No fault after a thaw, and no line at boot. Do not use this
+#         value. It tells the guest that the TSC is a reliable timeline,
+#         and that statement is false: cella rewinds the TSC at a thaw.
+#
+#     One line appears at boot with every value above: "Unstable clock
+#     detected, switching default tracing clock". It comes from
+#     PVCLOCK_TSC_STABLE_BIT, which is absent in the pvclock page. The
+#     host KVM owns that bit and sets it only when the TSC of the host is
+#     stable. This host is a virtual machine and reports "TSCs
+#     unsynchronized", therefore no guest argument can change that line.
+#
+# CELLA_EXTRA_CMDLINE
+#     probe-freeze-thaw-clock. Text to append to the kernel command line,
+#     after the time arguments. The default is empty. Use it for
+#     arguments that are not about time.
+#
+# CELLA_OBSERVE_SECS
+#     probe-wallclock. The length of the control test, in real seconds.
+#     The probe keeps the guest running for this period with no freeze,
+#     and reports the clock errors of the kernel. This is the control for
+#     probe-freeze-thaw-clock: it shows whether an error comes from the
+#     freeze or from the host. The clocksource watchdog runs twice per
+#     second, thus the default of 60 gives approximately 120 rounds. Use
+#     0 to omit the control test.
+#
+# All probes also accept CELLA_BIN, CELLA_TEST_KERNEL, CELLA_TEST_DISK,
+# and CELLA_TEST_TAP, with the same meaning as in the smoke tests.
+CELLA_FROZEN_SECS ?= 6
+CELLA_POST_THAW_SECS ?= 30
+CELLA_TIME_ARGS ?= tsc=unstable clocksource=kvm-clock
+CELLA_EXTRA_CMDLINE ?=
+CELLA_OBSERVE_SECS ?= 60
+export CELLA_FROZEN_SECS CELLA_POST_THAW_SECS CELLA_TIME_ARGS CELLA_EXTRA_CMDLINE
+export CELLA_OBSERVE_SECS
+
 probe-sregs: ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same* ioctl call? (no /dev/kvm needed beyond opening it; boots nothing, just exercises raw ioctls -- see probes/sregs/src/main.rs)
 	$(LOG)
 	$(CARGO) run --manifest-path probes/sregs/Cargo.toml
