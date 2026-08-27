@@ -1,4 +1,27 @@
-SHELL := /usr/bin/env bash
+# Named directly rather than via `/usr/bin/env bash`: under .ONESHELL make
+# decides whether to strip per-line '@'/'-' prefixes by looking at SHELL's
+# basename, and "env" is not on its list of known Bourne-compatible shells.
+SHELL := /bin/bash
+# One shell per recipe (not per line), and a strict one: -e so a failing
+# step stops the recipe instead of the next line papering over it, -u so
+# a typo'd variable is an error rather than an empty string, -o pipefail
+# so a failure mid-pipeline isn't hidden by a successful `tee`/`sort` at
+# the end. .ONESHELL is what makes $(LOG), below, possible at all.
+.ONESHELL:
+.SHELLFLAGS := -ueo pipefail -c
+
+# Every recipe's first line is `$(LOG)`. It tees the whole recipe's
+# output -- stdout and stderr, including anything the scripts and probes
+# print -- into .logs/<target>-<timestamp>.log while still showing it on
+# the terminal, so a failed run always leaves evidence behind without
+# anyone having to remember to redirect. Only works under .ONESHELL: the
+# `exec` redirect has to apply to the rest of the recipe, which requires
+# the whole recipe to be a single shell. Leading `@` silences make's own
+# echo of the recipe text (the header line below says what ran instead).
+# Target names with a `/` in them (dist/bzImage) become `dist_bzImage`
+# so the log path stays one level deep.
+LOGDIR := .logs
+LOG = @mkdir -p $(LOGDIR); exec > >(tee -a "$(LOGDIR)/$(subst /,_,$@)-$$(date +%Y%m%d-%H%M%S).log") 2>&1; echo "=== make $@ -- $$(date -Is) ==="
 
 CARGO ?= cargo
 SCRIPTS := scripts
@@ -13,44 +36,55 @@ CELLA_TAP_CIDR ?= 192.168.200.1/24
         unit-test integration-test selftest test test-all \
         init dist setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
-        clean distclean lines
+        clean distclean lines \
+        probe-sregs probe-wallclock probe-freeze-thaw-clock
 
 help: ## Show this help
-	@echo "cella -- build, lint, and test targets"
-	@echo ""
-	@echo "Build:"
-	@grep -hE '^(build|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
-	@echo ""
-	@echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
-	@grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
-	@echo ""
-	@echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	@grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
-	@echo ""
-	@echo "Setup:"
-	@grep -hE '^(init|dist|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
-	@echo ""
-	@echo "Everything:"
-	@grep -hE '^(test-all|clean|distclean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t'
+	$(LOG)
+	echo "cella -- build, lint, and test targets"
+	echo ""
+	echo "Build:"
+	grep -hE '^(build|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	echo ""
+	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
+	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	echo ""
+	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
+	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	echo ""
+	echo "Setup:"
+	grep -hE '^(init|dist|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	echo ""
+	echo "Everything:"
+	grep -hE '^(test-all|clean|distclean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	echo ""
+	echo "Probes: one-off diagnostics, run by hand, not part of test/smoke:"
+	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 
 # --- Build ------------------------------------------------------------
 
 build: ## Release build (target/release/cella)
+	$(LOG)
 	$(CARGO) build --release
 
 debug: ## Debug build (target/debug/cella), faster to compile
+	$(LOG)
 	$(CARGO) build
 
 check: ## cargo check, no codegen
+	$(LOG)
 	$(CARGO) check --all-targets
 
 lint: fmt-check ## cargo clippy (all targets) + fmt-check
+	$(LOG)
 	$(CARGO) clippy --all-targets
 
 fmt: ## Apply cargo fmt
+	$(LOG)
 	$(CARGO) fmt
 
 fmt-check: ## Verify formatting without changing files (CI-friendly)
+	$(LOG)
 	$(CARGO) fmt -- --check
 
 # --- Tests that need no /dev/kvm ---------------------------------------
@@ -60,26 +94,39 @@ fmt-check: ## Verify formatting without changing files (CI-friendly)
 # iteration; `make test` runs everything in this section.
 
 unit-test: ## cargo test --lib (inline #[cfg(test)] modules)
+	$(LOG)
 	$(CARGO) test --lib
 
 integration-test: ## cargo test --tests (tests/*.rs, real virtio-mmio/blk logic, no KVM)
+	$(LOG)
 	$(CARGO) test --tests
 
 selftest: build ## Sanity-run the seccomp self-test binary directly (see also: make test-seccomp)
-	@./target/release/cella --selftest-seccomp; \
-	status=$$?; \
-	if [ $$status -eq 159 ]; then echo "OK: killed by SIGSYS as expected (exit $$status)"; \
-	else echo "UNEXPECTED exit $$status"; exit 1; fi
+	$(LOG)
+	# `|| status=$$?` rather than a bare call: the whole point of this
+	# target is a binary that exits 159 (SIGSYS), which `set -e` would
+	# otherwise treat as a recipe failure before we can check for it.
+	status=0
+	./target/release/cella --selftest-seccomp || status=$$?
+	if [ $$status -eq 159 ]; then
+		echo "OK: killed by SIGSYS as expected (exit $$status)"
+	else
+		echo "UNEXPECTED exit $$status"
+		exit 1
+	fi
 
 test-jail: build ## Rootless bwrap jail actually confines the process (scripts/test/jail.sh)
-	@$(SCRIPTS)/test/jail.sh
+	$(LOG)
+	$(SCRIPTS)/test/jail.sh
 
 test-seccomp: build ## The real BPF filter kills a disallowed syscall (scripts/test/seccomp.sh)
-	@$(SCRIPTS)/test/seccomp.sh
+	$(LOG)
+	$(SCRIPTS)/test/seccomp.sh
 
 test: check lint unit-test integration-test test-jail test-seccomp ## Everything above: build hygiene + all no-KVM tests
-	@echo ""
-	@echo "=== make test: all no-KVM checks passed ==="
+	$(LOG)
+	echo ""
+	echo "=== make test: all no-KVM checks passed ==="
 
 # --- Smoke tests: real KVM, a real guest, real workflows ---------------
 #
@@ -94,52 +141,91 @@ test: check lint unit-test integration-test test-jail test-seccomp ## Everything
 # `make smoke` doesn't hard-fail without KVM.
 
 smoke-boot: build dist ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
-	@$(SCRIPTS)/test/boot.sh
+	$(LOG)
+	$(SCRIPTS)/test/boot.sh
 
 smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/test/thaw.sh)
-	@$(SCRIPTS)/test/thaw.sh
+	$(LOG)
+	$(SCRIPTS)/test/thaw.sh
 
 smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
-	@$(SCRIPTS)/test/net.sh
+	$(LOG)
+	$(SCRIPTS)/test/net.sh
 
 smoke: smoke-boot smoke-thaw smoke-net ## All three smoke-* targets (skips gracefully without KVM)
-	@echo ""
-	@echo "=== make smoke: done (see above for any SKIPs) ==="
+	$(LOG)
+	echo ""
+	echo "=== make smoke: done (see above for any SKIPs) ==="
 
 smoke-clean: ## Kill any stray cella process left running by an interrupted smoke test
-	@pkill -f 'target/(release|debug)/cella' && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
+	$(LOG)
+	pkill -f 'target/(release|debug)/cella' && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
 
 # --- Setup --------------------------------------------------------------
 
 .toolbox: ## Sentinel: creates + provisions the cella-build toolbox (kernel build toolchain lives there, not on the host)
+	$(LOG)
 	$(SCRIPTS)/build/toolbox.sh
-	@touch .toolbox
+	touch .toolbox
 
 init: ## One-time host setup (Fedora): installs runtime deps, provisions the build toolbox, creates tap0, builds dist, checks /dev/kvm (needs sudo)
-	@$(SCRIPTS)/setup/bootstrap.sh
-	@$(MAKE) .toolbox
-	@$(MAKE) setup-tap
-	@$(MAKE) dist
+	$(LOG)
+	$(SCRIPTS)/setup/bootstrap.sh
+	$(MAKE) .toolbox
+	$(MAKE) setup-tap
+	$(MAKE) dist
 
 $(DIST)/bzImage $(DIST)/rootfs.ext4: | .toolbox
-	@$(SCRIPTS)/build/assets.sh
+	$(LOG)
+	$(SCRIPTS)/build/assets.sh
 
 dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
 
 setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once (name/CIDR from .env, see .env.example)
+	$(LOG)
 	sudo $(SCRIPTS)/setup/tap.sh $(CELLA_TAP) $(CELLA_TAP_CIDR)
 
 # --- Everything -----------------------------------------------------
 
 test-all: test dist smoke ## make test, plus every KVM smoke test (skips gracefully without KVM)
-	@echo ""
-	@echo "=== make test-all: done (see above for any SKIPs) ==="
+	$(LOG)
+	echo ""
+	echo "=== make test-all: done (see above for any SKIPs) ==="
 
 lines: ## Report source-only and source+test line counts (see also README's line-count section)
-	@python3 $(SCRIPTS)/utils/count_lines.py
+	$(LOG)
+	python3 $(SCRIPTS)/utils/count_lines.py
 
 clean: ## cargo clean
+	$(LOG)
 	$(CARGO) clean
 
 distclean: clean ## clean + remove built dist/ assets
+	$(LOG)
 	rm -rf $(DIST)
+
+# --- Probes ---------------------------------------------------------
+#
+# Standalone diagnostics for questions too fiddly (or too dependent on
+# real hardware/kernel behavior) to safely resolve from documentation
+# or code-reading alone -- each is a real, self-contained program
+# (probes/<name>/) that exercises real KVM ioctls or a real cella boot
+# and reports what actually happens, not what should happen. NOT part
+# of `make test`/`make smoke`: these are one-off investigation tools
+# for chasing a specific bug, not routine regression checks, and some
+# are expected to legitimately FAIL until the bug they're chasing is
+# fixed -- that's the point, a concrete measurement instead of a guess.
+# Add a new one under probes/<name>/ (its own Cargo.toml + src/main.rs)
+# and a target here when the next one of these comes up.
+
+probe-sregs: ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same* ioctl call? (no /dev/kvm needed beyond opening it; boots nothing, just exercises raw ioctls -- see probes/sregs/src/main.rs)
+	$(LOG)
+	$(CARGO) run --manifest-path probes/sregs/Cargo.toml
+
+probe-wallclock: build dist ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see probes/wallclock/src/main.rs)
+	$(LOG)
+	$(CARGO) run --manifest-path probes/wallclock/Cargo.toml
+
+probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see probes/freeze-thaw-clock/src/main.rs)
+	$(LOG)
+	$(CARGO) run --manifest-path probes/freeze-thaw-clock/Cargo.toml
