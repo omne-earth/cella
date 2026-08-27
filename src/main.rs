@@ -223,9 +223,15 @@ fn main() {
         });
         let boot_info = boot::load_kernel(&mem, &kernel, &args.cmdline, mem_size_bytes)
             .unwrap_or_else(|e| fatal(&format!("loading kernel: {e:?}")));
+        boot::build_page_tables(&mem, mem_size_bytes)
+            .unwrap_or_else(|e| fatal(&format!("page tables: {e:?}")));
+        // enable_long_mode must run before setup_gdt -- see its doc
+        // comment for why KVM rejects the other order.
+        boot::enable_long_mode(&vcpu_fd)
+            .unwrap_or_else(|e| fatal(&format!("enabling long mode: {e:?}")));
         boot::setup_gdt(&mem, &vcpu_fd).unwrap_or_else(|e| fatal(&format!("gdt: {e:?}")));
-        boot::setup_long_mode(&mem, &vcpu_fd, &boot_info, mem_size_bytes)
-            .unwrap_or_else(|e| fatal(&format!("long mode setup: {e:?}")));
+        boot::set_entry_point(&vcpu_fd, &boot_info)
+            .unwrap_or_else(|e| fatal(&format!("entry point: {e:?}")));
         eprintln!("cella: booting {:?}", kernel);
     }
 

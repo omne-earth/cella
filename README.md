@@ -123,8 +123,8 @@ a Linux host. No `/dev/kvm` is required to build, only to run.
 
 ## Getting a kernel and a disk image
 
-`make build-assets` builds both a minimal rootfs and a minimal bzImage
-kernel from real upstream source, into `assets/` -- which is what
+`make dist` builds both a minimal rootfs and a minimal bzImage
+kernel from real upstream source, into `dist/` -- which is what
 `make boot` / `make thaw` / `make net` use. There's no shortcut for
 either: no microVM project publishes a prebuilt bzImage with cella's
 exact driver set (virtio-mmio/blk/net + 8250 serial built in, nothing
@@ -161,12 +161,12 @@ mkfs.ext4 rootfs.img
 
 ```sh
 make init                                    # once per host: deps, toolbox, tap0
-make build-assets                                 # or use your own kernel/disk
+make dist                                 # or use your own kernel/disk
 
 scripts/jail.sh \
   --state-dir ./vm1 \
-  --kernel ./assets/bzImage \
-  --disk ./assets/rootfs.ext4 \
+  --kernel ./dist/bzImage \
+  --disk ./dist/rootfs.ext4 \
   --tap tap0 \
   --mem-mb 256 \
   --cmdline "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=192.168.200.2::192.168.200.1:255.255.255.0::eth0:off"

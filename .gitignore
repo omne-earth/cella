@@ -1,5 +1,6 @@
 /target
-assets/
+probes/*/target
+dist/
 .env
 .toolbox
 .claude

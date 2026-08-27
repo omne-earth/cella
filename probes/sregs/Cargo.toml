@@ -1,0 +1,9 @@
+[package]
+name = "sregs-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+kvm-ioctls = "0.19"
+kvm-bindings = { version = "0.10", features = ["fam-wrappers"] }

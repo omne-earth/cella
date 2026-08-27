@@ -15,7 +15,7 @@
 # itself there. The host itself never needs a build toolchain, only
 # `toolbox`.
 #
-# Output: assets/bzImage, assets/rootfs.ext4.
+# Output: dist/bzImage, dist/rootfs.ext4.
 #
 # Caching: source + build trees live in target/rootfs-build/ and
 # target/kernel-build/ (gitignored via /target); delete either to
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="$HERE/assets"
+OUT="$HERE/dist"
 mkdir -p "$OUT"
 
 if [ -f "$OUT/bzImage" ] && [ -f "$OUT/rootfs.ext4" ]; then

@@ -36,7 +36,7 @@ To also exercise the boot path, on a real Linux machine with KVM:
 
 ```sh
 make init                                    # once per host: deps, toolbox, tap0
-make build-assets                                 # rootfs fetch + kernel build, one-time
+make dist                                         # rootfs fetch + kernel build, one-time
 make boot                                          # boots a real kernel, watches serial
 make thaw                                          # boot -> freeze -> thaw -> verify
 make net                                           # best-effort ping over the TAP

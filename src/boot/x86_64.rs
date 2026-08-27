@@ -147,8 +147,28 @@ fn add_e820_entry(params: &mut boot_params, addr: u64, size: u64, typ: u32) {
     params.e820_entries += 1;
 }
 
+/// Enable protected mode, paging, and IA-32e (long) mode together, in a
+/// single KVM_SET_SREGS call. Must run before `setup_gdt`: KVM validates
+/// CR0.PE/CR0.PG/EFER.LMA consistency as one atomic transaction, so a
+/// segment that claims L=1 (64-bit code, see `setup_gdt`) is rejected
+/// with EINVAL unless CR0.PE/PG and EFER.LMA are *already* set by the
+/// time that segment is loaded -- confirmed against real KVM in
+/// probes/sregs (splitting this call itself across CR0.PE vs.
+/// CR0.PG/EFER also fails: PE has to land in the same call as PG/LMA,
+/// not deferred to setup_gdt's call the way it used to be).
+pub fn enable_long_mode(vcpu: &VcpuFd) -> Result<(), Error> {
+    let mut sregs: kvm_sregs = vcpu.get_sregs()?;
+    sregs.cr0 |= X86_CR0_PE | X86_CR0_ET | X86_CR0_WP | X86_CR0_PG;
+    sregs.cr3 = PML4_START;
+    sregs.cr4 |= X86_CR4_PAE;
+    sregs.efer |= EFER_LME | EFER_LMA;
+    vcpu.set_sregs(&sregs)?;
+    Ok(())
+}
+
 /// Build a minimal flat GDT (null, code64, data64) at BOOT_GDT_OFFSET and
-/// point the vCPU's segment registers at it.
+/// point the vCPU's segment registers at it. Must run after
+/// `enable_long_mode` (see its doc comment for why).
 pub fn setup_gdt(mem: &GuestMemoryMmap, vcpu: &VcpuFd) -> Result<(), Error> {
     // Raw 8-byte GDT descriptors. Index 1 = code64, index 2 = data.
     let gdt_table: [u64; 4] = [
@@ -176,9 +196,6 @@ pub fn setup_gdt(mem: &GuestMemoryMmap, vcpu: &VcpuFd) -> Result<(), Error> {
     sregs.fs = data_seg;
     sregs.gs = data_seg;
     sregs.ss = data_seg;
-
-    sregs.cr0 |= X86_CR0_PE | X86_CR0_ET;
-    sregs.cr0 |= X86_CR0_WP;
 
     vcpu.set_sregs(&sregs)?;
     Ok(())
@@ -253,23 +270,11 @@ pub fn build_page_tables(mem: &GuestMemoryMmap, mem_size: u64) -> Result<(), Err
     Ok(())
 }
 
-/// Load CR3/CR4/EFER for long mode and set RIP/RSP/RSI/RFLAGS for the
-/// 64-bit Linux boot entry. Calls `build_page_tables` first.
-pub fn setup_long_mode(
-    mem: &GuestMemoryMmap,
-    vcpu: &VcpuFd,
-    boot: &BootInfo,
-    mem_size: u64,
-) -> Result<(), Error> {
-    build_page_tables(mem, mem_size)?;
-
-    let mut sregs: kvm_sregs = vcpu.get_sregs()?;
-    sregs.cr3 = PML4_START;
-    sregs.cr4 |= X86_CR4_PAE;
-    sregs.cr0 |= X86_CR0_PG;
-    sregs.efer |= EFER_LME | EFER_LMA;
-    vcpu.set_sregs(&sregs)?;
-
+/// Set RIP/RSP/RSI/RFLAGS for the 64-bit Linux boot entry. Register-only
+/// (KVM_SET_REGS), so unlike `enable_long_mode`/`setup_gdt` it has no
+/// ordering constraint relative to them -- called last simply because
+/// it's the step that makes the vCPU ready to actually run.
+pub fn set_entry_point(vcpu: &VcpuFd, boot: &BootInfo) -> Result<(), Error> {
     let regs = kvm_regs {
         rflags: 0x2, // bit 1 is reserved-as-1
         rip: boot.entry_point.raw_value(),
@@ -279,7 +284,6 @@ pub fn setup_long_mode(
         ..Default::default()
     };
     vcpu.set_regs(&regs)?;
-
     Ok(())
 }
 

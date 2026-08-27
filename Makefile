@@ -2,6 +2,7 @@ SHELL := /usr/bin/env bash
 
 CARGO ?= cargo
 SCRIPTS := scripts
+DIST := dist
 
 # Local overrides, not committed -- copy .env.example to .env to change these.
 -include .env
@@ -10,7 +11,7 @@ CELLA_TAP_CIDR ?= 192.168.200.1/24
 
 .PHONY: help build debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
-        init build-assets setup-tap \
+        init dist setup-tap \
         boot thaw net jail seccomp \
         clean distclean lines
 
@@ -27,7 +28,7 @@ help: ## Show this help
 	@grep -hE '^(boot|thaw|net):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
 	@echo ""
 	@echo "Setup:"
-	@grep -hE '^(init|build-assets|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
+	@grep -hE '^(init|dist|setup-tap):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
 	@echo ""
 	@echo "Everything:"
 	@grep -hE '^(test-all|clean|distclean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort
@@ -86,16 +87,16 @@ test: check lint unit-test integration-test jail seccomp ## Everything above: bu
 # actually run a guest: boot, freeze/thaw, networking. Each is a thin
 # `make` wrapper around a script that does the real orchestration --
 # see scripts/boot.sh, scripts/thaw.sh, scripts/net.sh. All three SKIP
-# (exit 0) cleanly if /dev/kvm, assets, or the TAP device aren't present,
+# (exit 0) cleanly if /dev/kvm, dist, or the TAP device aren't present,
 # so `make test-all` doesn't hard-fail in an environment without KVM.
 
-boot: build ## Feature test: boot a real kernel under KVM, watch for a kernel banner (scripts/boot.sh)
+boot: build dist ## Feature test: boot a real kernel under KVM, watch for a kernel banner (scripts/boot.sh)
 	@$(SCRIPTS)/boot.sh
 
-thaw: build ## Feature test: boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/thaw.sh)
+thaw: build dist ## Feature test: boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check (scripts/thaw.sh)
 	@$(SCRIPTS)/thaw.sh
 
-net: build ## Feature test: guest answers ICMP over the TAP after boot (scripts/net.sh, best-effort)
+net: build dist ## Feature test: guest answers ICMP over the TAP after boot (scripts/net.sh, best-effort)
 	@$(SCRIPTS)/net.sh
 
 # --- Setup --------------------------------------------------------------
@@ -104,20 +105,23 @@ net: build ## Feature test: guest answers ICMP over the TAP after boot (scripts/
 	$(SCRIPTS)/toolbox-setup.sh
 	@touch .toolbox
 
-init: ## One-time host setup (Fedora): installs runtime deps, provisions the build toolbox, creates tap0, checks /dev/kvm (needs sudo)
+init: ## One-time host setup (Fedora): installs runtime deps, provisions the build toolbox, creates tap0, builds dist, checks /dev/kvm (needs sudo)
 	@$(SCRIPTS)/bootstrap.sh
 	@$(MAKE) .toolbox
 	@$(MAKE) setup-tap
+	@$(MAKE) dist
 
-build-assets: .toolbox ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox)
+$(DIST)/bzImage $(DIST)/rootfs.ext4: | .toolbox
 	@$(SCRIPTS)/build-assets.sh
+
+dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
 
 setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once (name/CIDR from .env, see .env.example)
 	sudo $(SCRIPTS)/make_tap.sh $(CELLA_TAP) $(CELLA_TAP_CIDR)
 
 # --- Everything -----------------------------------------------------
 
-test-all: test build-assets boot thaw net ## make test, plus every KVM-dependent feature test (skips gracefully without KVM)
+test-all: test dist boot thaw net ## make test, plus every KVM-dependent feature test (skips gracefully without KVM)
 	@echo ""
 	@echo "=== make test-all: done (see above for any SKIPs) ==="
 
@@ -127,5 +131,5 @@ lines: ## Report source-only and source+test line counts (see also README's line
 clean: ## cargo clean
 	$(CARGO) clean
 
-distclean: clean ## clean + remove downloaded test assets
-	rm -rf assets
+distclean: clean ## clean + remove built dist/ assets
+	rm -rf $(DIST)

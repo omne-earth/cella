@@ -11,8 +11,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/.."
 BIN="${CELLA_BIN:-$ROOT/target/release/cella}"
-KERNEL="${CELLA_TEST_KERNEL:-$ROOT/assets/bzImage}"
-DISK="${CELLA_TEST_DISK:-$ROOT/assets/rootfs.ext4}"
+KERNEL="${CELLA_TEST_KERNEL:-$ROOT/dist/bzImage}"
+DISK="${CELLA_TEST_DISK:-$ROOT/dist/rootfs.ext4}"
 TAP="${CELLA_TEST_TAP:-tap0}"
 HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
 GUEST_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
@@ -27,7 +27,7 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 if [ ! -f "$KERNEL" ] || [ ! -f "$DISK" ]; then
-    echo "SKIP: test assets not found -- run: make build-assets"
+    echo "SKIP: test assets not found -- run: make dist"
     exit 0
 fi
 if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
