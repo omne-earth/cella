@@ -48,7 +48,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
         unit-test integration-test selftest test test-all \
         init dist setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
-        clean distclean distclean-kernel lines \
+        clean distclean distclean-kernel distclean-rootfs lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock \
         kernel-config-check
 
@@ -69,7 +69,7 @@ help: ## Show this help
 	grep -hE '^(init|dist|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Everything:"
-	grep -hE '^(test-all|clean|distclean|distclean-kernel|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Probes: one-off diagnostics, run by hand, not part of test/smoke:"
 	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -220,6 +220,13 @@ clean: ## cargo clean
 distclean: clean ## clean + remove built dist/ assets
 	$(LOG)
 	rm -rf $(DIST)
+
+distclean-rootfs: ## Remove just dist/rootfs.ext4, so the next `make dist` rebuilds the rootfs (for a rootfs.sh change)
+	$(LOG)
+	# The busybox build in target/rootfs-build survives, so the rebuild
+	# only assembles the image again.
+	rm -f $(DIST)/rootfs.ext4
+	echo "cella: removed $(DIST)/rootfs.ext4 -- next 'make dist' rebuilds the rootfs"
 
 distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds the kernel (for a kernel-fragment.config change)
 	$(LOG)

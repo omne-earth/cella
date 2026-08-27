@@ -59,8 +59,11 @@ fn env_path(var: &str, default: PathBuf) -> PathBuf {
 
 /// Parse the epoch seconds out of a "cella-rootfs: wall-clock <N>" line.
 fn parse_heartbeat(line: &str) -> Option<i64> {
+    // The line is "cella-rootfs: wall-clock <epoch> uptime <seconds>".
+    // Read the first field only.
     line.strip_prefix("cella-rootfs: wall-clock ")?
-        .trim()
+        .split_whitespace()
+        .next()?
         .parse()
         .ok()
 }

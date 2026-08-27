@@ -18,6 +18,11 @@ echo "cella-rootfs: init running (pid $$)"
 # freeze/thaw, where /sbin/init itself never runs again (its whole
 # state, mid-loop, is what gets restored).
 while true; do
-    echo "cella-rootfs: wall-clock $(date +%s)"
+    # Two clocks, not one. `date` gives CLOCK_REALTIME at a resolution of
+    # 1 second. /proc/uptime gives the monotonic clock at a resolution of
+    # 10 ms. The freeze must not advance either one, and the second value
+    # is what shows this at a resolution better than the 1 second tick of
+    # this loop.
+    echo "cella-rootfs: wall-clock $(date +%s) uptime $(cut -d' ' -f1 /proc/uptime)"
     sleep 1
 done

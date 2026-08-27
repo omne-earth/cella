@@ -62,8 +62,11 @@ fn env_path(var: &str, default: PathBuf) -> PathBuf {
 }
 
 fn parse_heartbeat(line: &str) -> Option<i64> {
+    // The line is "cella-rootfs: wall-clock <epoch> uptime <seconds>".
+    // Read the first field only.
     line.strip_prefix("cella-rootfs: wall-clock ")?
-        .trim()
+        .split_whitespace()
+        .next()?
         .parse()
         .ok()
 }
@@ -79,6 +82,18 @@ fn read_file(path: &Path) -> String {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(_) => String::new(),
     }
+}
+
+/// Read the monotonic clock from a heartbeat line. The format is
+/// "cella-rootfs: wall-clock <epoch> uptime <seconds>". The resolution is
+/// 10 ms, which is better than the 1 second resolution of the epoch.
+fn parse_uptime(line: &str) -> Option<f64> {
+    let (_, rest) = line.split_once(" uptime ")?;
+    rest.trim().parse().ok()
+}
+
+fn read_uptimes(log_path: &Path) -> Vec<f64> {
+    read_file(log_path).lines().filter_map(parse_uptime).collect()
 }
 
 fn read_heartbeats(log_path: &Path) -> Vec<i64> {
@@ -227,6 +242,7 @@ fn main() {
     // The guest may have printed one more heartbeat between our reading
     // and the signal landing; take the very last one it ever managed.
     let guest_before = read_heartbeats(&boot_log).last().copied().unwrap_or(guest_before);
+    let uptime_before = read_uptimes(&boot_log).last().copied();
     println!("step 2: frozen (state file present). last pre-freeze guest wall-clock = {guest_before}");
 
     // Dump the sidecar now, while the file exists. A thaw that is
@@ -419,6 +435,56 @@ fn main() {
         }
     }
     println!();
+
+    // The monotonic clock of the guest, at a resolution of 10 ms. The
+    // epoch value has a resolution of 1 second, and the heartbeat loop
+    // runs once per second. Therefore the epoch cannot show if the
+    // restore is exact to better than 1 second. This value can.
+    let uptime_after = read_uptimes(&thaw_log).first().copied();
+    if let (Some(before), Some(after)) = (uptime_before, uptime_after) {
+        let delta = after - before;
+        println!("guest monotonic clock (/proc/uptime):");
+        println!("  before the freeze: {before:.2} s");
+        println!("  after the thaw:    {after:.2} s");
+        println!(
+            "  advance across a freeze of {real_gap} real seconds: {delta:.2} s",
+            real_gap = host_at_thaw - host_at_freeze
+        );
+        // Compare the interval that contains the freeze against a normal
+        // interval of the same loop. The loop calls `sleep 1`, and it also
+        // starts two programs each cycle, so a normal interval is more
+        // than 1.00 s. Only this comparison shows whether the freeze added
+        // time, because a value of "about 1 second" alone does not.
+        let pre: Vec<f64> = read_uptimes(&boot_log)
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .collect();
+        if !pre.is_empty() {
+            let mean = pre.iter().sum::<f64>() / pre.len() as f64;
+            let max = pre.iter().cloned().fold(f64::MIN, f64::max);
+            println!(
+                "  normal interval of this loop before the freeze: mean {mean:.2} s, max \
+                 {max:.2} s ({} samples)",
+                pre.len()
+            );
+            println!(
+                "  the interval that contains the freeze is {:+.2} s against that mean",
+                delta - mean
+            );
+        }
+        if delta < 2.0 {
+            println!(
+                "  The monotonic clock did not advance during the freeze. The guest \
+                 continues\n  from the time at which it stopped."
+            );
+        } else {
+            println!(
+                "  The monotonic clock advanced by more than one heartbeat interval. Real \
+                 time\n  entered the guest."
+            );
+        }
+        println!();
+    }
 
     let guest_delta = guest_after - guest_before;
     println!("step 4: thawed. first post-thaw guest wall-clock = {guest_after}, host = {host_at_thaw}");
