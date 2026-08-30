@@ -21,7 +21,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
 .PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist dist-nested setup-tap \
-        smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
+        smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate \
         kernel-config-check
@@ -37,7 +37,7 @@ help: ## Show this help
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
 	grep -hE '^(init|dist|dist-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -139,11 +139,18 @@ smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> 
 	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0 PROBE_CARGO_FLAGS=--release
 	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0 PROBE_CARGO_FLAGS=--release
 
+# Deliberately not dist-nested: at test time only the artifacts matter,
+# and the bare-metal machine receives them through the shared copy.
+# Build them with: make dist-nested (needs the toolbox).
+smoke-nested-boot: build ## Boot cella inside a cella guest: PASS when the inner guest's init line reaches the outer serial console
+	$(LOG)
+	$(SCRIPTS)/test/nested-boot.sh
+
 smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	$(LOG)
 	$(SCRIPTS)/test/net.sh
 
-smoke: smoke-boot smoke-thaw smoke-net ## All three smoke-* targets (skips gracefully without KVM)
+smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot ## All smoke-* targets (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
