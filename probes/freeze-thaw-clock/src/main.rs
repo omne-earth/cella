@@ -575,7 +575,6 @@ fn main() {
         }
     }
 
-    let real_gap = host_at_thaw - host_at_freeze;
     let real_gap_ns = host_at_thaw_ns - host_at_freeze_ns;
 
     // --- verdict ---
