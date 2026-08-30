@@ -282,27 +282,22 @@ fn main() {
         // for a timer interrupt that does not occur.
         vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
             .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
-        // Tell the guest that it was stopped. KVM sets PVCLOCK_GUEST_STOPPED
-        // in the pvclock page at the next update, which occurs at the
-        // first vCPU entry. Linux reads this flag in the kvmclock code and
-        // calls pvclock_touch_watchdogs(). This resets the clocksource
-        // watchdog and the soft-lockup watchdog for the interval that
-        // contains the freeze.
-        //
-        // Without this call the guest measures its TSC against kvm-clock
-        // across the freeze, finds a difference of 8 ms to 23 ms, and
-        // marks the TSC unstable. The difference does not come from the
-        // VMM: the delay from the read of the TSC to the read of the
-        // clock is 1 us, the delay between the two writes is 0 us, and
-        // the delay from the write of the clock to the first KVM_RUN is
-        // approximately 200 us.
-        //
-        // This call must come after the restore of MSR_KVM_SYSTEM_TIME_NEW,
-        // because KVM refuses the request if the pvclock page of the guest
-        // is not active.
-        if let Err(e) = vcpu_fd.kvmclock_ctrl() {
-            eprintln!("cella: warning: KVM_KVMCLOCK_CTRL failed: {e}");
-        }
+        // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
+        // PVCLOCK_GUEST_STOPPED in the pvclock page, and the flag tells
+        // the guest that it was stopped. The freeze must not exist for
+        // the guest, thus cella does not send the flag. The guest does
+        // not need it either:
+        // - The clocksource watchdog does not run, because the command
+        //   line contains tsc=reliable (see src/config.rs).
+        // - The soft-lockup, RCU-stall, and hung-task watchdogs measure
+        //   elapsed guest time. The clock of the guest does not advance
+        //   across the freeze, thus the watchdogs see no pause.
+        // An earlier version sent the flag to stop the guest from
+        // marking its TSC unstable. That symptom came from the era in
+        // which the thaw skewed the clock by 8 ms to 23 ms, before
+        // tsc=reliable and before the paired TSC and kvmclock restore.
+        // The probes now verify the absence of watchdog complaints
+        // after each thaw.
 
         freeze::finalize_thaw(&args.state_dir)
             .unwrap_or_else(|e| fatal(&format!("finalizing thaw: {e}")));

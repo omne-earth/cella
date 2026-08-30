@@ -27,8 +27,13 @@ guest:
   is the design choice, not a defect.
 - **TSC.** Restored to the frozen value, consistent with the kvmclock.
   The guest cannot compare the two clocks and find a discontinuity.
-  cella also calls KVM_KVMCLOCK_CTRL, and the clocksource watchdog of
-  the guest then accepts the pause.
+  cella does not call KVM_KVMCLOCK_CTRL: that call sets the
+  PVCLOCK_GUEST_STOPPED flag, and the flag tells the guest that it was
+  stopped. The guest does not need the flag. The command line contains
+  tsc=reliable, thus the clocksource watchdog does not run, and the
+  other watchdogs measure guest time, which does not advance across
+  the freeze. The probes verify the absence of watchdog complaints
+  after each thaw.
 - **Timers, FPU and xstate, RNG state.** All continue from the point of
   the stop. This is the cryogenic principle applied to the full machine
   state. The RNG state persists across the thaw by design; do not
@@ -124,7 +129,6 @@ sequenceDiagram
     C->>K: restore vCPU state (MSR batch: TSC first,<br/>XSS restored, TSC_DEADLINE last)
     C->>K: KVM_SET_CLOCK (2 us after the TSC write)
     C->>K: KVM_SET_IRQCHIP, KVM_SET_PIT2
-    C->>K: KVM_KVMCLOCK_CTRL (tell the guest it was stopped)
     C->>C: finalize_thaw (delete the sidecar)
     C->>G: first KVM_RUN (~200 us after the clock write)
     G->>G: continue at the frozen clock value
