@@ -319,10 +319,17 @@ probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time i
 # - KVM_PRE_FAULT_MEMORY (Linux 6.11+) fills the stage-2 tables before
 #   the clock restore. The cost then falls outside the clock window of
 #   the guest. The excess decreases from ~25 ms to ~4 ms.
-# - The remaining ~4 ms is constant. It comes from the outer hypervisor
-#   of this nested host, which rebuilds its shadow tables on the first
-#   guest access, and from cold guest caches. The VMM cannot remove it.
-#   Expect less on bare metal.
+# - Measured difference against a normal heartbeat interval, with the
+#   prefill on (2026-08-30):
+#     nested KVM (this host):  +2.9 ms to +4.3 ms  -> FAIL, outside the
+#                              spread of a normal interval (~1 ms)
+#     bare metal:    -0.128 ms           -> PASS, inside the
+#                              spread
+#   The nested remainder comes from the outer hypervisor: a thaw makes a
+#   new VM, and the outer hypervisor rebuilds its shadow of the stage-2
+#   tables on the first guest access. That work is below the reach of
+#   the VMM. It does not exist on bare metal, thus the probe passes
+#   there. Bare metal is the reference for this gate.
 # - The probe measures wake-up lateness after the thaw, not a clock step.
 #   A clock step smaller than the remaining sleep does not show in the
 #   crossing interval, because the wake-up is scheduled in the same clock.
