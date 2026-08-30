@@ -24,11 +24,14 @@ while true; do
     # is what shows this at a resolution better than the 1 second tick of
     # this loop.
     # /proc/timer_list holds CLOCK_MONOTONIC in nanoseconds, as
-    # "now at <N> nsecs". `date +%s%N` gives CLOCK_REALTIME in
-    # nanoseconds when busybox supports %N. Both fields are printed, and
-    # the probes use the field that parses. The 1 second period of this
-    # loop and the start of two programs each cycle remain the limit of
-    # any measurement across one interval.
-    echo "cella-rootfs: wall-clock $(date +%s) uptime $(cut -d' ' -f1 /proc/uptime) mono_ns $(awk '/now at/ { print $3; exit }' /proc/timer_list 2>/dev/null) real_ns $(date +%s%N)"
+    # "now at <N> nsecs". It also holds the base of CLOCK_REALTIME: the
+    # ".offset" line of the clock base with ".index: 1". The sum
+    # of the two values is CLOCK_REALTIME in nanoseconds. This busybox
+    # `date` does not support %N, thus /proc/timer_list is the only
+    # nanosecond source in this guest. awk uses doubles, thus real_ns
+    # has a granularity of ~200 ns at the current epoch. The 1 second
+    # period of this loop and the start of two programs each cycle
+    # remain the limit of any measurement across one interval.
+    echo "cella-rootfs: wall-clock $(date +%s) uptime $(cut -d' ' -f1 /proc/uptime) mono_ns $(awk '/now at/ { print $3; exit }' /proc/timer_list 2>/dev/null) real_ns $(awk '/now at/ { now = $3 } /\.index:/ { idx = $2 } /\.offset:/ { if (idx == 1) off = $2 } END { printf "%.0f", now + off }' /proc/timer_list 2>/dev/null)"
     sleep 1
 done
