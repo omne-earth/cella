@@ -50,7 +50,7 @@ pub const DEFAULT_TIME_ARGS: &str = "tsc=reliable clocksource=kvm-clock trace_cl
 /// (KVM_PRE_FAULT_MEMORY, Linux 6.11+). Without the prefill, the first
 /// heartbeat cycle of the guest pays one stage-2 fault for each page
 /// that it touches, and the clock of the guest counts that time
-/// (measured: ~25 ms on a nested host; ~4 ms with the prefill). The
+/// (measured on nested KVM: ~25 ms; ~4 ms with the prefill). The
 /// cost of the prefill falls outside the clock window of the guest.
 /// Set CELLA_THAW_PREFAULT=off to measure the cold thaw.
 pub const DEFAULT_THAW_PREFAULT: bool = true;

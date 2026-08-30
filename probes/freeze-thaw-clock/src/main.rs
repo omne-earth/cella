@@ -726,6 +726,11 @@ fn main() {
     // state only what the data shows, and the wall-clock comparison
     // below has a resolution of 1 s.
     let mut mono_measure: Option<(i128, i128, i128)> = None;
+    // The gate below compares one new interval against n baseline
+    // intervals. The correct bound for that comparison is a prediction
+    // interval: |difference| <= 3 * s * sqrt(1 + 1/n), where s is the
+    // sample standard deviation of the baseline. The range (max - min)
+    // of a small sample is not a test statistic.
     let before_ns = read_mono_ns(&boot_log);
     let after_ns = read_mono_ns(&thaw_log).first().copied();
     if let (Some(&last_before), Some(after)) = (before_ns.last(), after_ns) {
@@ -738,24 +743,35 @@ fn main() {
         println!("  before the freeze: {}", fmt_ns(last_before as i128));
         println!("  after the thaw:    {}", fmt_ns(after as i128));
         println!("  across the freeze: {}", fmt_ns(across));
-        if !intervals.is_empty() {
+        if intervals.len() >= 2 {
+            let n = intervals.len() as f64;
             let mean = intervals.iter().sum::<i128>() / intervals.len() as i128;
             let max = *intervals.iter().max().unwrap();
             let min = *intervals.iter().min().unwrap();
+            let m = intervals.iter().sum::<i128>() as f64 / n;
+            let var = intervals
+                .iter()
+                .map(|&x| (x as f64 - m).powi(2))
+                .sum::<f64>()
+                / (n - 1.0);
+            let sd = var.sqrt();
+            let bound = (3.0 * sd * (1.0 + 1.0 / n).sqrt()).round() as i128;
             println!(
-                "  normal interval:   mean {}, min {}, max {} ({} samples)",
+                "  normal interval:   mean {}, min {}, max {}, s {} ({} samples)",
                 fmt_ns(mean),
                 fmt_ns(min),
                 fmt_ns(max),
+                fmt_ns(sd.round() as i128),
                 intervals.len()
             );
             println!("  difference:        {}", fmt_ns_signed(across - mean));
             println!(
-                "  The spread of the normal interval is {}. A difference inside that \
-                 spread\n  is not a measurement of the freeze.",
-                fmt_ns(max - min)
+                "  The 3-sigma prediction interval for one new interval is \
+                 +/-{}.\n  A difference inside that interval is not a measurement \
+                 of the freeze.",
+                fmt_ns(bound)
             );
-            mono_measure = Some((across, mean, max - min));
+            mono_measure = Some((across, mean, bound));
         }
         println!();
     }
@@ -848,9 +864,9 @@ fn main() {
     if guest_delta.abs() <= MAX_GUEST_DELTA_SECS {
         // A pass needs the nanosecond measurement, and the interval that
         // contains the freeze must equal a normal interval to within the
-        // spread of the normal intervals. A larger difference is time
-        // that entered the clock of the guest.
-        let (across, mean, spread) = match mono_measure {
+        // 3-sigma prediction interval of the baseline. A larger
+        // difference is time that entered the clock of the guest.
+        let (across, mean, bound) = match mono_measure {
             Some(m) => m,
             None => {
                 eprintln!("(logs kept: {})", tmp.display());
@@ -861,29 +877,29 @@ fn main() {
             }
         };
         let diff = across - mean;
-        if diff.abs() <= spread {
+        if diff.abs() <= bound {
             let _ = std::fs::remove_dir_all(&tmp);
             println!(
                 "\nPASS (FROZEN): the freeze took {} of real time. The monotonic \
                  clock of the guest advanced {} across it, {} \
-                 against a normal heartbeat interval, inside the spread of the \
-                 normal intervals ({}) -- time is cryogenic, as designed.",
+                 against a normal heartbeat interval, inside the 3-sigma \
+                 prediction interval (+/-{}) -- time is cryogenic, as designed.",
                 fmt_ns(real_gap_ns),
                 fmt_ns(across),
                 fmt_ns_signed(diff),
-                fmt_ns(spread)
+                fmt_ns(bound)
             );
         } else {
             println!(
                 "\nFAIL (LEAKED): the freeze took {} of real time. The monotonic \
                  clock of the guest advanced {} across it, {} \
-                 against a normal heartbeat interval, outside the spread of the \
-                 normal intervals ({}). That difference is time that \
+                 against a normal heartbeat interval, outside the 3-sigma \
+                 prediction interval (+/-{}). That difference is time that \
                  entered the clock of the guest.",
                 fmt_ns(real_gap_ns),
                 fmt_ns(across),
                 fmt_ns_signed(diff),
-                fmt_ns(spread)
+                fmt_ns(bound)
             );
             eprintln!("(logs kept: {})", tmp.display());
             std::process::exit(1);
