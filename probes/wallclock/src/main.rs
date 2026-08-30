@@ -50,10 +50,25 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// How far off from real time we tolerate. Generous on purpose -- the
-/// failure mode we're actually catching is "off by decades" (an unset
-/// clock defaulting to the epoch), not "off by five seconds."
-const MAX_DRIFT_SECS: i64 = 120;
+/// Format a duration in nanoseconds as "<ns> ns (<s> s)". The value in
+/// seconds is the same number, exact, with nine decimals.
+fn fmt_ns(ns: i128) -> String {
+    let sign = if ns < 0 { "-" } else { "" };
+    let a = ns.unsigned_abs();
+    format!("{ns} ns ({sign}{}.{:09} s)", a / 1_000_000_000, a % 1_000_000_000)
+}
+
+/// The same as fmt_ns, and the sign is always written. Use it for a
+/// difference.
+fn fmt_ns_signed(ns: i128) -> String {
+    let sign = if ns < 0 { "-" } else { "+" };
+    let a = ns.unsigned_abs();
+    format!(
+        "{sign}{a} ns ({sign}{}.{:09} s)",
+        a / 1_000_000_000,
+        a % 1_000_000_000
+    )
+}
 
 fn repo_root() -> PathBuf {
     // probes/wallclock/ -> repo root is two levels up from this crate's
@@ -299,7 +314,10 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(60);
     if observe > 0 && result.is_some() {
-        println!("observing the guest for {observe}s with no freeze...");
+        println!(
+            "observing the guest for {} with no freeze...",
+            fmt_ns(observe as i128 * 1_000_000_000)
+        );
         std::thread::sleep(Duration::from_secs(observe));
     }
 
@@ -347,20 +365,31 @@ fn main() {
                 println!("{l}");
             }
             fail(&format!(
-                "no wall-clock heartbeat observed within {TIMEOUT:?} -- the guest never \
+                "no wall-clock heartbeat observed within {} -- the guest never \
                  reached the heartbeat loop (a boot problem), so this run says nothing \
-                 either way about wall-clock seeding"
+                 either way about wall-clock seeding",
+                fmt_ns(TIMEOUT.as_nanos() as i128)
             ))
         }
     };
 
     let host_epoch_before = host_before.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     let host_epoch_after = host_after.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-    let host_mid = (host_epoch_before + host_epoch_after) / 2;
-    let drift = (guest_epoch - host_mid).abs();
+    // The tolerance is zero. At a resolution of 1 s, zero drift means:
+    // the epoch of the guest lies inside the host window from spawn to
+    // observation. The drift is the distance to that window.
+    let drift = if guest_epoch < host_epoch_before {
+        host_epoch_before - guest_epoch
+    } else if guest_epoch > host_epoch_after {
+        guest_epoch - host_epoch_after
+    } else {
+        0
+    };
 
     println!(
-        "host epoch (spawn..observed): {host_epoch_before}..{host_epoch_after}  guest-reported epoch: {guest_epoch}  drift: {drift}s"
+        "host epoch (spawn..observed): {host_epoch_before}..{host_epoch_after}  \
+         guest-reported epoch: {guest_epoch}  drift: {}",
+        fmt_ns(drift as i128 * 1_000_000_000)
     );
 
     // The same comparison in nanoseconds, when the guest can report them.
@@ -374,16 +403,22 @@ fn main() {
             .as_nanos() as i128;
         let diff = guest_ns as i128 - host_ns;
         println!(
-            "guest CLOCK_REALTIME: {guest_ns} ns, host: {host_ns} ns, difference: {diff} ns \
-             ({:.3} ms)",
-            diff as f64 / 1e6
+            "guest CLOCK_REALTIME: {}, host: {}, difference: {}",
+            fmt_ns(guest_ns as i128),
+            fmt_ns(host_ns),
+            fmt_ns_signed(diff)
         );
         println!("  The probe reads the log every 100 ms, thus the value is up to 100 ms old.");
     }
 
-    if drift <= MAX_DRIFT_SECS {
+    if drift == 0 {
         let _ = std::fs::remove_dir_all(&tmp);
-        println!("PASS: guest wall-clock is within {MAX_DRIFT_SECS}s of host real time");
+        println!(
+            "PASS: guest wall-clock drift is 0 ns (0.000000000 s) at a resolution \
+             of 1 s (epoch seconds): the guest epoch {guest_epoch} is inside the \
+             host window {host_epoch_before}..{host_epoch_after}. The tolerance is \
+             zero."
+        );
         if ev.kvmclock_msrs.is_empty() {
             println!(
                 "NOTE: the guest's time is right, but it never printed a kvm-clock line -- \
@@ -394,8 +429,11 @@ fn main() {
     } else {
         keep_for_diagnosis();
         println!(
-            "FAIL: guest wall-clock is off by {drift}s (> {MAX_DRIFT_SECS}s tolerance) -- it \
-             never got a valid boot-time seed"
+            "FAIL: guest wall-clock drift is {}, at a resolution of 1 s \
+             (epoch seconds), outside the host window \
+             {host_epoch_before}..{host_epoch_after}. The tolerance is zero -- the \
+             guest did not get a valid boot-time seed.",
+            fmt_ns(drift as i128 * 1_000_000_000)
         );
         if ev.kvmclock_msrs.is_empty() {
             println!(
