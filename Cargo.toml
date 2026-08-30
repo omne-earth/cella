@@ -2,6 +2,7 @@
 name = "cella"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 description = "Minimal x86_64 KVM microVM: virtio-blk + virtio-net + serial, with cryogenic freeze/thaw."
 
 [lib]
