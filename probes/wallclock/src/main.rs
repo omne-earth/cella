@@ -71,6 +71,15 @@ fn env_path(var: &str, default: PathBuf) -> PathBuf {
 }
 
 /// Parse the epoch seconds out of a "cella-rootfs: wall-clock <N>" line.
+/// Read a nanosecond field from a heartbeat line. The line is
+/// "cella-rootfs: wall-clock <s> uptime <s> mono_ns <ns> real_ns <ns>".
+/// A field is absent when the guest cannot produce it, thus the caller
+/// must handle None.
+fn parse_ns(line: &str, field: &str) -> Option<u64> {
+    let (_, rest) = line.split_once(&format!(" {field} "))?;
+    rest.split_whitespace().next()?.parse().ok()
+}
+
 fn parse_heartbeat(line: &str) -> Option<i64> {
     // The line is "cella-rootfs: wall-clock <epoch> uptime <seconds>".
     // Read the first field only.
@@ -353,6 +362,24 @@ fn main() {
     println!(
         "host epoch (spawn..observed): {host_epoch_before}..{host_epoch_after}  guest-reported epoch: {guest_epoch}  drift: {drift}s"
     );
+
+    // The same comparison in nanoseconds, when the guest can report them.
+    // The probe reads the log every 100 ms, thus the age of the value is
+    // up to 100 ms and that is the limit of this measurement, not the
+    // resolution of the timestamp.
+    if let Some(guest_ns) = log.lines().rev().find_map(|l| parse_ns(l, "real_ns")) {
+        let host_ns = host_after
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i128;
+        let diff = guest_ns as i128 - host_ns;
+        println!(
+            "guest CLOCK_REALTIME: {guest_ns} ns, host: {host_ns} ns, difference: {diff} ns \
+             ({:.3} ms)",
+            diff as f64 / 1e6
+        );
+        println!("  The probe reads the log every 100 ms, thus the value is up to 100 ms old.");
+    }
 
     if drift <= MAX_DRIFT_SECS {
         let _ = std::fs::remove_dir_all(&tmp);

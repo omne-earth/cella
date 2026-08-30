@@ -93,6 +93,15 @@ fn env_path(var: &str, default: PathBuf) -> PathBuf {
     std::env::var(var).map(PathBuf::from).unwrap_or(default)
 }
 
+/// Read a nanosecond field from a heartbeat line. The line is
+/// "cella-rootfs: wall-clock <s> uptime <s> mono_ns <ns> real_ns <ns>".
+/// A field is absent when the guest cannot produce it, thus the caller
+/// must handle None.
+fn parse_ns(line: &str, field: &str) -> Option<u64> {
+    let (_, rest) = line.split_once(&format!(" {field} "))?;
+    rest.split_whitespace().next()?.parse().ok()
+}
+
 fn parse_heartbeat(line: &str) -> Option<i64> {
     // The line is "cella-rootfs: wall-clock <epoch> uptime <seconds>".
     // Read the first field only.
@@ -126,6 +135,15 @@ fn parse_uptime(line: &str) -> Option<f64> {
 
 fn read_uptimes(log_path: &Path) -> Vec<f64> {
     read_file(log_path).lines().filter_map(parse_uptime).collect()
+}
+
+/// The monotonic clock of the guest, in nanoseconds, from each heartbeat
+/// line. The list is empty when the guest cannot produce the field.
+fn read_mono_ns(log_path: &Path) -> Vec<u64> {
+    read_file(log_path)
+        .lines()
+        .filter_map(|l| parse_ns(l, "mono_ns"))
+        .collect()
 }
 
 fn read_heartbeats(log_path: &Path) -> Vec<i64> {
@@ -302,9 +320,11 @@ fn main() {
     let pid = child.id() as i32;
 
     let deadline = Instant::now() + BOOT_TIMEOUT;
-    // Wait for 3 heartbeats before freezing (past any boot-time jitter
-    // in the print loop's own timing), but use the newest one.
-    let guest_before = match wait_for_heartbeats(&boot_log, &mut child, 3, deadline) {
+    // Wait for 6 heartbeats before the freeze. The first ones pass any
+    // jitter from the boot. The rest give the normal interval of the
+    // loop, which is the baseline that the interval across the freeze is
+    // compared against. Two samples are not enough for that baseline.
+    let guest_before = match wait_for_heartbeats(&boot_log, &mut child, 6, deadline) {
         Some(v) => v,
         None => {
             let _ = child.kill();
@@ -632,6 +652,47 @@ fn main() {
     // epoch value has a resolution of 1 second, and the heartbeat loop
     // runs once per second. Therefore the epoch cannot show if the
     // restore is exact to better than 1 second. This value can.
+    // Nanoseconds, when the guest can report them. The resolution of the
+    // timestamp is 1 ns. The resolution of the measurement is not: the
+    // loop runs once per second and starts two programs each cycle, thus
+    // the interval that contains the freeze must be compared against a
+    // normal interval of the same loop, and the difference between them
+    // is the result.
+    // Keep the nanosecond measurement for the verdict. The verdict must
+    // state only what the data shows, and the wall-clock comparison
+    // below has a resolution of 1 s.
+    let mut mono_measure: Option<(i128, i128, i128)> = None;
+    let before_ns = read_mono_ns(&boot_log);
+    let after_ns = read_mono_ns(&thaw_log).first().copied();
+    if let (Some(&last_before), Some(after)) = (before_ns.last(), after_ns) {
+        let across = after as i128 - last_before as i128;
+        let intervals: Vec<i128> = before_ns
+            .windows(2)
+            .map(|w| w[1] as i128 - w[0] as i128)
+            .collect();
+        println!("guest monotonic clock (/proc/timer_list), in nanoseconds:");
+        println!("  before the freeze: {last_before} ns");
+        println!("  after the thaw:    {after} ns");
+        println!("  across the freeze: {across} ns");
+        if !intervals.is_empty() {
+            let mean = intervals.iter().sum::<i128>() / intervals.len() as i128;
+            let max = *intervals.iter().max().unwrap();
+            let min = *intervals.iter().min().unwrap();
+            println!(
+                "  normal interval:   mean {mean} ns, min {min} ns, max {max} ns ({} samples)",
+                intervals.len()
+            );
+            println!("  difference:        {:+} ns", across - mean);
+            println!(
+                "  The spread of the normal interval is {} ns. A difference inside that \
+                 spread\n  is not a measurement of the freeze.",
+                max - min
+            );
+            mono_measure = Some((across, mean, max - min));
+        }
+        println!();
+    }
+
     let uptime_after = read_uptimes(&thaw_log).first().copied();
     if let (Some(before), Some(after)) = (uptime_before, uptime_after) {
         let delta = after - before;
@@ -689,11 +750,42 @@ fn main() {
     );
 
     if guest_delta.abs() <= MAX_GUEST_DELTA_SECS {
-        let _ = std::fs::remove_dir_all(&tmp);
-        println!(
-            "\nPASS (FROZEN): guest clock shows ~0 elapsed time across the freeze \
-             (real {real_gap}s vs. guest {guest_delta}s) -- time is cryogenic, as designed."
-        );
+        // A pass needs the nanosecond measurement, and the interval that
+        // contains the freeze must equal a normal interval to within the
+        // spread of the normal intervals. A larger difference is time
+        // that entered the clock of the guest.
+        let (across, mean, spread) = match mono_measure {
+            Some(m) => m,
+            None => {
+                eprintln!("(logs kept: {})", tmp.display());
+                fail(
+                    "no nanosecond monotonic data from the guest -- the 1 s \
+                     wall-clock comparison cannot verify a frozen clock",
+                );
+            }
+        };
+        let diff = across - mean;
+        if diff.abs() <= spread {
+            let _ = std::fs::remove_dir_all(&tmp);
+            println!(
+                "\nPASS (FROZEN): the freeze took {} ns of real time. The monotonic \
+                 clock of the guest advanced {across} ns across it, {diff:+} ns \
+                 against a normal heartbeat interval, inside the spread of the \
+                 normal intervals ({spread} ns) -- time is cryogenic, as designed.",
+                real_gap as i128 * 1_000_000_000,
+            );
+        } else {
+            println!(
+                "\nFAIL (LEAKED): the freeze took {} ns of real time. The monotonic \
+                 clock of the guest advanced {across} ns across it, {diff:+} ns \
+                 against a normal heartbeat interval, outside the spread of the \
+                 normal intervals ({spread} ns). That difference is time that \
+                 entered the clock of the guest.",
+                real_gap as i128 * 1_000_000_000,
+            );
+            eprintln!("(logs kept: {})", tmp.display());
+            std::process::exit(1);
+        }
     } else {
         // LEAKED. Distinguish "leaked exactly the frozen interval"
         // (KVM_SET_CLOCK effectively didn't take) from an arbitrary jump.

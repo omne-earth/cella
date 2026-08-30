@@ -123,10 +123,17 @@ smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> 
 	$(LOG)
 	$(SCRIPTS)/test/thaw.sh
 	# The script cannot see whether the guest keeps its time. A guest that
-	# resumed with a dead timer passed the script in every run. The probe
-	# measures the time. CELLA_POST_THAW_SECS=0 leaves out the 30 s
-	# measurement of the clock rate.
-	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0
+	# resumed with a dead timer passed the script in every run.
+	#
+	# probe-wallclock runs first. It checks the clock of the guest at
+	# boot, with no freeze. A failure there means the guest cannot keep
+	# time at all, and the result of the second probe would not be
+	# meaningful.
+	#
+	# CELLA_OBSERVE_SECS=0 and CELLA_POST_THAW_SECS=0 leave out the two
+	# long measurements. Run the probes by hand for those.
+	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0 PROBE_CARGO_FLAGS=--release
+	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0 PROBE_CARGO_FLAGS=--release
 
 smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	$(LOG)
@@ -277,6 +284,9 @@ distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds 
 # absence of PVCLOCK_TSC_STABLE_BIT, which the host KVM owns and sets
 # only when the TSC of the host is stable.
 
+# Flags for the probe builds. A hand run uses the dev profile, which
+# compiles fast. smoke-thaw passes --release.
+PROBE_CARGO_FLAGS ?=
 CELLA_FROZEN_SECS ?= 6
 CELLA_POST_THAW_SECS ?= 30
 CELLA_TIME_ARGS ?=
@@ -287,12 +297,12 @@ export CELLA_OBSERVE_SECS
 
 probe-sregs: ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same* ioctl call? (no /dev/kvm needed beyond opening it; boots nothing, just exercises raw ioctls -- see probes/sregs/src/main.rs)
 	$(LOG)
-	$(CARGO) run --manifest-path probes/sregs/Cargo.toml
+	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/sregs/Cargo.toml
 
 probe-wallclock: build dist ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see probes/wallclock/src/main.rs)
 	$(LOG)
-	$(CARGO) run --manifest-path probes/wallclock/Cargo.toml
+	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/wallclock/Cargo.toml
 
 probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see probes/freeze-thaw-clock/src/main.rs)
 	$(LOG)
-	$(CARGO) run --manifest-path probes/freeze-thaw-clock/Cargo.toml
+	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/freeze-thaw-clock/Cargo.toml

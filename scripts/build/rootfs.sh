@@ -23,6 +23,12 @@ while true; do
     # 10 ms. The freeze must not advance either one, and the second value
     # is what shows this at a resolution better than the 1 second tick of
     # this loop.
-    echo "cella-rootfs: wall-clock $(date +%s) uptime $(cut -d' ' -f1 /proc/uptime)"
+    # /proc/timer_list holds CLOCK_MONOTONIC in nanoseconds, as
+    # "now at <N> nsecs". `date +%s%N` gives CLOCK_REALTIME in
+    # nanoseconds when busybox supports %N. Both fields are printed, and
+    # the probes use the field that parses. The 1 second period of this
+    # loop and the start of two programs each cycle remain the limit of
+    # any measurement across one interval.
+    echo "cella-rootfs: wall-clock $(date +%s) uptime $(cut -d' ' -f1 /proc/uptime) mono_ns $(awk '/now at/ { print $3; exit }' /proc/timer_list 2>/dev/null) real_ns $(date +%s%N)"
     sleep 1
 done
