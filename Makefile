@@ -23,7 +23,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
         init dist setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
-        probe-sregs probe-wallclock probe-freeze-thaw-clock \
+        probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept \
         kernel-config-check
 
 help: ## Show this help
@@ -46,7 +46,7 @@ help: ## Show this help
 	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Probes: diagnostics, run by hand (smoke-thaw runs the freeze/thaw one):"
-	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 
 # --- Build ------------------------------------------------------------
 
@@ -306,3 +306,26 @@ probe-wallclock: build dist ## Does the guest's wall-clock land near real time a
 probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see probes/freeze-thaw-clock/src/main.rs)
 	$(LOG)
 	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/freeze-thaw-clock/Cargo.toml
+
+# Findings from the 2026-08-30 investigation of the thaw delay:
+# - The excess across the freeze is a constant cost of each thaw. It does
+#   not change with the length of the freeze (0 s, 6 s, and 20 s all give
+#   +23 ms to +28 ms). It is not a clock leak. The save and restore of
+#   the TSC and the kvmclock agree to less than 3 us.
+# - Cause: a thaw makes a new KVM VM with empty stage-2 page tables. The
+#   first heartbeat cycle of the guest takes a stage-2 fault for each
+#   page that it touches. The guest runs during these faults, thus its
+#   clock counts them.
+# - KVM_PRE_FAULT_MEMORY (Linux 6.11+) fills the stage-2 tables before
+#   the clock restore. The cost then falls outside the clock window of
+#   the guest. The excess decreases from ~25 ms to ~4 ms.
+# - The remaining ~4 ms is constant. It comes from the outer hypervisor
+#   of this nested host, which rebuilds its shadow tables on the first
+#   guest access, and from cold guest caches. The VMM cannot remove it.
+#   Expect less on bare metal.
+# - The probe measures wake-up lateness after the thaw, not a clock step.
+#   A clock step smaller than the remaining sleep does not show in the
+#   crossing interval, because the wake-up is scheduled in the same clock.
+probe-prefault-ept: build dist ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
+	$(LOG)
+	CELLA_THAW_PREFAULT=ept $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml

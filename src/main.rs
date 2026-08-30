@@ -238,6 +238,17 @@ fn main() {
     let mut serial = SerialDevice::new(vm.clone());
 
     if frozen {
+        // Fill the stage-2 page tables before the restore of the clock,
+        // so that the cost stays out of the clock window of the guest.
+        // See config::DEFAULT_THAW_PREFAULT for the measurements.
+        let prefault = match std::env::var("CELLA_THAW_PREFAULT").ok().as_deref() {
+            Some("off") => false,
+            Some(_) => true,
+            None => config::DEFAULT_THAW_PREFAULT,
+        };
+        if prefault {
+            prefault_ept(&vcpu_fd, mem_size_bytes);
+        }
         let frozen_state =
             freeze::read_state(&args.state_dir).unwrap_or_else(|e| fatal(&format!("{e:?}")));
         let actual_khz = vcpu_fd.get_tsc_khz().unwrap_or(0);
@@ -261,8 +272,8 @@ fn main() {
             .unwrap_or_else(|e| fatal(&format!("restoring clock: {e:?}")));
         let t_after_clock = std::time::Instant::now();
         eprintln!(
-            "cella: thaw timing: TSC write to clock write {} us",
-            (t_after_clock - t_after_restore).as_micros()
+            "cella: thaw timing: TSC write to clock write {}",
+            fmt_ns((t_after_clock - t_after_restore).as_nanos() as i128)
         );
         thaw_clock_written = Some(t_after_clock);
         // The code above made a new irqchip and a new PIT. This call puts
@@ -321,8 +332,8 @@ fn main() {
     // the delay from the write of the clock to that moment.
     if let Some(t) = thaw_clock_written {
         eprintln!(
-            "cella: thaw timing: clock write to first KVM_RUN {} us",
-            t.elapsed().as_micros()
+            "cella: thaw timing: clock write to first KVM_RUN {}",
+            fmt_ns(t.elapsed().as_nanos() as i128)
         );
     }
 
@@ -443,9 +454,9 @@ fn do_freeze(
     let clock = vcpu::save_vm_clock(vm).unwrap_or_else(|e| fatal(&format!("saving clock: {e:?}")));
     let t_clock = std::time::Instant::now();
     eprintln!(
-        "cella: freeze timing: guest stop to TSC read {} us, TSC read to clock read {} us",
-        (t_tsc - t_stopped).as_micros(),
-        (t_clock - t_after_save).as_micros()
+        "cella: freeze timing: guest stop to TSC read {}, TSC read to clock read {}",
+        fmt_ns((t_tsc - t_stopped).as_nanos() as i128),
+        fmt_ns((t_clock - t_after_save).as_nanos() as i128)
     );
     let irqchip =
         vcpu::save_irqchip(vm).unwrap_or_else(|e| fatal(&format!("saving irqchip/PIT: {e:?}")));
@@ -707,7 +718,65 @@ fn dump_state(dir: &PathBuf) -> ! {
     std::process::exit(0);
 }
 
+/// Format a duration in nanoseconds as "<ns> ns (<s> s)". The value in
+/// seconds is the same number, exact, with nine decimals.
+fn fmt_ns(ns: i128) -> String {
+    let sign = if ns < 0 { "-" } else { "" };
+    let a = ns.unsigned_abs();
+    format!(
+        "{ns} ns ({sign}{}.{:09} s)",
+        a / 1_000_000_000,
+        a % 1_000_000_000
+    )
+}
+
 fn fatal(msg: &str) -> ! {
     eprintln!("cella: fatal: {msg}");
     std::process::exit(1);
+}
+
+fn prefault_ept(vcpu: &kvm_ioctls::VcpuFd, size: u64) {
+    use std::os::fd::AsRawFd;
+    #[repr(C)]
+    struct KvmPreFaultMemory {
+        gpa: u64,
+        size: u64,
+        flags: u64,
+        padding: [u64; 5],
+    }
+    // _IOWR(KVMIO=0xAE, 0xd5, 64-byte struct)
+    const KVM_PRE_FAULT_MEMORY: libc::c_ulong = 0xc040_aed5;
+    let t = std::time::Instant::now();
+    let mut arg = KvmPreFaultMemory {
+        gpa: 0,
+        size,
+        flags: 0,
+        padding: [0; 5],
+    };
+    // The ioctl can return success with part of the range done, and it
+    // updates gpa and size to the remainder. Loop until the remainder is
+    // zero, and stop only on an error other than EINTR or on no progress.
+    while arg.size > 0 {
+        let before = arg.size;
+        // SAFETY: arg is a valid kvm_pre_fault_memory and the fd is a vCPU.
+        let r = unsafe { libc::ioctl(vcpu.as_raw_fd(), KVM_PRE_FAULT_MEMORY, &mut arg) };
+        if r != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            eprintln!(
+                "cella: thaw timing: prefault(ept) failed at gpa {:#x}: {err}",
+                arg.gpa
+            );
+            return;
+        }
+        if arg.size == before {
+            break;
+        }
+    }
+    eprintln!(
+        "cella: thaw timing: prefault(ept) done in {}",
+        fmt_ns(t.elapsed().as_nanos() as i128)
+    );
 }
