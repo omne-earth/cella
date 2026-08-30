@@ -112,9 +112,16 @@ fn parse_heartbeat(line: &str) -> Option<i64> {
 /// probe run reporting "no heartbeat" and "no kvm-clock evidence"
 /// against an 18KB log that plainly contained both. Decode lossily.
 fn read_log(path: &Path) -> String {
-    match std::fs::read(path) {
+    let s = match std::fs::read(path) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(_) => String::new(),
+        Err(_) => return String::new(),
+    };
+    // The serial device writes a line byte by byte. A read can see a
+    // partial line, and a number in a partial line parses to a wrong
+    // value. Return complete lines only.
+    match s.rfind('\n') {
+        Some(i) => s[..=i].to_string(),
+        None => String::new(),
     }
 }
 

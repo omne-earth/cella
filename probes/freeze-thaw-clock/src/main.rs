@@ -159,21 +159,39 @@ fn parse_uptime(line: &str) -> Option<f64> {
     rest.trim().parse().ok()
 }
 
+/// The file content up to the last newline. The serial device writes a
+/// line byte by byte. A read can therefore see a partial line, and a
+/// number in a partial line parses to a wrong value. Every parser must
+/// read complete lines only.
+fn read_complete_lines(path: &Path) -> String {
+    let s = read_file(path);
+    match s.rfind('\n') {
+        Some(i) => s[..=i].to_string(),
+        None => String::new(),
+    }
+}
+
 fn read_uptimes(log_path: &Path) -> Vec<f64> {
-    read_file(log_path).lines().filter_map(parse_uptime).collect()
+    read_complete_lines(log_path)
+        .lines()
+        .filter_map(parse_uptime)
+        .collect()
 }
 
 /// The monotonic clock of the guest, in nanoseconds, from each heartbeat
 /// line. The list is empty when the guest cannot produce the field.
 fn read_mono_ns(log_path: &Path) -> Vec<u64> {
-    read_file(log_path)
+    read_complete_lines(log_path)
         .lines()
         .filter_map(|l| parse_ns(l, "mono_ns"))
         .collect()
 }
 
 fn read_heartbeats(log_path: &Path) -> Vec<i64> {
-    read_file(log_path).lines().filter_map(parse_heartbeat).collect()
+    read_complete_lines(log_path)
+        .lines()
+        .filter_map(parse_heartbeat)
+        .collect()
 }
 
 /// Waits until at least `n` heartbeat lines have appeared, then returns
@@ -813,7 +831,7 @@ fn main() {
     // The guest reports its CLOCK_REALTIME in nanoseconds (real_ns, see
     // rootfs.sh). The comparison point is the observation of the first
     // heartbeat, at the 100 ms poll of the probe.
-    match read_file(&thaw_log)
+    match read_complete_lines(&thaw_log)
         .lines()
         .find_map(|l| parse_ns(l, "real_ns"))
     {
