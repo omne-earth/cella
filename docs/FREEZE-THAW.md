@@ -55,14 +55,33 @@ irqchip and PIT state, the kvmclock value, and the format version.
 sidecar thaws one time only.
 
 ```mermaid
+stateDiagram-v2
+    [*] --> Running: boot (cella with a kernel, RAM maps ram.img)
+    Running --> Frozen: SIGUSR1 (msync ram.img, write the sidecar, process exit)
+    Frozen --> Running: thaw (new process on the same state dir -- prefill, restore, delete the sidecar)
+    Running --> [*]: guest shutdown
+```
+
+The Frozen state is only the two files. No process runs, and no time
+passes for the guest. The sidecar thaws one time: the thaw deletes it,
+and a second thaw of the same sidecar cannot occur.
+
+A freeze and a thaw are two separate cella processes. The first
+process runs from the boot to the freeze, and it exits. The second
+process starts against the same state dir, and it runs from the thaw
+onward. Nothing survives in memory between the two processes. The two
+files are the complete guest.
+
+```mermaid
 flowchart LR
+    C1["cella, first process<br/>(boot, then freeze, then exit)"] -->|"msync"| RAM
+    C1 -->|"write"| SC
     subgraph state["state dir"]
         RAM["ram.img (guest RAM, MAP_SHARED)"]
         SC["state (sidecar, format v5)"]
     end
-    C1["cella (freeze run)"] -->|msync + write| state
-    state -->|read + restore| C2["cella (thaw run)"]
-    C2 -->|finalize_thaw deletes| SC
+    RAM -->|"map"| C2["cella, second process<br/>(thaw, then continue)"]
+    SC -->|"restore, then delete"| C2
 ```
 
 ## The freeze sequence
