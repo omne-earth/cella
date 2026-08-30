@@ -226,6 +226,64 @@ On bare metal, no L0 exists. The prefilled stage-2 tables are the only
 translation layer, and the measurement confirms it: -0.128 ms, zero
 within the noise. Bare metal is therefore the reference for this gate.
 
+## Next steps: virtio state
+
+The freeze does not save the virtio device state. This is the known
+gap in the current design, and it is the next work item.
+
+The guest keeps its driver state in RAM, and the freeze preserves RAM.
+After the thaw, the drivers therefore believe that both devices are
+configured and live: status DRIVER_OK, queue addresses programmed,
+ring indices advanced. But the thaw constructs new MmioTransport
+objects, and their state is the reset state: status 0, no queue ready,
+and a next-available index of 0. The two sides disagree.
+
+The smoke tests and the clock probes do not detect this, because the
+heartbeat needs no virtio. The guest reads /proc and writes to the
+serial console only. The first post-thaw disk request, and the first
+post-thaw packet, meet a device that does not process its rings. The
+request stays in the available ring, no interrupt arrives, and the
+guest task blocks.
+
+The state to save is small, and it lives in the transport, not in the
+device:
+
+- The device status register.
+- For each queue: the ready flag, the size, the descriptor, available,
+  and used ring addresses, and the next-available index. The rings
+  themselves live in guest RAM, and the freeze already preserves them.
+  The index is the private progress counter of the device, and RAM
+  does not hold it.
+- The interrupt status register.
+
+An in-flight request needs no save: the freeze stops the vCPU first,
+and the run loop completes each request that it starts, thus the rings
+are quiet at the point of the save.
+
+The verification follows the pattern of the clock probes. A test must
+perform I/O after the thaw, not after the boot:
+
+- Extend the network test: ping the guest after a thaw.
+- Add a disk check: the guest reads and writes a file after a thaw,
+  and it reports the result over the serial console.
+
+```mermaid
+flowchart LR
+    subgraph saved["saved today"]
+        RAM2["guest RAM (driver state, rings)"]
+        VCPU["vCPU, MSRs, xstate"]
+        IRQ["irqchip, PIT"]
+        CLK["kvmclock, TSC"]
+    end
+    subgraph lost["lost today (rebuilt at reset state)"]
+        ST["device status"]
+        QS["queue ready, size, addresses"]
+        NA["next-available index"]
+        IS["interrupt status"]
+    end
+    lost -->|"add to the sidecar (format v6)"| SC2["sidecar"]
+```
+
 ## Reproduce
 
 ```
