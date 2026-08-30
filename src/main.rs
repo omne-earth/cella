@@ -10,7 +10,7 @@
 //! plumbing that ties memory.rs / boot/x86_64.rs / vcpu.rs / devices/ /
 //! freeze.rs / seccomp.rs together.
 
-use cella::{boot, devices, freeze, memory, seccomp, vcpu};
+use cella::{boot, config, devices, freeze, memory, seccomp, vcpu};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,7 +60,8 @@ fn parse_args() -> Args {
     let mut tap = None;
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
-    let mut cmdline = "console=ttyS0 reboot=k panic=1 pci=off".to_string();
+    // The defaults are in cella::config, in one place.
+    let mut cmdline = config::default_cmdline();
     let mut mem_mb = 256u64;
 
     let mut it = std::env::args().skip(1);
@@ -126,8 +127,35 @@ fn main() {
         seccomp::selftest_provoke_kill();
     }
 
+    // The shell scripts build their own command line, because they add
+    // the root filesystem and the virtio devices. They read the defaults
+    // from here, so that the values are not written a second time.
+    if std::env::args().nth(1).as_deref() == Some("--print-default-cmdline") {
+        println!("{}", config::default_cmdline());
+        std::process::exit(0);
+    }
+    if std::env::args().nth(1).as_deref() == Some("--print-time-args") {
+        println!("{}", config::DEFAULT_TIME_ARGS);
+        std::process::exit(0);
+    }
+
+    // Print the contents of a frozen sidecar. Use this option to examine
+    // freeze and thaw problems, because there is no debugger in the
+    // guest. This code does not use KVM or the devices. Therefore it runs
+    // before the code that makes them. A thaw that is successful deletes
+    // the state file. Therefore you must dump the state before you thaw
+    // it, not after.
+    if std::env::args().nth(1).as_deref() == Some("--dump-state") {
+        let dir = std::env::args()
+            .nth(2)
+            .unwrap_or_else(|| usage_error("--dump-state needs a state directory"));
+        dump_state(&PathBuf::from(dir));
+    }
+
     let args = parse_args();
     let frozen = freeze::is_frozen(&args.state_dir);
+    // Set at the thaw, and read immediately before the first KVM_RUN.
+    let mut thaw_clock_written: Option<std::time::Instant> = None;
 
     let mem_size_bytes = if frozen {
         // Thawing: mem size comes from the frozen state, not the CLI, so
@@ -210,6 +238,17 @@ fn main() {
     let mut serial = SerialDevice::new(vm.clone());
 
     if frozen {
+        // Fill the stage-2 page tables before the restore of the clock,
+        // so that the cost stays out of the clock window of the guest.
+        // See config::DEFAULT_THAW_PREFAULT for the measurements.
+        let prefault = match std::env::var("CELLA_THAW_PREFAULT").ok().as_deref() {
+            Some("off") => false,
+            Some(_) => true,
+            None => config::DEFAULT_THAW_PREFAULT,
+        };
+        if prefault {
+            prefault_ept(&vcpu_fd, mem_size_bytes);
+        }
         let frozen_state =
             freeze::read_state(&args.state_dir).unwrap_or_else(|e| fatal(&format!("{e:?}")));
         let actual_khz = vcpu_fd.get_tsc_khz().unwrap_or(0);
@@ -219,10 +258,52 @@ fn main() {
                  frozen on a host with a different TSC frequency)"
             ));
         }
+        // The MSR batch at the end of `restore` contains MSR_IA32_TSC. The
+        // clock write follows it immediately.
+        //
+        // Both sequences give the same result. A test of the opposite
+        // sequence (clock first, then the vCPU state) gave a skew of 7 ms
+        // to 18 ms, which is the same range as this sequence. Therefore
+        // the sequence of these two calls is not the cause of the skew.
         vcpu::restore(&vcpu_fd, &frozen_state.vcpu)
             .unwrap_or_else(|e| fatal(&format!("restoring vcpu state: {e:?}")));
+        let t_after_restore = std::time::Instant::now();
         vcpu::restore_vm_clock(&vm, &frozen_state.clock)
             .unwrap_or_else(|e| fatal(&format!("restoring clock: {e:?}")));
+        let t_after_clock = std::time::Instant::now();
+        eprintln!(
+            "cella: thaw timing: TSC write to clock write {}",
+            fmt_ns((t_after_clock - t_after_restore).as_nanos() as i128)
+        );
+        thaw_clock_written = Some(t_after_clock);
+        // The code above made a new irqchip and a new PIT. This call puts
+        // back the IOAPIC routing and the PIT programming that the guest
+        // set before the freeze. Without this call, a halted guest waits
+        // for a timer interrupt that does not occur.
+        vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
+            .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
+        // Tell the guest that it was stopped. KVM sets PVCLOCK_GUEST_STOPPED
+        // in the pvclock page at the next update, which occurs at the
+        // first vCPU entry. Linux reads this flag in the kvmclock code and
+        // calls pvclock_touch_watchdogs(). This resets the clocksource
+        // watchdog and the soft-lockup watchdog for the interval that
+        // contains the freeze.
+        //
+        // Without this call the guest measures its TSC against kvm-clock
+        // across the freeze, finds a difference of 8 ms to 23 ms, and
+        // marks the TSC unstable. The difference does not come from the
+        // VMM: the delay from the read of the TSC to the read of the
+        // clock is 1 us, the delay between the two writes is 0 us, and
+        // the delay from the write of the clock to the first KVM_RUN is
+        // approximately 200 us.
+        //
+        // This call must come after the restore of MSR_KVM_SYSTEM_TIME_NEW,
+        // because KVM refuses the request if the pvclock page of the guest
+        // is not active.
+        if let Err(e) = vcpu_fd.kvmclock_ctrl() {
+            eprintln!("cella: warning: KVM_KVMCLOCK_CTRL failed: {e}");
+        }
+
         freeze::finalize_thaw(&args.state_dir)
             .unwrap_or_else(|e| fatal(&format!("finalizing thaw: {e}")));
         eprintln!("cella: thawed {:?}", args.state_dir);
@@ -246,6 +327,15 @@ fn main() {
 
     install_sigusr1_handler();
     seccomp::install().unwrap_or_else(|e| fatal(&format!("seccomp: {e}")));
+
+    // The guest starts to run at the first KVM_RUN in run_loop. Measure
+    // the delay from the write of the clock to that moment.
+    if let Some(t) = thaw_clock_written {
+        eprintln!(
+            "cella: thaw timing: clock write to first KVM_RUN {}",
+            fmt_ns(t.elapsed().as_nanos() as i128)
+        );
+    }
 
     run_loop(
         vcpu_fd,
@@ -337,21 +427,51 @@ fn do_freeze(
     mem_size_bytes: u64,
 ) {
     eprintln!("cella: freezing to {:?}", state_dir);
+    // The guest stopped when KVM_RUN returned. Measure the delay from
+    // that moment to the read of the TSC and the kvmclock. The values
+    // that the code reads are the values at the read, not at the stop.
+    let t_stopped = std::time::Instant::now();
 
-    let _ = vcpu_fd.kvmclock_ctrl();
+    // Note: KVM_KVMCLOCK_CTRL is not called here. It sets a request on
+    // the vCPU, and KVM applies the request at the next update of the
+    // pvclock page. This vCPU does not run again, and the process exits.
+    // Therefore a call here has no effect. The thaw makes the call, on
+    // the new vCPU, before the guest runs.
 
     if let Err(e) = memory::sync_ram(mem) {
         fatal(&format!("msync guest RAM during freeze: {e}"));
     }
 
+    // Measure the delay between the read of the TSC and the read of the
+    // kvmclock. `save` reads the MSRs last, thus the end of `save` is
+    // when the code reads the TSC. The thaw must write the two values
+    // with the same delay between them. If the two delays are different,
+    // the guest sees a step between its TSC and its kvmclock.
+    let t_tsc = std::time::Instant::now();
     let vcpu_state =
         vcpu::save(vcpu_fd).unwrap_or_else(|e| fatal(&format!("saving vcpu state: {e:?}")));
+    let t_after_save = std::time::Instant::now();
     let clock = vcpu::save_vm_clock(vm).unwrap_or_else(|e| fatal(&format!("saving clock: {e:?}")));
+    let t_clock = std::time::Instant::now();
+    eprintln!(
+        "cella: freeze timing: guest stop to TSC read {}, TSC read to clock read {}",
+        fmt_ns((t_tsc - t_stopped).as_nanos() as i128),
+        fmt_ns((t_clock - t_after_save).as_nanos() as i128)
+    );
+    let irqchip =
+        vcpu::save_irqchip(vm).unwrap_or_else(|e| fatal(&format!("saving irqchip/PIT: {e:?}")));
     let tsc_khz = vcpu_fd.get_tsc_khz().unwrap_or(0);
 
     let host_check = freeze::HostCheck { tsc_khz };
-    freeze::write_state(state_dir, mem_size_bytes, &host_check, &vcpu_state, &clock)
-        .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
+    freeze::write_state(
+        state_dir,
+        mem_size_bytes,
+        &host_check,
+        &vcpu_state,
+        &clock,
+        &irqchip,
+    )
+    .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
 
     eprintln!("cella: frozen");
 }
@@ -381,7 +501,283 @@ fn install_sigio_handler() {
     }
 }
 
+/// Print the contents of a frozen sidecar, then exit. The output shows
+/// the fields that control if a thawed guest can continue: the address of
+/// the next instruction, the halt state, and the timer and clock state.
+fn dump_state(dir: &PathBuf) -> ! {
+    let st = match freeze::read_state(dir) {
+        Ok(s) => s,
+        Err(e) => fatal(&format!("reading state from {dir:?}: {e:?}")),
+    };
+
+    println!("state dir:   {dir:?}");
+    println!("mem_size:    {} MiB", st.mem_size / (1024 * 1024));
+    println!("tsc_khz:     {}", st.tsc_khz);
+    println!();
+    println!(
+        "mp_state:    {} ({})",
+        st.vcpu.mp_state.mp_state,
+        match st.vcpu.mp_state.mp_state {
+            0 => "RUNNABLE",
+            3 => "HALTED -- the vCPU was in HLT, so it needs an interrupt to run again",
+            other => {
+                if other == 1 {
+                    "UNINITIALIZED"
+                } else {
+                    "other"
+                }
+            }
+        }
+    );
+    println!("rip:         {:#018x}", st.vcpu.regs.rip);
+    println!("rsp:         {:#018x}", st.vcpu.regs.rsp);
+    println!(
+        "rflags:      {:#x} (IF={})",
+        st.vcpu.regs.rflags,
+        (st.vcpu.regs.rflags >> 9) & 1
+    );
+    println!(
+        "cr0/cr3/cr4: {:#x} / {:#x} / {:#x}",
+        st.vcpu.sregs.cr0, st.vcpu.sregs.cr3, st.vcpu.sregs.cr4
+    );
+    println!("efer:        {:#x}", st.vcpu.sregs.efer);
+    println!();
+    // Decode the LAPIC timer registers. MSR_IA32_TSC_DEADLINE reads 0
+    // when the LVT timer is not in TSC-deadline mode. Therefore a value of
+    // 0 does not show that no timer is in operation. The timer mode and
+    // the two count registers show if a timer was in operation at the
+    // freeze.
+    let reg = |off: usize| -> u32 {
+        let b = &st.vcpu.lapic.regs;
+        u32::from_le_bytes([
+            b[off] as u8,
+            b[off + 1] as u8,
+            b[off + 2] as u8,
+            b[off + 3] as u8,
+        ])
+    };
+    let lvtt = reg(0x320);
+    let mode = match (lvtt >> 17) & 0x3 {
+        0 => "one-shot",
+        1 => "periodic",
+        2 => "TSC-deadline",
+        _ => "reserved",
+    };
+    println!("LAPIC timer:");
+    println!(
+        "  LVTT       {lvtt:#010x}  vector {} mode {mode} masked {}",
+        lvtt & 0xff,
+        (lvtt >> 16) & 1
+    );
+    println!("  TMICT      {:#010x}  (initial count)", reg(0x380));
+    println!(
+        "  TMCCT      {:#010x}  (current count -- 0 means nothing is counting down)",
+        reg(0x390)
+    );
+    println!("  TDCR       {:#010x}  (divide config)", reg(0x3e0));
+    println!(
+        "  SPIV       {:#010x}  (APIC software-enabled bit 8 = {})",
+        reg(0xf0),
+        (reg(0xf0) >> 8) & 1
+    );
+    // Decode the pvclock page of the guest. MSR_KVM_SYSTEM_TIME_NEW holds
+    // the guest physical address of the page in its upper bits, and bit 0
+    // enables the page. The page is in guest RAM, thus the freeze image
+    // contains it.
+    //
+    // The flags byte is the important field. Linux runs the clocksource
+    // watchdog against the TSC only when PVCLOCK_TSC_STABLE_BIT is not
+    // set. If KVM clears that bit at a thaw, the guest starts to compare
+    // the TSC against kvm-clock, and a small step then marks the TSC
+    // unstable.
+    let system_time_msr = st
+        .vcpu
+        .msrs
+        .iter()
+        .find(|(i, _)| *i == 0x4b56_4d01)
+        .map(|(_, d)| *d)
+        .unwrap_or(0);
+    println!();
+    println!("pvclock page (from MSR_KVM_SYSTEM_TIME_NEW):");
+    if system_time_msr & 1 == 0 {
+        println!("  the page is not enabled");
+    } else {
+        let gpa = system_time_msr & !1u64;
+        println!("  guest physical address: {gpa:#x}");
+        match std::fs::File::open(freeze::ram_path(dir)) {
+            Ok(mut f) => {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut buf = [0u8; 32];
+                if f.seek(SeekFrom::Start(gpa)).is_ok() && f.read_exact(&mut buf).is_ok() {
+                    let u32at = |o: usize| u32::from_le_bytes(buf[o..o + 4].try_into().unwrap());
+                    let u64at = |o: usize| u64::from_le_bytes(buf[o..o + 8].try_into().unwrap());
+                    let flags = buf[30];
+                    println!("  version:           {}", u32at(0));
+                    println!("  tsc_timestamp:     {:#x}", u64at(8));
+                    println!("  system_time:       {} ns", u64at(16));
+                    println!("  tsc_to_system_mul: {:#x}", u32at(24));
+                    println!("  tsc_shift:         {}", buf[28] as i8);
+                    println!("  flags:             {flags:#04x}");
+                    // State what the bit means, and do not state what the
+                    // guest does. The two are no longer the same: cella
+                    // passes tsc=reliable, thus the guest does not run the
+                    // watchdog even when this bit is clear.
+                    if flags & 1 != 0 {
+                        println!(
+                            "    TSC_STABLE    set. The host KVM declares the TSC of the \
+                             guest stable."
+                        );
+                    } else {
+                        println!(
+                            "    TSC_STABLE    not set. The host KVM does not declare the \
+                             TSC of the guest"
+                        );
+                        println!(
+                            "                  stable, because the TSC of the host is not \
+                             stable. cella"
+                        );
+                        println!(
+                            "                  cannot change this bit: KVM writes the page \
+                             at every"
+                        );
+                        println!(
+                            "                  update. Linux runs the clocksource watchdog \
+                             against the TSC"
+                        );
+                        println!(
+                            "                  when this bit is clear, unless the command \
+                             line contains"
+                        );
+                        println!(
+                            "                  tsc=reliable or tsc=nowatchdog. cella passes \
+                             tsc=reliable"
+                        );
+                        println!("                  (see src/config.rs).");
+                    }
+                    println!(
+                        "    GUEST_STOPPED {}",
+                        if flags & 2 != 0 { "set" } else { "not set" }
+                    );
+                } else {
+                    println!("  could not read the page from the RAM file");
+                }
+            }
+            Err(e) => println!("  could not open the RAM file: {e}"),
+        }
+    }
+
+    println!();
+    println!(
+        "kvmclock:    {} ns (flags {:#x})",
+        st.clock.clock, st.clock.flags
+    );
+    println!();
+    println!("MSRs:");
+    let tsc = st
+        .vcpu
+        .msrs
+        .iter()
+        .find(|(i, _)| *i == 0x10)
+        .map(|(_, d)| *d)
+        .unwrap_or(0);
+    for (index, data) in &st.vcpu.msrs {
+        let name = match *index {
+            0x0000_0010 => "MSR_IA32_TSC",
+            0xc000_0080 => "MSR_EFER",
+            0x0000_001b => "MSR_IA32_APICBASE",
+            0x0000_0174 => "MSR_IA32_SYSENTER_CS",
+            0x0000_0175 => "MSR_IA32_SYSENTER_ESP",
+            0x0000_0176 => "MSR_IA32_SYSENTER_EIP",
+            0xc000_0081 => "MSR_STAR",
+            0xc000_0082 => "MSR_LSTAR",
+            0xc000_0083 => "MSR_CSTAR",
+            0xc000_0084 => "MSR_SYSCALL_MASK",
+            0xc000_0102 => "MSR_KERNEL_GS_BASE",
+            0x4b56_4d00 => "MSR_KVM_WALL_CLOCK_NEW",
+            0x4b56_4d01 => "MSR_KVM_SYSTEM_TIME_NEW",
+            0x4b56_4d02 => "MSR_KVM_ASYNC_PF_EN",
+            0x4b56_4d03 => "MSR_KVM_STEAL_TIME",
+            0x4b56_4d04 => "MSR_KVM_PV_EOI_EN",
+            0x0000_0da0 => "MSR_IA32_XSS",
+            0x0000_06e0 => "MSR_IA32_TSC_DEADLINE",
+            _ => "(unknown)",
+        };
+        print!("  {index:#010x} {name:<24} {data:#018x}");
+        if *index == 0x0000_06e0 {
+            if *data == 0 {
+                print!("  <- ZERO: no timer was armed at freeze, so restoring it arms nothing");
+            } else if *data < tsc {
+                print!(
+                    "  <- already past the frozen TSC ({tsc:#x}): should fire immediately on thaw"
+                );
+            } else {
+                print!("  <- {} TSC ticks in the future", data - tsc);
+            }
+        }
+        println!();
+    }
+    std::process::exit(0);
+}
+
+/// Format a duration in nanoseconds as "<ns> ns (<s> s)". The value in
+/// seconds is the same number, exact, with nine decimals.
+fn fmt_ns(ns: i128) -> String {
+    let sign = if ns < 0 { "-" } else { "" };
+    let a = ns.unsigned_abs();
+    format!(
+        "{ns} ns ({sign}{}.{:09} s)",
+        a / 1_000_000_000,
+        a % 1_000_000_000
+    )
+}
+
 fn fatal(msg: &str) -> ! {
     eprintln!("cella: fatal: {msg}");
     std::process::exit(1);
+}
+
+fn prefault_ept(vcpu: &kvm_ioctls::VcpuFd, size: u64) {
+    use std::os::fd::AsRawFd;
+    #[repr(C)]
+    struct KvmPreFaultMemory {
+        gpa: u64,
+        size: u64,
+        flags: u64,
+        padding: [u64; 5],
+    }
+    // _IOWR(KVMIO=0xAE, 0xd5, 64-byte struct)
+    const KVM_PRE_FAULT_MEMORY: libc::c_ulong = 0xc040_aed5;
+    let t = std::time::Instant::now();
+    let mut arg = KvmPreFaultMemory {
+        gpa: 0,
+        size,
+        flags: 0,
+        padding: [0; 5],
+    };
+    // The ioctl can return success with part of the range done, and it
+    // updates gpa and size to the remainder. Loop until the remainder is
+    // zero, and stop only on an error other than EINTR or on no progress.
+    while arg.size > 0 {
+        let before = arg.size;
+        // SAFETY: arg is a valid kvm_pre_fault_memory and the fd is a vCPU.
+        let r = unsafe { libc::ioctl(vcpu.as_raw_fd(), KVM_PRE_FAULT_MEMORY, &mut arg) };
+        if r != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            eprintln!(
+                "cella: thaw timing: prefault(ept) failed at gpa {:#x}: {err}",
+                arg.gpa
+            );
+            return;
+        }
+        if arg.size == before {
+            break;
+        }
+    }
+    eprintln!(
+        "cella: thaw timing: prefault(ept) done in {}",
+        fmt_ns(t.elapsed().as_nanos() as i128)
+    );
 }

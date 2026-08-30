@@ -23,6 +23,14 @@
 # present -- rm just the one you want rebuilt.
 set -euo pipefail
 
+# Versions come from the Makefile (KERNEL_VERSION / BUSYBOX_VERSION,
+# overridable in .env), with the same defaults repeated here so the
+# script still works when run directly. Pinned rather than resolved from
+# kernel.org at build time: a floating version makes `make dist`
+# irreproducible and can move the kernel out from under a measurement.
+KERNEL_VERSION="${KERNEL_VERSION:-6.18.47}"
+BUSYBOX_VERSION="${BUSYBOX_VERSION:-1.37.0}"
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$HERE/dist"
 mkdir -p "$OUT"
@@ -36,7 +44,12 @@ if [ ! -f /run/.toolboxenv ]; then
     command -v toolbox &>/dev/null || { echo "cella: 'toolbox' not found -- run: make init" >&2; exit 1; }
     [ -f "$HERE/.toolbox" ] || { echo "cella: build toolbox not set up -- run: make init (or: make .toolbox)" >&2; exit 1; }
     echo "cella: entering the cella-build toolbox to build assets"
-    exec toolbox run -c cella-build "$HERE/scripts/build/assets.sh"
+    # `env VAR=...` rather than relying on inheritance: the re-exec goes
+    # through toolbox/podman, which does not carry this shell's
+    # environment into the container.
+    exec toolbox run -c cella-build env \
+        KERNEL_VERSION="$KERNEL_VERSION" BUSYBOX_VERSION="$BUSYBOX_VERSION" \
+        "$HERE/scripts/build/assets.sh"
 fi
 
 # --- from here on we're inside the toolbox container ---
@@ -45,7 +58,6 @@ fi
 if [ -f "$OUT/rootfs.ext4" ]; then
     echo "cella: $OUT/rootfs.ext4 already present, skipping"
 else
-    BUSYBOX_VERSION=1.37.0
     RBUILD="$HERE/target/rootfs-build"
     ROOTDIR="$RBUILD/root"
     SRC_DIR="$RBUILD/busybox-$BUSYBOX_VERSION"
@@ -110,9 +122,7 @@ fi
 KBUILD="$HERE/target/kernel-build"
 mkdir -p "$KBUILD"
 
-echo "cella: resolving the current longterm kernel version from kernel.org"
-VERSION="$(curl -fsSL https://www.kernel.org/releases.json |
-    python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(r["version"] for r in d["releases"] if r["moniker"]=="longterm"))')"
+VERSION="$KERNEL_VERSION"
 MAJOR="${VERSION%%.*}"
 SRC_DIR="$KBUILD/linux-$VERSION"
 TARBALL="$KBUILD/linux-$VERSION.tar.xz"
@@ -135,6 +145,16 @@ echo "cella: configuring (x86_64_defconfig + scripts/build/kernel-fragment.confi
 make x86_64_defconfig >/dev/null
 scripts/kconfig/merge_config.sh -m .config "$HERE/scripts/build/kernel-fragment.config" >/dev/null
 make olddefconfig >/dev/null
+
+# Verify the resolved config before spending four minutes compiling it.
+# kconfig overrules a fragment silently, so "the fragment says X" and
+# "the kernel we are about to build does X" are different claims -- and
+# the failure mode that matters (cutting CONFIG_TTY, hence the serial
+# console, which is the only channel out of the guest) produces a kernel
+# that boots and says nothing at all. Cheap here, expensive to diagnose
+# later. Runs in-place: we are already inside the toolbox, so the
+# script's own re-exec guard is a no-op.
+"$HERE/scripts/build/kernel-config-check.sh"
 
 echo "cella: building bzImage (-j$(nproc))"
 make -j"$(nproc)" bzImage
