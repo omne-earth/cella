@@ -20,7 +20,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
 
 .PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
-        init dist setup-tap \
+        init dist dist-nested setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate \
@@ -40,7 +40,7 @@ help: ## Show this help
 	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
-	grep -hE '^(init|dist|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(init|dist|dist-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Everything:"
 	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -171,6 +171,12 @@ $(DIST)/bzImage $(DIST)/rootfs.ext4: | .toolbox
 	$(SCRIPTS)/build/assets.sh
 
 dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
+
+$(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4: | .toolbox
+	$(LOG)
+	$(SCRIPTS)/build/assets-nested.sh
+
+dist-nested: dist build-static $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 ## Nested test assets: bzImage-nested (KVM host stack) + rootfs-nested.ext4 (static cella + canonical inner assets)
 
 kernel-config-check: ## Resolve kernel-fragment.config against defconfig and report any line kconfig silently overruled (seconds, no compile)
 	$(LOG)
