@@ -34,6 +34,16 @@ pub const SAVED_MSRS: &[u32] = &[
     0x4b56_4d02, // MSR_KVM_ASYNC_PF_EN
     0x4b56_4d03, // MSR_KVM_STEAL_TIME
     0x4b56_4d04, // MSR_KVM_PV_EOI_EN
+    // The supervisor xstate mask. XRSTORS takes a #GP fault when the
+    // XCOMP_BV of an xsave area holds a component that XCR0 | IA32_XSS
+    // does not enable. On a CPU with supervisor xstates (CET and others)
+    // the guest kernel sets XSS bits at boot, and the fpstate of every
+    // task holds those bits in XCOMP_BV. A thaw without this MSR gives
+    // XSS = 0, and the guest then panics in restore_fpregs_from_fpstate
+    // at its first context switch. Host-initiated reads and writes of
+    // this MSR are always permitted, thus this entry is safe on a CPU
+    // without supervisor xstates (the value is then 0).
+    0x0000_0da0, // MSR_IA32_XSS
     // The deadline of the TSC-deadline LAPIC timer. KVM_SET_LAPIC starts
     // the timer from apic->lapic_timer.tscdeadline. Only a WRMSR writes
     // that field. Therefore, if you do not restore this MSR, the thaw

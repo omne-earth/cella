@@ -698,6 +698,7 @@ fn dump_state(dir: &PathBuf) -> ! {
             0x4b56_4d02 => "MSR_KVM_ASYNC_PF_EN",
             0x4b56_4d03 => "MSR_KVM_STEAL_TIME",
             0x4b56_4d04 => "MSR_KVM_PV_EOI_EN",
+            0x0000_0da0 => "MSR_IA32_XSS",
             0x0000_06e0 => "MSR_IA32_TSC_DEADLINE",
             _ => "(unknown)",
         };

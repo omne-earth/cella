@@ -25,13 +25,14 @@ use crate::vcpu::{IrqChipState, VcpuState, SAVED_MSR_COUNT};
 const MAGIC: &[u8; 8] = b"MVMMFRZ1";
 // The version of the sidecar format. Version 2 added
 // MSR_IA32_TSC_DEADLINE to SAVED_MSRS. Version 3 added the irqchip and
-// PIT state. Version 4 added the xsave and xcrs blocks. Each of these
+// PIT state. Version 4 added the xsave and xcrs blocks. Version 5
+// added MSR_IA32_XSS to SAVED_MSRS. Each of these
 // changes moves all data that comes after it in the file. Therefore a
 // binary must not read a sidecar that has a different version.
 // read_state compares the version and refuses the file if it does not
 // agree. No sidecar files exist at an older version, but this check is
 // what makes that assumption safe.
-const FORMAT_VERSION: u32 = 4;
+const FORMAT_VERSION: u32 = 5;
 
 pub struct HostCheck {
     pub tsc_khz: u32,
