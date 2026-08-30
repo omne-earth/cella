@@ -173,6 +173,40 @@ tables on the first guest access. That work is below the reach of the
 VMM. It does not exist on bare metal. Bare metal is the reference for
 this gate.
 
+## Nested VMM
+
+On a nested machine, three layers run: L0 is the outer hypervisor, L1
+is the host that runs cella, and L2 is the guest. A thaw makes a new
+KVM VM in L1. The prefill fills the stage-2 tables of L1, and that
+removes ~21 ms of the excess. But L0 keeps its own combined mapping
+for L2, a shadow that L0 builds from the stage-2 tables of L1 and from
+its own tables. L0 builds that shadow on the first access of L2 to
+each page. The prefill cannot reach it: the L1 kernel performs the
+prefill as normal memory writes, and L0 sees those writes as L1
+activity, not as L2 accesses. The shadow of L0 stays cold.
+
+In the first heartbeat cycle after the thaw, each page that the guest
+touches therefore exits to L0 one time for the shadow fill. The exits
+occur while the guest runs. The kvmclock tracks host real time while
+the guest runs, thus the clock of the guest counts the stall: the
++2.5 ms to +4.3 ms remainder. The value is constant for each thaw
+(the working set is the same), it does not change with the length of
+the freeze, and no L1 ioctl can fill the structures of L0 in advance.
+
+```mermaid
+flowchart TD
+    L2["L2 guest touches a page"] --> Q1{"stage-2 entry in L1?"}
+    Q1 -->|"yes (prefill)"| Q2{"shadow entry in L0?"}
+    Q1 -->|no| F1["fault to L1<br/>(the prefill removes this, ~21 ms)"]
+    Q2 -->|yes| RUN["guest continues"]
+    Q2 -->|no| F0["exit to L0, shadow fill<br/>(+2.5 ms to +4.3 ms per thaw,<br/>below the reach of the VMM)"]
+    F0 --> RUN
+```
+
+On bare metal, no L0 exists. The prefilled stage-2 tables are the only
+translation layer, and the measurement confirms it: -0.128 ms, zero
+within the noise. Bare metal is therefore the reference for this gate.
+
 ## Reproduce
 
 ```
