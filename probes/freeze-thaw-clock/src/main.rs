@@ -80,6 +80,32 @@ fn frozen_real_secs() -> u64 {
 /// gap we're deliberately creating.
 const MAX_GUEST_DELTA_SECS: i64 = 3;
 
+/// Format a duration in nanoseconds as "<ns> ns (<s> s)". The value in
+/// seconds is the same number, exact, with nine decimals.
+fn fmt_ns(ns: i128) -> String {
+    let sign = if ns < 0 { "-" } else { "" };
+    let a = ns.unsigned_abs();
+    format!("{ns} ns ({sign}{}.{:09} s)", a / 1_000_000_000, a % 1_000_000_000)
+}
+
+/// The same as fmt_ns, and the sign is always written. Use it for a
+/// difference.
+fn fmt_ns_signed(ns: i128) -> String {
+    let sign = if ns < 0 { "-" } else { "+" };
+    let a = ns.unsigned_abs();
+    format!(
+        "{sign}{a} ns ({sign}{}.{:09} s)",
+        a / 1_000_000_000,
+        a % 1_000_000_000
+    )
+}
+
+/// fmt_ns for a value in seconds, as f64. The value is rounded to a
+/// whole number of nanoseconds first.
+fn fmt_secs(s: f64) -> String {
+    fmt_ns((s * 1e9).round() as i128)
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -174,6 +200,16 @@ fn wait_for_heartbeats(
         }
         std::thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// The host CLOCK_REALTIME in nanoseconds. Use it for an interval. The
+/// value in whole seconds below is for a comparison against the epoch
+/// field of a heartbeat, which has a resolution of 1 s.
+fn host_epoch_ns() -> i128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i128
 }
 
 fn host_epoch() -> i64 {
@@ -338,6 +374,7 @@ fn main() {
         }
     };
     let host_at_freeze = host_epoch();
+    let host_at_freeze_ns = host_epoch_ns();
     println!("step 1: booted. guest wall-clock = {guest_before}, host = {host_at_freeze}");
 
     // --- step 2: freeze ---
@@ -381,7 +418,10 @@ fn main() {
 
     // --- step 3: stay frozen for a real, known interval ---
     let frozen_secs = frozen_real_secs();
-    println!("step 3: staying frozen for {frozen_secs}s of real time...");
+    println!(
+        "step 3: staying frozen for {} of real time...",
+        fmt_ns(frozen_secs as i128 * 1_000_000_000)
+    );
     std::thread::sleep(Duration::from_secs(frozen_secs));
 
     // --- step 4: thaw, observe the first post-thaw heartbeat ---
@@ -410,8 +450,13 @@ fn main() {
         .expect("spawn cella (thaw)");
 
     let host_at_thaw = host_epoch();
+    let host_at_thaw_ns = host_epoch_ns();
     let deadline = Instant::now() + THAW_TIMEOUT;
     let guest_after = wait_for_heartbeats(&thaw_log, &mut child2, 1, deadline);
+    // The host time at which the probe saw the first heartbeat. The poll
+    // interval is 100 ms, thus a comparison against a guest timestamp
+    // has that resolution, not the resolution of the clocks.
+    let host_first_hb_ns = host_epoch_ns();
     let still_running = matches!(child2.try_wait(), Ok(None));
 
     // Measure the rate of the clock of the guest after the thaw. The
@@ -450,9 +495,9 @@ fn main() {
             let slope = num / den;
             println!("rate of the guest clock after the thaw:");
             println!(
-                "  {} samples over {:.0} s of host time",
+                "  {} samples over {} of host time",
                 samples.len(),
-                samples.last().unwrap().0
+                fmt_secs(samples.last().unwrap().0)
             );
             println!("  guest seconds per host second: {slope:.6}");
             println!("  error: {:+.0} ppm", (slope - 1.0) * 1e6);
@@ -518,6 +563,7 @@ fn main() {
     }
 
     let real_gap = host_at_thaw - host_at_freeze;
+    let real_gap_ns = host_at_thaw_ns - host_at_freeze_ns;
 
     // --- verdict ---
     let guest_after = match guest_after {
@@ -670,23 +716,26 @@ fn main() {
             .windows(2)
             .map(|w| w[1] as i128 - w[0] as i128)
             .collect();
-        println!("guest monotonic clock (/proc/timer_list), in nanoseconds:");
-        println!("  before the freeze: {last_before} ns");
-        println!("  after the thaw:    {after} ns");
-        println!("  across the freeze: {across} ns");
+        println!("guest monotonic clock (/proc/timer_list):");
+        println!("  before the freeze: {}", fmt_ns(last_before as i128));
+        println!("  after the thaw:    {}", fmt_ns(after as i128));
+        println!("  across the freeze: {}", fmt_ns(across));
         if !intervals.is_empty() {
             let mean = intervals.iter().sum::<i128>() / intervals.len() as i128;
             let max = *intervals.iter().max().unwrap();
             let min = *intervals.iter().min().unwrap();
             println!(
-                "  normal interval:   mean {mean} ns, min {min} ns, max {max} ns ({} samples)",
+                "  normal interval:   mean {}, min {}, max {} ({} samples)",
+                fmt_ns(mean),
+                fmt_ns(min),
+                fmt_ns(max),
                 intervals.len()
             );
-            println!("  difference:        {:+} ns", across - mean);
+            println!("  difference:        {}", fmt_ns_signed(across - mean));
             println!(
-                "  The spread of the normal interval is {} ns. A difference inside that \
+                "  The spread of the normal interval is {}. A difference inside that \
                  spread\n  is not a measurement of the freeze.",
-                max - min
+                fmt_ns(max - min)
             );
             mono_measure = Some((across, mean, max - min));
         }
@@ -697,11 +746,12 @@ fn main() {
     if let (Some(before), Some(after)) = (uptime_before, uptime_after) {
         let delta = after - before;
         println!("guest monotonic clock (/proc/uptime):");
-        println!("  before the freeze: {before:.2} s");
-        println!("  after the thaw:    {after:.2} s");
+        println!("  before the freeze: {}", fmt_secs(before));
+        println!("  after the thaw:    {}", fmt_secs(after));
         println!(
-            "  advance across a freeze of {real_gap} real seconds: {delta:.2} s",
-            real_gap = host_at_thaw - host_at_freeze
+            "  advance across a freeze of {}: {}",
+            fmt_ns(real_gap_ns),
+            fmt_secs(delta)
         );
         // Compare the interval that contains the freeze against a normal
         // interval of the same loop. The loop calls `sleep 1`, and it also
@@ -716,13 +766,15 @@ fn main() {
             let mean = pre.iter().sum::<f64>() / pre.len() as f64;
             let max = pre.iter().cloned().fold(f64::MIN, f64::max);
             println!(
-                "  normal interval of this loop before the freeze: mean {mean:.2} s, max \
-                 {max:.2} s ({} samples)",
+                "  normal interval of this loop before the freeze: mean {}, max \
+                 {} ({} samples)",
+                fmt_secs(mean),
+                fmt_secs(max),
                 pre.len()
             );
             println!(
-                "  the interval that contains the freeze is {:+.2} s against that mean",
-                delta - mean
+                "  the interval that contains the freeze is {} against that mean",
+                fmt_ns_signed(((delta - mean) * 1e9).round() as i128)
             );
         }
         if delta < 2.0 {
@@ -742,12 +794,38 @@ fn main() {
     let guest_delta = guest_after - guest_before;
     println!("step 4: thawed. first post-thaw guest wall-clock = {guest_after}, host = {host_at_thaw}");
     println!();
-    println!("  real time spent frozen (host):    {real_gap}s");
-    println!("  time the guest thinks passed:     {guest_delta}s");
     println!(
-        "  guest clock vs. host now:         {}s behind",
-        host_at_thaw - guest_after
+        "  real time spent frozen (host):    {}",
+        fmt_ns(real_gap_ns)
     );
+    // The monotonic clock of the guest has a resolution of 1 ns. The
+    // epoch field has a resolution of 1 s. Use the monotonic value.
+    match mono_measure {
+        Some((across, _, _)) => println!(
+            "  time the guest thinks passed:     {}",
+            fmt_ns(across)
+        ),
+        None => println!(
+            "  time the guest thinks passed:     {} (resolution 1 s)",
+            fmt_ns(guest_delta as i128 * 1_000_000_000)
+        ),
+    }
+    // The guest reports its CLOCK_REALTIME in nanoseconds (real_ns, see
+    // rootfs.sh). The comparison point is the observation of the first
+    // heartbeat, at the 100 ms poll of the probe.
+    match read_file(&thaw_log)
+        .lines()
+        .find_map(|l| parse_ns(l, "real_ns"))
+    {
+        Some(guest_real_ns) => println!(
+            "  guest clock vs. host now:         {} behind (resolution 100 ms, the poll)",
+            fmt_ns(host_first_hb_ns - guest_real_ns as i128)
+        ),
+        None => println!(
+            "  guest clock vs. host now:         {} behind (resolution 1 s)",
+            fmt_ns((host_at_thaw - guest_after) as i128 * 1_000_000_000)
+        ),
+    }
 
     if guest_delta.abs() <= MAX_GUEST_DELTA_SECS {
         // A pass needs the nanosecond measurement, and the interval that
@@ -768,20 +846,26 @@ fn main() {
         if diff.abs() <= spread {
             let _ = std::fs::remove_dir_all(&tmp);
             println!(
-                "\nPASS (FROZEN): the freeze took {} ns of real time. The monotonic \
-                 clock of the guest advanced {across} ns across it, {diff:+} ns \
+                "\nPASS (FROZEN): the freeze took {} of real time. The monotonic \
+                 clock of the guest advanced {} across it, {} \
                  against a normal heartbeat interval, inside the spread of the \
-                 normal intervals ({spread} ns) -- time is cryogenic, as designed.",
-                real_gap as i128 * 1_000_000_000,
+                 normal intervals ({}) -- time is cryogenic, as designed.",
+                fmt_ns(real_gap_ns),
+                fmt_ns(across),
+                fmt_ns_signed(diff),
+                fmt_ns(spread)
             );
         } else {
             println!(
-                "\nFAIL (LEAKED): the freeze took {} ns of real time. The monotonic \
-                 clock of the guest advanced {across} ns across it, {diff:+} ns \
+                "\nFAIL (LEAKED): the freeze took {} of real time. The monotonic \
+                 clock of the guest advanced {} across it, {} \
                  against a normal heartbeat interval, outside the spread of the \
-                 normal intervals ({spread} ns). That difference is time that \
+                 normal intervals ({}). That difference is time that \
                  entered the clock of the guest.",
-                real_gap as i128 * 1_000_000_000,
+                fmt_ns(real_gap_ns),
+                fmt_ns(across),
+                fmt_ns_signed(diff),
+                fmt_ns(spread)
             );
             eprintln!("(logs kept: {})", tmp.display());
             std::process::exit(1);
@@ -791,20 +875,25 @@ fn main() {
         // (KVM_SET_CLOCK effectively didn't take) from an arbitrary jump.
         let leaked_whole_gap = (guest_delta - real_gap).abs() <= MAX_GUEST_DELTA_SECS;
         println!(
-            "\nFAIL (LEAKED): guest clock advanced {guest_delta}s across a freeze that only \
-             {MAX_GUEST_DELTA_SECS}s of tolerance should allow."
+            "\nFAIL (LEAKED): guest clock advanced {} across a freeze that only \
+             {} of tolerance should allow.",
+            fmt_ns(guest_delta as i128 * 1_000_000_000),
+            fmt_ns(MAX_GUEST_DELTA_SECS as i128 * 1_000_000_000)
         );
         if leaked_whole_gap {
             println!(
-                "  The jump matches the real frozen interval ({real_gap}s) almost exactly: the \
+                "  The jump matches the real frozen interval ({}) almost exactly: the \
                  guest's clock tracked host real time straight through the freeze, i.e. the \
-                 restored kvmclock value did not take effect."
+                 restored kvmclock value did not take effect.",
+                fmt_ns(real_gap_ns)
             );
         } else {
             println!(
-                "  The jump ({guest_delta}s) does NOT match the real frozen interval \
-                 ({real_gap}s), so this is not a simple 'restore didn't take' -- the restored \
-                 kvmclock and the restored TSC are likely inconsistent with each other."
+                "  The jump ({}) does NOT match the real frozen interval \
+                 ({}), so this is not a simple 'restore didn't take' -- the restored \
+                 kvmclock and the restored TSC are likely inconsistent with each other.",
+                fmt_ns(guest_delta as i128 * 1_000_000_000),
+                fmt_ns(real_gap_ns)
             );
         }
         eprintln!("(logs kept: {})", tmp.display());
