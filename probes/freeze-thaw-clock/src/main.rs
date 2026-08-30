@@ -75,11 +75,6 @@ fn frozen_real_secs() -> u64 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(FROZEN_REAL_SECS_DEFAULT)
 }
-/// How much guest-perceived time we tolerate across the freeze: a
-/// couple of heartbeat ticks' worth of slop, not the multi-second real
-/// gap we're deliberately creating.
-const MAX_GUEST_DELTA_SECS: i64 = 3;
-
 /// Format a duration in nanoseconds as "<ns> ns (<s> s)". The value in
 /// seconds is the same number, exact, with nine decimals.
 fn fmt_ns(ns: i128) -> String {
@@ -861,72 +856,72 @@ fn main() {
         ),
     }
 
-    if guest_delta.abs() <= MAX_GUEST_DELTA_SECS {
-        // A pass needs the nanosecond measurement, and the interval that
-        // contains the freeze must equal a normal interval to within the
-        // 3-sigma prediction interval of the baseline. A larger
-        // difference is time that entered the clock of the guest.
-        let (across, mean, bound) = match mono_measure {
-            Some(m) => m,
-            None => {
-                eprintln!("(logs kept: {})", tmp.display());
-                fail(
-                    "no nanosecond monotonic data from the guest -- the 1 s \
-                     wall-clock comparison cannot verify a frozen clock",
-                );
-            }
-        };
-        let diff = across - mean;
-        if diff.abs() <= bound {
-            let _ = std::fs::remove_dir_all(&tmp);
-            println!(
-                "\nPASS (FROZEN): the freeze took {} of real time. The monotonic \
-                 clock of the guest advanced {} across it, {} \
-                 against a normal heartbeat interval, inside the 3-sigma \
-                 prediction interval (+/-{}) -- time is cryogenic, as designed.",
-                fmt_ns(real_gap_ns),
-                fmt_ns(across),
-                fmt_ns_signed(diff),
-                fmt_ns(bound)
-            );
-        } else {
-            println!(
-                "\nFAIL (LEAKED): the freeze took {} of real time. The monotonic \
-                 clock of the guest advanced {} across it, {} \
-                 against a normal heartbeat interval, outside the 3-sigma \
-                 prediction interval (+/-{}). That difference is time that \
-                 entered the clock of the guest.",
-                fmt_ns(real_gap_ns),
-                fmt_ns(across),
-                fmt_ns_signed(diff),
-                fmt_ns(bound)
-            );
+    // The verdict needs the nanosecond measurement. Without it, the 1 s
+    // wall-clock comparison cannot verify a frozen clock.
+    let (across, mean, bound) = match mono_measure {
+        Some(m) => m,
+        None => {
             eprintln!("(logs kept: {})", tmp.display());
-            std::process::exit(1);
-        }
-    } else {
-        // LEAKED. Distinguish "leaked exactly the frozen interval"
-        // (KVM_SET_CLOCK effectively didn't take) from an arbitrary jump.
-        let leaked_whole_gap = (guest_delta - real_gap).abs() <= MAX_GUEST_DELTA_SECS;
-        println!(
-            "\nFAIL (LEAKED): guest clock advanced {} across a freeze that only \
-             {} of tolerance should allow.",
-            fmt_ns(guest_delta as i128 * 1_000_000_000),
-            fmt_ns(MAX_GUEST_DELTA_SECS as i128 * 1_000_000_000)
-        );
-        if leaked_whole_gap {
-            println!(
-                "  The jump matches the real frozen interval ({}) almost exactly: the \
-                 guest's clock tracked host real time straight through the freeze, i.e. the \
-                 restored kvmclock value did not take effect.",
-                fmt_ns(real_gap_ns)
+            fail(
+                "no nanosecond monotonic data from the guest -- the 1 s \
+                 wall-clock comparison cannot verify a frozen clock",
             );
-        } else {
+        }
+    };
+
+    // The epoch delta and the monotonic measurement describe the same
+    // crossing. At a resolution of 1 s the two agree when
+    // |delta - across| <= 1 s. That bound is the quantization of the
+    // epoch, not a tuned tolerance. A disagreement means the wall-clock
+    // and the monotonic clock of the guest moved differently across the
+    // freeze, and that is a fault on its own.
+    let delta_ns = guest_delta as i128 * 1_000_000_000;
+    if (delta_ns - across).abs() > 1_000_000_000 {
+        println!(
+            "\nFAIL (INCONSISTENT): the wall-clock of the guest advanced {} \
+             across the freeze, and its monotonic clock advanced {}. The two \
+             must agree to within the 1 s resolution of the epoch. The two \
+             clocks of the guest moved differently across the freeze.",
+            fmt_ns(delta_ns),
+            fmt_ns(across)
+        );
+        eprintln!("(logs kept: {})", tmp.display());
+        std::process::exit(1);
+    }
+
+    let diff = across - mean;
+    if diff.abs() <= bound {
+        let _ = std::fs::remove_dir_all(&tmp);
+        println!(
+            "\nPASS (FROZEN): the freeze took {} of real time. The monotonic \
+             clock of the guest advanced {} across it, {} \
+             against a normal heartbeat interval, inside the 3-sigma \
+             prediction interval (+/-{}) -- time is cryogenic, as designed.",
+            fmt_ns(real_gap_ns),
+            fmt_ns(across),
+            fmt_ns_signed(diff),
+            fmt_ns(bound)
+        );
+    } else {
+        println!(
+            "\nFAIL (LEAKED): the freeze took {} of real time. The monotonic \
+             clock of the guest advanced {} across it, {} \
+             against a normal heartbeat interval, outside the 3-sigma \
+             prediction interval (+/-{}). That difference is time that \
+             entered the clock of the guest.",
+            fmt_ns(real_gap_ns),
+            fmt_ns(across),
+            fmt_ns_signed(diff),
+            fmt_ns(bound)
+        );
+        // Distinguish "leaked exactly the frozen interval" (KVM_SET_CLOCK
+        // did not take effect) from an arbitrary jump. The comparison
+        // bound is the same prediction interval.
+        if (diff - real_gap_ns).abs() <= bound {
             println!(
-                "  The jump ({}) does NOT match the real frozen interval \
-                 ({}), so this is not a simple 'restore didn't take' -- the restored \
-                 kvmclock and the restored TSC are likely inconsistent with each other.",
-                fmt_ns(guest_delta as i128 * 1_000_000_000),
+                "  The excess matches the real frozen interval ({}): the clock \
+                 of the guest tracked host real time straight through the \
+                 freeze, i.e. the restored kvmclock value did not take effect.",
                 fmt_ns(real_gap_ns)
             );
         }
