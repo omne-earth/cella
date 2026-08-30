@@ -696,6 +696,11 @@ fn main() {
     if complaints.is_empty() {
         println!("post-thaw kernel complaints: none");
     } else {
+        // A complaint is a verdict, not a note. A guest can keep the
+        // correct time and also report a fault about the thaw. The first
+        // error that this probe found was of this type: the clocksource
+        // watchdog marked the TSC unstable. The observation window is
+        // CELLA_POST_THAW_SECS; a window of 0 can miss a late complaint.
         println!(
             "post-thaw kernel complaints ({} lines) -- the guest resumed, but not cleanly:",
             complaints.len()
@@ -703,6 +708,8 @@ fn main() {
         for l in complaints.iter().take(8) {
             println!("  {l}");
         }
+        eprintln!("(logs kept: {})", tmp.display());
+        fail("the guest kernel complained after the thaw (see the lines above)");
     }
     println!();
 

@@ -165,6 +165,8 @@ step itself to microseconds.
 
 ```mermaid
 flowchart TD
+    A0["kernel complaint after the thaw?<br/>(watchdog, unstable, oops)"] -->|yes| F0["FAIL: the guest resumed,<br/>but not cleanly"]
+    A0 -->|no| A
     A["mono_ns data present?"] -->|no| F1["FAIL: cannot verify"]
     A -->|yes| B["|epoch delta - across| <= 1 s?<br/>(quantization of the epoch)"]
     B -->|no| F2["FAIL (INCONSISTENT):<br/>the two guest clocks disagree"]
@@ -179,6 +181,12 @@ epoch field. The prediction interval comes from the sample standard
 deviation s of the n baseline intervals. `make probe-wallclock` applies
 the same rule at boot: the drift tolerance is zero, and zero means that
 the guest epoch lies inside the host window from spawn to observation.
+
+The complaint gate runs first. Any watchdog, unstable, or oops line
+from the guest kernel after the thaw is a FAIL, before the clock
+verdict. `make probe-thaw-gate` runs the probe with a 30 s observation
+window, because `make smoke-thaw` runs it with a window of 0 s, and a
+window of 0 s can miss a late complaint.
 
 ## Results (2026-08-30)
 
@@ -295,4 +303,5 @@ make smoke-thaw                                   # full workflow + both probes
 make probe-freeze-thaw-clock                      # the crossing measurement
 CELLA_THAW_PREFAULT=off make probe-freeze-thaw-clock   # the cold thaw
 make probe-prefault-ept                           # explicit prefill variant
+make probe-thaw-gate                              # 30 s complaint watch after the thaw
 ```

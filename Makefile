@@ -23,7 +23,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
         init dist setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
-        probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept \
+        probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate \
         kernel-config-check
 
 help: ## Show this help
@@ -46,7 +46,7 @@ help: ## Show this help
 	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Probes: diagnostics, run by hand (smoke-thaw runs the freeze/thaw one):"
-	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept|probe-thaw-gate):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 
 # --- Build ------------------------------------------------------------
 
@@ -337,3 +337,7 @@ probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time i
 probe-prefault-ept: build dist ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
 	$(LOG)
 	CELLA_THAW_PREFAULT=ept $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
+
+probe-thaw-gate: build dist ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
+	$(LOG)
+	CELLA_POST_THAW_SECS=30 $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
