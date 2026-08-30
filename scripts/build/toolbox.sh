@@ -28,6 +28,7 @@ fi
 echo "cella: installing the kernel/rootfs build toolchain inside '$TOOLBOX'"
 toolbox run -c "$TOOLBOX" sudo dnf install -y \
     gcc make bc bison flex elfutils-libelf-devel openssl-devel \
-    perl-interpreter perl-generators xz bzip2 e2fsprogs glibc-static
+    perl-interpreter perl-generators xz bzip2 e2fsprogs glibc-static \
+    rust cargo
 
 echo "cella: '$TOOLBOX' ready"

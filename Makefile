@@ -18,7 +18,7 @@ KERNEL_VERSION ?= 6.18.47
 BUSYBOX_VERSION ?= 1.37.0
 export KERNEL_VERSION BUSYBOX_VERSION
 
-.PHONY: help build debug check lint fmt fmt-check \
+.PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
@@ -31,7 +31,7 @@ help: ## Show this help
 	echo "cella -- build, lint, and test targets"
 	echo ""
 	echo "Build:"
-	grep -hE '^(build|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(build|build-static|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -57,6 +57,10 @@ build: ## Release build (target/release/cella)
 debug: ## Debug build (target/debug/cella), faster to compile
 	$(LOG)
 	$(CARGO) build
+
+build-static: .toolbox ## Static cella for the nested rootfs, built inside the toolbox
+	$(LOG)
+	$(SCRIPTS)/build/static.sh
 
 check: ## cargo check, no codegen
 	$(LOG)
