@@ -222,6 +222,95 @@ fn allocate_tap() -> Result<String, String> {
         })
 }
 
+/// The subnet of one pool tap: tap<n> serves 192.168.<200+n>.0/24,
+/// the host at .1 and the guest at .2. A tap without a numeric
+/// suffix falls back to the configured defaults.
+fn tap_addresses(tap: &str) -> (String, String) {
+    if let Some(n) = tap.strip_prefix("tap").and_then(|s| s.parse::<u32>().ok()) {
+        let net = 200 + n;
+        if net <= 254 {
+            return (format!("192.168.{net}.2"), format!("192.168.{net}.1"));
+        }
+    }
+    (
+        crate::config::DEFAULT_GUEST_IP.to_string(),
+        crate::config::DEFAULT_HOST_IP.to_string(),
+    )
+}
+
+/// The privileged setup: provision a pool of persistent taps and the
+/// NAT, once. This is the one verb that needs root; everything else
+/// runs rootless, and create allocates from this pool (--net auto).
+pub fn setup_net(taps: u32) -> Result<(), String> {
+    // SAFETY: geteuid has no failure mode.
+    if unsafe { libc::geteuid() } != 0 {
+        return Err(
+            "setup net creates TAP devices (CAP_NET_ADMIN) -- run: sudo cella setup net".into(),
+        );
+    }
+    let owner = std::env::var("SUDO_USER").unwrap_or_else(|_| "root".to_string());
+    let ip = |args: &[&str]| -> Result<(), String> {
+        let out = std::process::Command::new("ip")
+            .args(args)
+            .output()
+            .map_err(|e| format!("running ip: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "ip {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(())
+    };
+    for n in 0..taps {
+        let tap = format!("tap{n}");
+        if std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
+            println!("cella: {tap} already exists, leaving it alone");
+            continue;
+        }
+        let (_, host) = tap_addresses(&tap);
+        ip(&["tuntap", "add", "mode", "tap", "name", &tap, "user", &owner])?;
+        ip(&["addr", "add", &format!("{host}/24"), "dev", &tap])?;
+        ip(&["link", "set", &tap, "up"])?;
+        println!("cella: created {tap} owned by {owner}, host side {host}/24");
+    }
+    // NAT once: one table, one masquerade rule on the default egress.
+    let egress = std::process::Command::new("sh")
+        .args([
+            "-c",
+            "ip route show default | awk '/default/ {print $5; exit}'",
+        ])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if egress.is_empty() {
+        println!("cella: no default route found, skipping the NAT");
+        return Ok(());
+    }
+    let nft = |cmd: &str| {
+        let _ = std::process::Command::new("sh").args(["-c", cmd]).status();
+    };
+    nft("nft list table inet cella_nat >/dev/null 2>&1 || nft add table inet cella_nat");
+    nft("nft list chain inet cella_nat postrouting >/dev/null 2>&1 || nft add chain inet cella_nat postrouting '{ type nat hook postrouting priority 100; }'");
+    let have = std::process::Command::new("sh")
+        .args([
+            "-c",
+            "nft list chain inet cella_nat postrouting 2>/dev/null | grep -c masquerade",
+        ])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if have == "0" {
+        nft(&format!(
+            "nft add rule inet cella_nat postrouting oifname \"{egress}\" masquerade"
+        ));
+    }
+    println!("cella: NAT via {egress} (nft table inet cella_nat)");
+    Ok(())
+}
+
 /// Stage a machine: verify the goldens, resolve the network claim,
 /// copy the rootfs flavor to the machine's own disk, and write the
 /// manifest. No process starts. The manifest records the resolved tap
@@ -297,58 +386,23 @@ pub fn destroy(name: &str) -> Result<(), String> {
     fs::remove_dir_all(&dir).map_err(|e| format!("removing {}: {e}", dir.display()))
 }
 
-/// The build verb, first step: the golden artifacts come from a copy
-/// of the repository's dist/, which stays the proof path. The native
-/// build (Rust-orchestrated toolchain) is a later migration step; see
-/// docs/LIFECYCLE.md.
+/// The build verb: every golden artifact builds natively (see
+/// src/build.rs and docs/LIFECYCLE.md). The flavor decides the
+/// recipe; an unknown pair is an error, not a fallback.
 pub fn build(axis: &str, flavor: &str) -> Result<(), String> {
-    // The canonical kernel builds natively; the remaining flavors
-    // seed from dist/ until their migration step lands.
-    if (axis, flavor) == ("kernel", "canonical") {
-        return crate::build::kernel_canonical(&kernel_path(flavor));
-    }
-    if (axis, flavor) == ("rootfs", "canonical") {
-        return crate::build::rootfs_canonical(&rootfs_path(flavor));
-    }
-    if (axis, flavor) == ("rootfs", "cella") {
-        return crate::build::rootfs_cella(&rootfs_path(flavor), &rootfs_path("canonical"));
-    }
-    if (axis, flavor) == ("kernel", "nested") {
-        return crate::build::kernel_nested(&kernel_path(flavor));
-    }
-    if (axis, flavor) == ("rootfs", "nested") {
-        return crate::build::rootfs_nested(&rootfs_path(flavor));
-    }
-    if (axis, flavor) == ("rootfs", "inception") {
-        return crate::build::rootfs_inception(&rootfs_path(flavor));
-    }
-    let (dest, src) = match (axis, flavor) {
-        ("kernel", "canonical") => (kernel_path(flavor), "dist/bzImage"),
-        ("kernel", "nested") => (kernel_path(flavor), "dist/bzImage-nested"),
-        ("rootfs", "canonical") => (rootfs_path(flavor), "dist/rootfs.ext4"),
-        ("rootfs", "cella") => (rootfs_path(flavor), "dist/rootfs-cella.ext4"),
-        ("rootfs", "nested") => (rootfs_path(flavor), "dist/rootfs-nested.ext4"),
-        ("rootfs", "inception") => (rootfs_path(flavor), "dist/rootfs-inception.ext4"),
-        _ => {
-            return Err(format!(
-                "unknown build target {axis:?} {flavor:?} -- axes: kernel, rootfs; see docs/LIFECYCLE.md"
-            ))
+    match (axis, flavor) {
+        ("kernel", "canonical") => crate::build::kernel_canonical(&kernel_path(flavor)),
+        ("kernel", "nested") => crate::build::kernel_nested(&kernel_path(flavor)),
+        ("rootfs", "canonical") => crate::build::rootfs_canonical(&rootfs_path(flavor)),
+        ("rootfs", "cella") => {
+            crate::build::rootfs_cella(&rootfs_path(flavor), &rootfs_path("canonical"))
         }
-    };
-    let src = PathBuf::from(src);
-    if !src.is_file() {
-        return Err(format!(
-            "{} missing -- build the proof artifacts first: make dist (or make dist-nested)",
-            src.display()
-        ));
+        ("rootfs", "nested") => crate::build::rootfs_nested(&rootfs_path(flavor)),
+        ("rootfs", "inception") => crate::build::rootfs_inception(&rootfs_path(flavor)),
+        _ => Err(format!(
+            "unknown build target {axis:?} {flavor:?} -- axes: kernel, rootfs; see docs/LIFECYCLE.md"
+        )),
     }
-    let dir = dest.parent().expect("golden path has a parent");
-    fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-    let tmp = dest.with_extension("tmp");
-    fs::copy(&src, &tmp).map_err(|e| format!("copying {}: {e}", src.display()))?;
-    fs::rename(&tmp, &dest).map_err(|e| format!("renaming: {e}"))?;
-    println!("cella: golden {axis} {flavor} -> {}", dest.display());
-    Ok(())
 }
 
 #[cfg(test)]
@@ -517,8 +571,8 @@ fn cmdline_for(m: &Manifest) -> String {
              virtio_mmio.device=4K@0xd0001000:6 \
              ip={}::{}:255.255.255.0::eth0:off",
             m.root,
-            config::DEFAULT_GUEST_IP,
-            config::DEFAULT_HOST_IP
+            tap_addresses(&m.net).0,
+            tap_addresses(&m.net).1
         )
     }
 }

@@ -114,7 +114,6 @@ fn assert_config(config: &Path, symbols: &[&str]) -> Result<(), String> {
 
 /// The canonical kernel, natively: download the pinned source, merge
 /// the fragment onto the defconfig, assert the result, compile, and
-/// place the golden. The output also lands in dist/ while the
 /// migration lasts: the probes still pin there.
 pub fn kernel_canonical(golden: &Path) -> Result<(), String> {
     let root = repo_root();
@@ -176,11 +175,6 @@ pub fn kernel_canonical(golden: &Path) -> Result<(), String> {
     let tmp = golden.with_extension("tmp");
     fs::copy(&built, &tmp).map_err(|e| format!("copying the kernel: {e}"))?;
     fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
-    // The proofs still pin against dist/ during the migration.
-    let dist = root.join("dist/bzImage");
-    if dist.parent().unwrap().is_dir() {
-        let _ = fs::copy(&built, &dist);
-    }
     println!("cella: golden kernel canonical -> {}", golden.display());
     Ok(())
 }
@@ -319,10 +313,6 @@ pub fn rootfs_canonical(golden: &Path) -> Result<(), String> {
     let tmp = golden.with_extension("tmp");
     fs::copy(&img, &tmp).map_err(|e| e.to_string())?;
     fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
-    let dist = root.join("dist/rootfs.ext4");
-    if dist.parent().unwrap().is_dir() {
-        let _ = fs::copy(&img, &dist);
-    }
     println!("cella: golden rootfs canonical -> {}", golden.display());
     Ok(())
 }
@@ -414,10 +404,6 @@ pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String
     let tmp = golden.with_extension("tmp");
     fs::copy(&img, &tmp).map_err(|e| e.to_string())?;
     fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
-    let dist = root.join("dist/rootfs-cella.ext4");
-    if dist.parent().unwrap().is_dir() {
-        let _ = fs::copy(&img, &dist);
-    }
     println!("cella: golden rootfs cella -> {}", golden.display());
     Ok(())
 }
@@ -489,10 +475,6 @@ pub fn kernel_nested(golden: &Path) -> Result<(), String> {
     let tmp = golden.with_extension("tmp");
     fs::copy(&built, &tmp).map_err(|e| e.to_string())?;
     fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
-    let dist = root.join("dist/bzImage-nested");
-    if dist.parent().unwrap().is_dir() {
-        let _ = fs::copy(&built, &dist);
-    }
     println!("cella: golden kernel nested -> {}", golden.display());
     Ok(())
 }
@@ -551,7 +533,6 @@ fn rootfs_nested_family(
     golden: &Path,
     init_name: &str,
     with_probe: bool,
-    dist_name: &str,
     tree_name: &str,
 ) -> Result<(), String> {
     let root = repo_root();
@@ -634,30 +615,14 @@ fn rootfs_nested_family(
     let tmp = golden.with_extension("tmp");
     fs::copy(&img, &tmp).map_err(|e| e.to_string())?;
     fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
-    let dist = root.join("dist").join(dist_name);
-    if dist.parent().unwrap().is_dir() {
-        let _ = fs::copy(&img, &dist);
-    }
     println!("cella: golden rootfs {tree_name} -> {}", golden.display());
     Ok(())
 }
 
 pub fn rootfs_nested(golden: &Path) -> Result<(), String> {
-    rootfs_nested_family(
-        golden,
-        "rootfs-nested.sh",
-        false,
-        "rootfs-nested.ext4",
-        "root-nested",
-    )
+    rootfs_nested_family(golden, "rootfs-nested.sh", false, "root-nested")
 }
 
 pub fn rootfs_inception(golden: &Path) -> Result<(), String> {
-    rootfs_nested_family(
-        golden,
-        "rootfs-inception.sh",
-        true,
-        "rootfs-inception.ext4",
-        "root-inception",
-    )
+    rootfs_nested_family(golden, "rootfs-inception.sh", true, "root-inception")
 }

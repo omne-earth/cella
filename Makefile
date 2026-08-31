@@ -6,12 +6,12 @@ LOG = @mkdir -p $(LOGDIR); CELLA_LOG_FILE="$(LOGDIR)/$(subst /,_,$@)-$$(date +%Y
 
 CARGO ?= cargo
 SCRIPTS := scripts
-DIST := dist
 
 # Local overrides, not committed -- copy .env.example to .env to change these.
 -include .env
 CELLA_TAP ?= tap0
 CELLA_TAP_CIDR ?= 192.168.200.1/24
+TAPS ?= 4
 
 # https://www.kernel.org/releases.json.
 KERNEL_VERSION ?= 7.2.2
@@ -21,11 +21,11 @@ BUSYBOX_VERSION ?= 1.37.0
 GUEST_BASH_VERSION ?= 5.3
 export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 
-.PHONY: help build build-static install debug check lint fmt fmt-check \
+.PHONY: help build install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
-        init dist dist-nested golden golden-nested setup-tap \
+        init golden golden-nested setup-tap \
         boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean test-jail test-seccomp test-machine \
-        clean distclean distclean-kernel distclean-rootfs logs-clean lines \
+        clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
 
@@ -34,7 +34,7 @@ help: ## Show this help
 	echo "cella -- build, lint, and test targets"
 	echo ""
 	echo "Build:"
-	grep -hE '^(build|build-static|install|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(build|install|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -46,10 +46,10 @@ help: ## Show this help
 	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
-	grep -hE '^(init|dist|dist-nested|golden|golden-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(init|golden|golden-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Everything:"
-	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(test-all|clean|distclean|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Probes: diagnostics, run by hand (smoke-thaw runs the freeze/thaw one):"
 	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept|probe-thaw-gate|probe-inception):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -68,18 +68,6 @@ build: $(CELLA_DEV) ## Release build (target/release/cella)
 debug: ## Debug build (target/debug/cella), faster to compile
 	$(LOG)
 	$(CARGO) build
-
-# Sentinel with real input dependencies: the static binaries rebuild
-# when a source file changes, and a stale binary can no longer ride
-# into a rootfs image unnoticed.
-.static: $(shell find src -name '*.rs') Cargo.toml Cargo.lock \
-         probes/freeze-thaw-clock/src/main.rs probes/freeze-thaw-clock/Cargo.toml \
-         $(SCRIPTS)/build/static.sh | .toolbox
-	$(LOG)
-	$(SCRIPTS)/build/static.sh
-	touch .static
-
-build-static: .static ## Static cella + probe for the nested rootfs, built inside the toolbox (mtime-tracked via .static)
 
 install: ## Host deps, toolbox prerequisites, and the cella binary to ~/.local/bin (scripts/setup/install.sh)
 	$(LOG)
@@ -151,11 +139,6 @@ test: check lint unit-test integration-test test-jail test-seccomp test-machine 
 # CREATE_FLAGS feeds cella create on the first boot.
 VM ?= vm1
 CREATE_FLAGS ?=
-
-$(DIST)/rootfs-cella.ext4: $(SCRIPTS)/build/rootfs-cella.sh $(SCRIPTS)/build/assets-cella.sh $(DIST)/rootfs.ext4 | .toolbox
-	$(LOG)
-	rm -f $@
-	$(SCRIPTS)/build/assets-cella.sh
 
 boot: $(CELLA_DEV) ## Create (first time) and run the machine $(VM) -- or thaw it when frozen
 	$(LOG)
@@ -252,45 +235,13 @@ smoke-clean: ## Kill any stray cella process left running by an interrupted smok
 	$(SCRIPTS)/build/toolbox.sh
 	touch .toolbox
 
-init: ## One-time host setup (Fedora): installs runtime deps, provisions the build toolbox, creates tap0, builds dist, checks /dev/kvm (needs sudo)
+init: ## One-time host setup (Fedora): deps, toolbox, tap0, and every golden (needs sudo)
 	$(LOG)
 	$(SCRIPTS)/setup/install.sh
 	$(MAKE) .toolbox
 	$(MAKE) setup-tap
-	$(MAKE) dist
-
-# Each artifact names its real inputs. A change to a fragment or an
-# init script makes the artifact stale, and the recipe removes the one
-# stale file before the build script runs: the script rebuilds what is
-# missing and skips the rest.
-$(DIST)/bzImage: $(SCRIPTS)/build/kernel-fragment.config $(SCRIPTS)/build/kernel-config-check.sh $(SCRIPTS)/build/assets.sh | .toolbox
-	$(LOG)
-	rm -f $@
-	$(SCRIPTS)/build/assets.sh
-
-$(DIST)/rootfs.ext4: $(SCRIPTS)/build/rootfs.sh $(SCRIPTS)/build/busybox-fragment.config $(SCRIPTS)/build/assets.sh | .toolbox
-	$(LOG)
-	rm -f $@
-	$(SCRIPTS)/build/assets.sh
-
-dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
-
-$(DIST)/bzImage-nested: $(SCRIPTS)/build/kernel-fragment.config $(SCRIPTS)/build/kernel-fragment-nested.config $(SCRIPTS)/build/assets-nested.sh | .toolbox
-	$(LOG)
-	rm -f $@
-	$(SCRIPTS)/build/assets-nested.sh
-
-$(DIST)/rootfs-nested.ext4: .static $(SCRIPTS)/build/rootfs-nested.sh $(SCRIPTS)/build/assets-nested.sh $(DIST)/bzImage $(DIST)/rootfs.ext4 | .toolbox
-	$(LOG)
-	rm -f $@
-	$(SCRIPTS)/build/assets-nested.sh
-
-$(DIST)/rootfs-inception.ext4: .static $(SCRIPTS)/build/rootfs-nested.sh $(SCRIPTS)/build/rootfs-inception.sh $(SCRIPTS)/build/assets-nested.sh $(DIST)/bzImage $(DIST)/rootfs.ext4 | .toolbox
-	$(LOG)
-	rm -f $@
-	$(SCRIPTS)/build/assets-nested.sh
-
-dist-nested: dist $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 $(DIST)/rootfs-inception.ext4 ## Nested test assets: bzImage-nested (KVM host stack), rootfs-nested.ext4 (static cella + canonical inner assets), rootfs-inception.ext4 (+ the static probe)
+	$(MAKE) golden
+	$(MAKE) golden-nested
 
 golden: build ## Build the base goldens natively: kernel canonical, rootfs canonical, rootfs cella
 	$(LOG)
@@ -308,9 +259,9 @@ kernel-config-check: ## Resolve kernel-fragment.config against defconfig and rep
 	$(LOG)
 	$(SCRIPTS)/build/kernel-config-check.sh
 
-setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once (name/CIDR from .env, see .env.example)
+setup-tap: build ## Provision the tap pool + NAT via the root verb (TAPS controls the pool size)
 	$(LOG)
-	sudo $(SCRIPTS)/setup/tap.sh $(CELLA_TAP) $(CELLA_TAP_CIDR)
+	sudo $(CELLA_DEV) setup net --taps $(TAPS)
 
 # --- Everything -----------------------------------------------------
 
@@ -347,19 +298,6 @@ clean: ## cargo clean
 
 distclean: clean ## clean + remove built dist/ assets
 	$(LOG)
-	rm -rf $(DIST)
-
-distclean-rootfs: ## Remove just dist/rootfs.ext4, so the next `make dist` rebuilds the rootfs (for a rootfs.sh change)
-	$(LOG)
-	# The busybox build in target/rootfs-build survives, thus the rebuild
-	# only assembles the image.
-	rm -f $(DIST)/rootfs.ext4
-	echo "cella: removed $(DIST)/rootfs.ext4 -- next 'make dist' rebuilds the rootfs"
-
-distclean-kernel: ## Remove just dist/bzImage, so the next `make dist` rebuilds the kernel (for a kernel-fragment.config change)
-	$(LOG)
-	rm -f $(DIST)/bzImage
-	echo "cella: removed $(DIST)/bzImage -- next 'make dist' rebuilds the kernel"
 
 # --- Probes ---------------------------------------------------------
 #
@@ -435,11 +373,11 @@ probe-sregs: ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in 
 	$(LOG)
 	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/sregs/Cargo.toml
 
-probe-wallclock: build dist ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see probes/wallclock/src/main.rs)
+probe-wallclock: build golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see probes/wallclock/src/main.rs)
 	$(LOG)
 	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/wallclock/Cargo.toml
 
-probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see probes/freeze-thaw-clock/src/main.rs)
+probe-freeze-thaw-clock: build golden ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see probes/freeze-thaw-clock/src/main.rs)
 	$(LOG)
 	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/freeze-thaw-clock/Cargo.toml
 
@@ -472,15 +410,15 @@ probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time i
 # - The probe measures wake-up lateness after the thaw, not a clock step.
 #   A clock step smaller than the remaining sleep does not show in the
 #   crossing interval, because the wake-up is scheduled in the same clock.
-probe-prefault-ept: build dist ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
+probe-prefault-ept: build golden ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
 	$(LOG)
 	CELLA_THAW_PREFAULT=ept $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
 
-# Deliberately not dist-nested: see smoke-nested-boot.
+# Deliberately not golden-nested: see smoke-nested-boot.
 probe-inception: build ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
 	$(LOG)
 	$(SCRIPTS)/test/inception.sh
 
-probe-thaw-gate: build dist ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
+probe-thaw-gate: build golden ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
 	$(LOG)
 	CELLA_POST_THAW_SECS=30 $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
