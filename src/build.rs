@@ -184,3 +184,143 @@ pub fn kernel_canonical(golden: &Path) -> Result<(), String> {
     println!("cella: golden kernel canonical -> {}", golden.display());
     Ok(())
 }
+
+pub const BUSYBOX_VERSION: &str = "1.37.0";
+
+/// Run a toolbox command with silenced stdout and a closed stdin: the
+/// kconfig steps prompt on a terminal and print pages otherwise.
+fn run_in_toolbox_quiet(what: &str, cwd: &Path, args: &[&str]) -> Result<(), String> {
+    let mut full: Vec<&str> = vec!["run", "-c", "cella-build"];
+    full.extend_from_slice(args);
+    let status = Command::new("toolbox")
+        .args(&full)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("{what}: spawning toolbox: {e}"))?;
+    if !status.success() {
+        return Err(format!("{what}: failed ({status})"));
+    }
+    Ok(())
+}
+
+/// Apply a kconfig fragment the way busybox needs it: its oldconfig
+/// keeps the first definition of a symbol, thus every symbol that the
+/// fragment overrides leaves the base config first, and the fragment
+/// appends after.
+fn apply_busybox_fragment(config: &Path, fragment: &Path) -> Result<(), String> {
+    let frag = fs::read_to_string(fragment).map_err(|e| e.to_string())?;
+    let symbols: Vec<String> = frag
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            if let Some(rest) = l.strip_prefix("# CONFIG_") {
+                rest.split(' ').next().map(|s| format!("CONFIG_{s}"))
+            } else if l.starts_with("CONFIG_") {
+                l.split('=').next().map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let base = fs::read_to_string(config).map_err(|e| e.to_string())?;
+    let kept: Vec<&str> = base
+        .lines()
+        .filter(|l| {
+            !symbols
+                .iter()
+                .any(|sym| *l == format!("# {sym} is not set") || l.starts_with(&format!("{sym}=")))
+        })
+        .collect();
+    fs::write(config, format!("{}\n{frag}", kept.join("\n"))).map_err(|e| e.to_string())
+}
+
+/// The canonical rootfs, natively: a static busybox from pinned
+/// source, the heartbeat init, hardlinked applets, one ext4 image.
+pub fn rootfs_canonical(golden: &Path) -> Result<(), String> {
+    let root = repo_root();
+    let init = root.join("scripts/build/rootfs.sh");
+    let fragment = root.join("scripts/build/busybox-fragment.config");
+    for f in [&init, &fragment] {
+        if !f.is_file() {
+            return Err(format!(
+                "{} missing -- run the build from the repository checkout",
+                f.display()
+            ));
+        }
+    }
+    let rbuild = root.join("target/rootfs-build");
+    let src = rbuild.join(format!("busybox-{BUSYBOX_VERSION}"));
+    fetch_and_extract(
+        "busybox",
+        &format!("https://busybox.net/downloads/busybox-{BUSYBOX_VERSION}.tar.bz2"),
+        &rbuild.join(format!("busybox-{BUSYBOX_VERSION}.tar.bz2")),
+        &src,
+        &rbuild,
+    )?;
+
+    println!("cella: busybox: configuring (defconfig + fragment)");
+    run_in_toolbox_quiet("busybox defconfig", &src, &["make", "defconfig"])?;
+    apply_busybox_fragment(&src.join(".config"), &fragment)?;
+    run_in_toolbox_quiet("busybox oldconfig", &src, &["make", "oldconfig"])?;
+    println!("cella: busybox: building");
+    let jobs = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .to_string();
+    run_in_toolbox_quiet("busybox build", &src, &["make", "-j", &jobs, "busybox"])?;
+
+    println!("cella: rootfs: assembling");
+    let rootdir = rbuild.join("root");
+    let _ = fs::remove_dir_all(&rootdir);
+    for d in ["bin", "sbin", "proc", "sys", "dev"] {
+        fs::create_dir_all(rootdir.join(d)).map_err(|e| e.to_string())?;
+    }
+    fs::copy(src.join("busybox"), rootdir.join("bin/busybox")).map_err(|e| e.to_string())?;
+    // Hardlinks, not symlinks: busybox --install writes symlink targets
+    // as the absolute invocation path, which does not exist inside the
+    // guest. The built busybox is a static x86_64 binary, thus it
+    // installs its own applets right here.
+    run(
+        "busybox install",
+        rootdir.join("bin/busybox").to_str().unwrap(),
+        &["--install", rootdir.join("bin").to_str().unwrap()],
+        None,
+    )?;
+    fs::copy(&init, rootdir.join("sbin/init")).map_err(|e| e.to_string())?;
+    let mut perm = fs::metadata(rootdir.join("sbin/init"))
+        .map_err(|e| e.to_string())?
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perm, 0o755);
+    fs::set_permissions(rootdir.join("sbin/init"), perm).map_err(|e| e.to_string())?;
+
+    let img = rbuild.join("rootfs.ext4");
+    let _ = fs::remove_file(&img);
+    let f = fs::File::create(&img).map_err(|e| e.to_string())?;
+    f.set_len(16 * 1024 * 1024).map_err(|e| e.to_string())?;
+    drop(f);
+    run_in_toolbox_quiet(
+        "mkfs",
+        &rbuild,
+        &[
+            "mkfs.ext4",
+            "-q",
+            "-F",
+            "-d",
+            rootdir.to_str().unwrap(),
+            img.to_str().unwrap(),
+        ],
+    )?;
+
+    fs::create_dir_all(golden.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = golden.with_extension("tmp");
+    fs::copy(&img, &tmp).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
+    let dist = root.join("dist/rootfs.ext4");
+    if dist.parent().unwrap().is_dir() {
+        let _ = fs::copy(&img, &dist);
+    }
+    println!("cella: golden rootfs canonical -> {}", golden.display());
+    Ok(())
+}

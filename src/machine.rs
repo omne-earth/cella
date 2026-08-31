@@ -307,6 +307,9 @@ pub fn build(axis: &str, flavor: &str) -> Result<(), String> {
     if (axis, flavor) == ("kernel", "canonical") {
         return crate::build::kernel_canonical(&kernel_path(flavor));
     }
+    if (axis, flavor) == ("rootfs", "canonical") {
+        return crate::build::rootfs_canonical(&rootfs_path(flavor));
+    }
     let (dest, src) = match (axis, flavor) {
         ("kernel", "canonical") => (kernel_path(flavor), "dist/bzImage"),
         ("kernel", "nested") => (kernel_path(flavor), "dist/bzImage-nested"),
