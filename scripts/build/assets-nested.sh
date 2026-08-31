@@ -16,8 +16,8 @@ KERNEL_VERSION="${KERNEL_VERSION:-7.2.2}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$HERE/dist"
 
-if [ -f "$OUT/bzImage-nested" ] && [ -f "$OUT/rootfs-nested.ext4" ]; then
-    echo "cella: $OUT/{bzImage-nested,rootfs-nested.ext4} already present, skipping"
+if [ -f "$OUT/bzImage-nested" ] && [ -f "$OUT/rootfs-nested.ext4" ] && [ -f "$OUT/rootfs-inception.ext4" ]; then
+    echo "cella: nested and inception artifacts already present, skipping"
     exit 0
 fi
 
@@ -86,3 +86,20 @@ dd if=/dev/zero of="$IMG" bs=1M count=64 status=none
 mkfs.ext4 -q -F -d "$NROOT" "$IMG"
 cp "$IMG" "$OUT/rootfs-nested.ext4"
 echo "cella: nested rootfs built -> $OUT/rootfs-nested.ext4"
+
+# === inception rootfs ===
+# The nested root plus the static probe, with the inception init. The
+# probe freezes and thaws the inner guest and prints the verdict.
+PROBE_BIN="$HERE/probes/freeze-thaw-clock/target/x86_64-unknown-linux-gnu/release/freeze-thaw-clock-probe"
+[ -f "$PROBE_BIN" ] || { echo "cella: $PROBE_BIN missing -- run: make build-static" >&2; exit 1; }
+IROOT="$HERE/target/rootfs-build/root-inception"
+rm -rf "$IROOT"
+cp -a "$NROOT" "$IROOT"
+install -m 0755 "$PROBE_BIN" "$IROOT/opt/freeze-thaw-clock-probe"
+install -m 0755 "$HERE/scripts/build/rootfs-inception.sh" "$IROOT/sbin/init"
+IIMG="$HERE/target/rootfs-build/rootfs-inception.ext4"
+rm -f "$IIMG"
+dd if=/dev/zero of="$IIMG" bs=1M count=64 status=none
+mkfs.ext4 -q -F -d "$IROOT" "$IIMG"
+cp "$IIMG" "$OUT/rootfs-inception.ext4"
+echo "cella: inception rootfs built -> $OUT/rootfs-inception.ext4"

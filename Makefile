@@ -23,7 +23,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
         init dist dist-nested setup-tap \
         smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
-        probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate \
+        probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
 
 help: ## Show this help
@@ -46,7 +46,7 @@ help: ## Show this help
 	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Probes: diagnostics, run by hand (smoke-thaw runs the freeze/thaw one):"
-	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept|probe-thaw-gate):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept|probe-thaw-gate|probe-inception):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 
 # --- Build ------------------------------------------------------------
 
@@ -193,7 +193,7 @@ $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4: | .toolbox
 	$(LOG)
 	$(SCRIPTS)/build/assets-nested.sh
 
-dist-nested: dist build-static $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 ## Nested test assets: bzImage-nested (KVM host stack) + rootfs-nested.ext4 (static cella + canonical inner assets)
+dist-nested: dist build-static $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 ## Nested test assets: bzImage-nested (KVM host stack) + rootfs-nested.ext4 (static cella + canonical inner assets), and rootfs-inception.ext4 (+ the static probe)
 
 kernel-config-check: ## Resolve kernel-fragment.config against defconfig and report any line kconfig silently overruled (seconds, no compile)
 	$(LOG)
@@ -364,6 +364,11 @@ probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time i
 probe-prefault-ept: build dist ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
 	$(LOG)
 	CELLA_THAW_PREFAULT=ept $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
+
+# Deliberately not dist-nested: see smoke-nested-boot.
+probe-inception: build ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
+	$(LOG)
+	$(SCRIPTS)/test/inception.sh
 
 probe-thaw-gate: build dist ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
 	$(LOG)
