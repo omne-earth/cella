@@ -23,7 +23,7 @@ artifacts, the boot path, the pass criteria, and the results.
 ```mermaid
 flowchart TD
     L0["bare metal (or the outer host)"] --> L1["host: cella runs here"]
-    L1 --> L2["outer guest: bzImage-nested + rootfs-nested.ext4<br/>init prints cella-nested lines, then starts /opt/cella"]
+    L1 --> L2["outer guest: bzImage-nested + rootfs-nested.ext4<br/>init runs the verbs: cella create, cella start (jailed)"]
     L2 --> L3["inner guest: canonical bzImage + rootfs.ext4<br/>init prints cella-rootfs lines"]
 ```
 
@@ -39,8 +39,8 @@ own targets build them.
 
 | Artifact               | Content                                            | Built by       |
 |------------------------|----------------------------------------------------|----------------|
-| dist/bzImage-nested    | canonical kernel fragment + a KVM host stack       | make dist-nested |
-| dist/rootfs-nested.ext4| canonical busybox root + /opt (static cella, canonical bzImage, canonical rootfs.ext4) + the nested init | make dist-nested |
+| kernel nested golden   | canonical fragment + a KVM host stack + namespaces for the inner jail | make golden-nested |
+| rootfs nested golden   | canonical root + static cella and bwrap on the path + the canonical inner goldens at /root/.cella + the nested init | make golden-nested |
 | static cella           | crt-static build from the toolbox                  | make build-static |
 
 The nested kernel builds from the same pinned source, in a copied
@@ -60,12 +60,12 @@ sequenceDiagram
     participant T as nested-boot.sh
     participant O as outer cella (host)
     participant G as outer guest
-    participant I as inner cella (/opt/cella)
+    participant I as inner cella (jailed by bwrap)
     participant N as inner guest
     T->>O: boot bzImage-nested + rootfs-nested.ext4 (256 MB, no TAP)
     O->>G: first KVM_RUN
     G->>G: init mounts /proc /sys /tmp, checks /dev/kvm
-    G->>I: start /opt/cella (canonical assets, 64 MB, block only)
+    G->>I: cella create + cella start (jailed, 64 MB, block only)
     I->>N: first KVM_RUN
     N-->>T: "cella-rootfs: init running" over two serial layers
 ```
@@ -111,7 +111,7 @@ cells pass unchanged.
 ## Reproduce
 
 ```
-make dist-nested                  # build the nested artifacts (needs the toolbox)
+make golden-nested                # build the nested goldens (needs the toolbox)
 make smoke-nested-boot            # all three variants
 make smoke-nested-boot-airgapped  # one variant at a time
 make smoke-nested-boot-hybrid

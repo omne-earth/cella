@@ -46,11 +46,15 @@ flowchart TD
     V2 -.->|spawns, then exits| jail2
 ```
 
-The inner jail is not optional: the nested images will carry a static
-bwrap, and the in-guest verbs will run it exactly as the host does.
-Today the inner cella runs through the flag interface without a jail
-(the probes drive it directly); the static bwrap and the in-guest
-verb recursion are the next work item after this branch merges.
+The inner jail is not optional, and it is real: the nested image
+carries a static bwrap, the in-guest init drives create and start,
+and the inner VMM runs inside its own jail with its own seccomp
+filter, verified by the nested smoke battery on both machines. The
+guest provisions its own tap through the same root verb (`cella setup
+net --taps 1 --from 1`; the guest init is root, thus no sudo). The
+one deliberate exception is the inception image: the clock probe
+drives the inner cella through the flag interface, unjailed, because
+the probe is the instrument, not the product.
 
 | Layer   | Scope   | What it removes | Status |
 |---------|---------|-----------------|--------|
