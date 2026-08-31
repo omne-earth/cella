@@ -18,7 +18,7 @@
 # after editing the fragment and before `make distclean-kernel dist`.
 set -euo pipefail
 
-KERNEL_VERSION="${KERNEL_VERSION:-6.18.47}"
+KERNEL_VERSION="${KERNEL_VERSION:-7.2.2}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FRAGMENT="$HERE/scripts/build/kernel-fragment.config"

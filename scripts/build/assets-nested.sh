@@ -12,7 +12,7 @@
 # the finished artifacts through the shared copy and does not build.
 set -euo pipefail
 
-KERNEL_VERSION="${KERNEL_VERSION:-6.18.47}"
+KERNEL_VERSION="${KERNEL_VERSION:-7.2.2}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$HERE/dist"
 

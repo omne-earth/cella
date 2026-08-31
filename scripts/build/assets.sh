@@ -28,7 +28,7 @@ set -euo pipefail
 # script still works when run directly. Pinned rather than resolved from
 # kernel.org at build time: a floating version makes `make dist`
 # irreproducible and can move the kernel out from under a measurement.
-KERNEL_VERSION="${KERNEL_VERSION:-6.18.47}"
+KERNEL_VERSION="${KERNEL_VERSION:-7.2.2}"
 BUSYBOX_VERSION="${BUSYBOX_VERSION:-1.37.0}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
