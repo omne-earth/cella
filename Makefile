@@ -81,21 +81,9 @@ debug: ## Debug build (target/debug/cella), faster to compile
 
 build-static: .static ## Static cella + probe for the nested rootfs, built inside the toolbox (mtime-tracked via .static)
 
-install: build ## Install cella to ~/.local/bin, and add it to PATH in ~/.bashrc when absent
+install: ## Host deps, toolbox prerequisites, and the cella binary to ~/.local/bin (scripts/setup/install.sh)
 	$(LOG)
-	install -D -m 0755 $(CELLA_DEV) $$HOME/.local/bin/cella
-	case ":$$PATH:" in
-	*":$$HOME/.local/bin:"*) echo "cella: ~/.local/bin is already on PATH" ;;
-	*)
-		if ! grep -qs '\.local/bin' $$HOME/.bashrc; then
-			printf '\nexport PATH="$$HOME/.local/bin:$$PATH"\n' >> $$HOME/.bashrc
-			echo "cella: added ~/.local/bin to PATH in ~/.bashrc -- open a new shell"
-		else
-			echo "cella: ~/.bashrc already mentions ~/.local/bin -- open a new shell"
-		fi
-		;;
-	esac
-	echo "cella: installed -> $$HOME/.local/bin/cella"
+	$(SCRIPTS)/setup/install.sh
 
 check: ## cargo check, no codegen
 	$(LOG)
@@ -195,17 +183,17 @@ remove: $(CELLA_DEV) ## Discard $(VM): stop it and destroy it
 	$(CELLA_DEV) stop $(VM) 2>/dev/null || true
 	$(CELLA_DEV) destroy $(VM)
 
-demo: $(CELLA_DEV) $(DIST)/rootfs-cella.ext4 ## End-to-end demonstration: a shell learns a value, freezes, thaws, and remembers. Tears down after.
+demo: $(CELLA_DEV) golden ## End-to-end demonstration: a shell learns a value, freezes, thaws, and remembers. Tears down after.
 	$(LOG)
 	$(SCRIPTS)/test/demo.sh
 
 # --- Smoke tests: required real KVM ---------------
 
-smoke-boot: build dist ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
+smoke-boot: build golden ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
 	$(LOG)
 	$(SCRIPTS)/test/boot.sh
 
-smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check, then the clock probe
+smoke-thaw: build golden ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> one-shot check, then the clock probe
 	$(LOG)
 	$(SCRIPTS)/test/thaw.sh
 	# The script cannot see whether the guest keeps its time. A guest that
@@ -221,9 +209,9 @@ smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> 
 	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0 PROBE_CARGO_FLAGS=--release
 	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0 PROBE_CARGO_FLAGS=--release
 
-# Deliberately not dist-nested: at test time only the artifacts matter,
-# and the bare-metal machine receives them through the shared copy.
-# Build them with: make dist-nested (needs the toolbox).
+# Deliberately not golden-nested: at test time only the artifacts
+# matter, and the bare-metal machine builds or receives them once.
+# Build them with: make golden-nested (needs the toolbox).
 smoke-nested-boot-airgapped: build ## cella hosts cella, no network on either layer
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh airgapped
@@ -242,7 +230,7 @@ smoke-machine: $(CELLA_DEV) ## The lifecycle cycle with a real guest: cella self
 	$(LOG)
 	$(CELLA_DEV) selftest
 
-smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
+smoke-net: build golden ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	$(LOG)
 	$(SCRIPTS)/test/net.sh
 
@@ -266,7 +254,7 @@ smoke-clean: ## Kill any stray cella process left running by an interrupted smok
 
 init: ## One-time host setup (Fedora): installs runtime deps, provisions the build toolbox, creates tap0, builds dist, checks /dev/kvm (needs sudo)
 	$(LOG)
-	$(SCRIPTS)/setup/bootstrap.sh
+	$(SCRIPTS)/setup/install.sh
 	$(MAKE) .toolbox
 	$(MAKE) setup-tap
 	$(MAKE) dist
@@ -326,7 +314,7 @@ setup-tap: ## One-time (per boot) TAP device creation -- needs sudo once (name/C
 
 # --- Everything -----------------------------------------------------
 
-test-all: test dist smoke ## make test, plus every KVM smoke test (skips gracefully without KVM)
+test-all: test golden smoke ## make test, plus every KVM smoke test (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make test-all: done (see above for any SKIPs) ==="

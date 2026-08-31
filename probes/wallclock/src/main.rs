@@ -40,7 +40,7 @@
 //!                          The same meaning as in the smoke tests.
 //!
 //! Run: cargo run --manifest-path probes/wallclock/Cargo.toml
-//! (needs dist/bzImage + dist/rootfs.ext4 -- `make dist` -- and a
+//! (needs the canonical goldens -- `make golden` -- and a
 //! configured tap0 -- `make setup-tap`)
 
 use std::fs::File;
@@ -79,6 +79,13 @@ fn repo_root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf()
+}
+
+fn golden(axis: &str, flavor: &str, file: &str) -> PathBuf {
+    let home = std::env::var("CELLA_HOME").unwrap_or_else(|_| {
+        format!("{}/.cella", std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+    });
+    PathBuf::from(home).join(axis).join(flavor).join(file)
 }
 
 fn env_path(var: &str, default: PathBuf) -> PathBuf {
@@ -243,8 +250,8 @@ fn default_base_args(bin: &Path) -> String {
 fn main() {
     let root = repo_root();
     let bin = env_path("CELLA_BIN", root.join("target/release/cella"));
-    let kernel = env_path("CELLA_TEST_KERNEL", root.join("dist/bzImage"));
-    let disk = env_path("CELLA_TEST_DISK", root.join("dist/rootfs.ext4"));
+    let kernel = env_path("CELLA_TEST_KERNEL", golden("kernel", "canonical", "bzImage"));
+    let disk = env_path("CELLA_TEST_DISK", golden("rootfs", "canonical", "rootfs.ext4"));
     let tap = std::env::var("CELLA_TEST_TAP").unwrap_or_else(|_| "tap0".to_string());
 
     if !bin.is_file() {

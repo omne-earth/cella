@@ -239,6 +239,7 @@ fn print_help() {
          \x20 cella build <kernel|rootfs> <flavor>   make a golden artifact\n\
          \x20 cella create <name> [options]          stage a machine from the goldens\n\
          \x20 cella start <name>                     run it (detached, jailed)\n\
+         \x20 cella enter <name>                     attach to its console (Ctrl-] detaches)\n\
          \x20 cella freeze <name>                    stop it and keep the instant\n\
          \x20 cella thaw <name>                      resume the instant\n\
          \x20 cella stop <name>                      end it fast, clear the transients\n\

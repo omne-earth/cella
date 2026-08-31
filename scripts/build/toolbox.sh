@@ -3,7 +3,7 @@
 # that holds the kernel/rootfs build toolchain (gcc, bison, flex,
 # e2fsprogs, ...). The host itself stays free of build dependencies --
 # `toolbox` (a thin podman wrapper) is the only thing
-# scripts/setup/bootstrap.sh installs for this on the host.
+# scripts/setup/install.sh installs for this on the host.
 # scripts/build/assets.sh re-execs itself inside this container to
 # actually build the kernel and rootfs.
 #

@@ -9,8 +9,9 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/../.."
 BIN="${CELLA_BIN:-$ROOT/target/release/cella}"
-KERNEL="${CELLA_TEST_KERNEL:-$ROOT/dist/bzImage}"
-DISK="${CELLA_TEST_DISK:-$ROOT/dist/rootfs.ext4}"
+CH="${CELLA_HOME:-$HOME/.cella}"
+KERNEL="${CELLA_TEST_KERNEL:-$CH/kernel/canonical/bzImage}"
+DISK="${CELLA_TEST_DISK:-$CH/rootfs/canonical/rootfs.ext4}"
 TAP="${CELLA_TEST_TAP:-tap0}"
 BOOT_WAIT_SECS="${CELLA_BOOT_WAIT:-8}"
 FREEZE_TIMEOUT_SECS="${CELLA_FREEZE_TIMEOUT:-10}"
@@ -24,7 +25,7 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 if [ ! -f "$KERNEL" ] || [ ! -f "$DISK" ]; then
-    echo "SKIP: test assets not found -- run: make dist"
+    echo "SKIP: test assets not found -- run: make golden"
     exit 0
 fi
 if ! ip link show "$TAP" &>/dev/null; then

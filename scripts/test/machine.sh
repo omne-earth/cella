@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exercises the machine registry with the real binary against a
-# sandboxed CELLA_HOME: build seeds the goldens from dist/, create
+# sandboxed CELLA_HOME: build produces the goldens natively, create
 # stages a machine, a second create refuses, destroy removes it. No
 # /dev/kvm is needed: no verb here starts a process.
 set -euo pipefail
@@ -8,8 +8,10 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 BIN=target/release/cella
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
-[ -f dist/bzImage ] && [ -f dist/rootfs-cella.ext4 ] \
-    || { echo "SKIP: proof artifacts missing -- run: make dist dist-nested"; exit 0; }
+# The native build reuses the repo-level source caches; without them
+# the first run downloads and compiles, which is not a unit test.
+[ -d target/kernel-build ] && [ -d target/rootfs-build ] \
+    || { echo "SKIP: build caches missing -- run: make golden once"; exit 0; }
 
 export CELLA_HOME=$(mktemp -d /tmp/cella-machine-test.XXXXXX)
 trap 'rm -rf "$CELLA_HOME"' EXIT

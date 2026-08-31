@@ -83,7 +83,7 @@ docs/
 scripts/
   jail.sh                  rootless bwrap wrapper, no jailer binary
   setup/
-    bootstrap.sh               one-time Fedora host setup (runtime deps + tap0 + kvm check)
+    install.sh                 host setup: deps, toolbox prerequisites, the cella binary to ~/.local/bin
     tap.sh                       one-time (per boot) TAP device creation, needs sudo once
   build/
     assets.sh                 build a busybox rootfs + a bzImage kernel from source
