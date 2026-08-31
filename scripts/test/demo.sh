@@ -63,7 +63,9 @@ echo "FAIL: the shell did not respond after the thaw"
 # instead, and read the state of the shell from it.
 sleep 11
 echo "-- the processes of the guest after the thaw:"
-grep -a "cella-ps:" "$(console)" | tail -8 || true
+grep -a "cella-ps:" "$(console)" | tail -12 || true
+echo "-- serial interrupt counts (before and after the input):"
+grep -a "cella-irq:" "$(console)" | tail -4 || true
 echo "-- getty generations on the console:"
 grep -a "cella-shell:" "$(console)" || true
 tail -5 "$(console)" || true

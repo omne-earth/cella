@@ -30,11 +30,18 @@ echo "cella-rootfs: init running (pid $$)"
 # not interactive. The loop brings the shell back when it exits;
 # poweroff still stops the guest through the kernel.
 # A process listing every 10 s, for the diagnosis of a shell that
-# stops reading: the state letter of the shell (S, R, T, Z) tells a
-# frozen-and-thawed session apart from a stopped or a dead one.
+# stops reading. The state letter (S, R, T, Z) tells a sleeping reader
+# apart from a stopped or a dead one, and wchan names the kernel
+# function that a sleeping process waits in. The serial line of
+# /proc/interrupts shows whether RX interrupts arrive at all.
 (
     while true; do
-        ps | while read -r line; do echo "cella-ps: $line"; done
+        for p in /proc/[0-9]*; do
+            [ -f "$p/stat" ] || continue
+            read -r pid comm state _ < "$p/stat" 2>/dev/null || continue
+            echo "cella-ps: $pid $comm $state wchan=$(cat "$p/wchan" 2>/dev/null)"
+        done
+        echo "cella-irq: $(grep -E '^ *4:' /proc/interrupts | tr -s ' ')"
         sleep 10
     done
 ) &
