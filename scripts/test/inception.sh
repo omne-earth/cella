@@ -17,6 +17,12 @@ BIN=target/release/cella
 KERNEL=dist/bzImage-nested
 DISK=dist/rootfs-inception.ext4
 TIMEOUT=240
+# The RAM of the outer guest. 384 MB starves the outer guest: its own
+# reclaim then evicts the warmed mappings between the warming and the
+# first heartbeat, and the inner thaw showed +30 ms at depth three.
+# With 1024 MB the same gate passes (-0.8 ms and +11 ms across runs,
+# inside the interval). Headroom is part of the seamlessness contract.
+MEM_MB="${CELLA_INCEPTION_MEM_MB:-1024}"
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 [ -f "$KERNEL" ] && [ -f "$DISK" ] || { echo "SKIP: inception assets missing -- run: make dist-nested"; exit 0; }
@@ -32,7 +38,7 @@ cp "$DISK" "$TMP/disk.img"
 
 CMDLINE="$("$BIN" --print-default-cmdline) root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5"
 "$BIN" --state-dir "$TMP/state" --kernel "$KERNEL" --disk "$TMP/disk.img" \
-    --mem-mb 384 --cmdline "$CMDLINE" >"$TMP/serial.log" 2>"$TMP/cella.err" &
+    --mem-mb "$MEM_MB" --cmdline "$CMDLINE" >"$TMP/serial.log" 2>"$TMP/cella.err" &
 PID=$!
 
 echo "--- inception: waiting up to ${TIMEOUT}s for the probe verdict from one layer deep ---"

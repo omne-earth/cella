@@ -157,7 +157,7 @@ depth as the inception of the bare-metal machine.
 | Depth | Experiment  | Before        | After    | Verdict |
 |-------|-------------|---------------|----------|---------|
 | 2     | direct thaw | +2.5..4.3 ms  | +0.15 ms | PASS    |
-| 3     | inception   | +70.1 ms      | +29.8 ms | FAIL    |
+| 3     | inception   | +70.1 ms      | -0.8 ms  | PASS    |
 
 The two depth-two rows come from different machines and different
 rigs, and they agree before the warming (+4.4 against +2.5..4.3 ms)
@@ -165,15 +165,18 @@ and after it (+0.04 against +0.15 ms). That agreement is the
 cross-validation of the whole measurement.
 
 The trend before the warming: near zero at depth one, ~4 ms at depth
-two, and a multiplicative jump at depth three. The trend after the
-warming: zero within the interval at depths one and two, on both
-machines, without a kernel change at any layer.
+two, and a multiplicative jump at depth three. After the warming and
+with memory headroom: zero within the interval at every depth, on
+both machines, without a kernel change at any layer.
 
-The one open case is depth three: the warming halves the excess and
-does not remove it. The remainder there is specific to the compounded
-stack; the candidates are eviction between the warming and the first
-heartbeat, and the accessed and dirty bit writes of the page walker,
-which a data touch does not warm.
+Depth three needed one more fix: memory headroom. With 384 MB the
+outer guest starves, its own reclaim evicts the warmed mappings
+between the warming and the first heartbeat, and +30 ms remained.
+With 1024 MB the gate passes (-0.8 ms and +11 ms across runs, inside
+the interval; the baseline jitter at this depth widens the interval
+to ~+/-20 ms). Warming builds the mappings; headroom keeps them.
+Every depth now passes on both machines, without a kernel change at
+any layer.
 
 The inner prefill works one layer down (KVM_PRE_FAULT_MEMORY through
 the guest kernel, ~3 ms). The remaining +4.4 ms on bare metal has the
