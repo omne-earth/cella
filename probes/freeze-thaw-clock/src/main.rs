@@ -55,7 +55,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const BOOT_TIMEOUT: Duration = Duration::from_secs(20);
+// 12 heartbeats at ~1 s each, plus the boot, plus slack for a deep
+// nesting level.
+const BOOT_TIMEOUT: Duration = Duration::from_secs(40);
 const THAW_TIMEOUT: Duration = Duration::from_secs(20);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -380,11 +382,13 @@ fn main() {
     let pid = child.id() as i32;
 
     let deadline = Instant::now() + BOOT_TIMEOUT;
-    // Wait for 6 heartbeats before the freeze. The first ones pass any
+    // Wait for 12 heartbeats before the freeze. The first ones pass any
     // jitter from the boot. The rest give the normal interval of the
     // loop, which is the baseline that the interval across the freeze is
-    // compared against. Two samples are not enough for that baseline.
-    let guest_before = match wait_for_heartbeats(&boot_log, &mut child, 6, deadline) {
+    // compared against. The prediction interval of the gate comes from
+    // the sample standard deviation of these intervals, thus more
+    // samples give a tighter and a more stable gate.
+    let guest_before = match wait_for_heartbeats(&boot_log, &mut child, 12, deadline) {
         Some(v) => v,
         None => {
             let _ = child.kill();
