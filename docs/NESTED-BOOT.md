@@ -118,12 +118,38 @@ make smoke-nested-boot-hybrid
 make smoke-nested-boot-www
 ```
 
+## The clock probe one layer deep (probe-inception)
+
+`make probe-inception` boots the outer guest with
+rootfs-inception.ext4. The init runs the static freeze and thaw clock
+probe against an inner cella, and the verdict arrives through two
+serial layers. The probe found a real fault on its first run: the
+seccomp filter of cella lacked clock_gettime, because the vDSO serves
+that call on a host and refuses it inside a guest without
+PVCLOCK_TSC_STABLE_BIT.
+
+Measured difference of the inner thaw against the baseline mean
+(2026-08-30, guest kernel 7.2.2):
+
+| Machine    | Layers from the metal | Difference | Interval    | Verdict |
+|------------|----------------------|------------|-------------|---------|
+| bare metal | 3                    | +4.4 ms    | +/-3.9 ms   | FAIL    |
+| nested KVM | 4                    | +70.1 ms   | +/-10.4 ms  | FAIL    |
+
+The inner prefill works one layer down (KVM_PRE_FAULT_MEMORY through
+the guest kernel, ~3 ms). The remaining +4.4 ms on bare metal has the
+same size as the nested remainder of the direct thaw measurement (see
+docs/FREEZE-THAW.md): the mechanism moved down one layer. For the
+inner guest, the outer hypervisor is the KVM of the bare-metal host,
+and it rebuilds its combined mapping for the inner VM on the first
+access. No VMM at any layer can fill that mapping today: the host
+kernel does not propagate a pre-fault through the nested shadow. The
+cost repeats per layer, ~4 ms per level on this hardware.
+
 ## Next steps
 
-- Run the clock probes one layer deeper: does time stay cryogenic for
-  an inner guest, through cella?
+- The per-layer floor lives in the host kernel: nested EPT shadows do
+  not prefetch on KVM_PRE_FAULT_MEMORY of the L1. A kernel-side change
+  would remove the floor for every layer at once.
 - Freeze the outer guest while the inner guest runs, and thaw it: the
   cryogenic principle applied to a hypervisor.
-- Measure the stage-2 cost that cella, as the outer layer, adds to an
-  inner thaw. The thaw investigation could not see into the outer
-  hypervisor; here the outer hypervisor is ours.
