@@ -12,6 +12,9 @@ the VMM installs its seccomp filter before the run loop; the guest
 sees only KVM and the bound devices. SELinux frames the whole
 process set.
 
+The boundary nests with the machines: a guest that hosts machines
+carries the same stack inside, one level down.
+
 ```mermaid
 flowchart TD
     subgraph selinux["SELinux domain (policy sketch today, enforcement planned)"]
@@ -19,19 +22,35 @@ flowchart TD
             V["cella verb process<br/>(create, start, ... -- exits after the verb)"]
             subgraph jail1["bwrap jail, machine A"]
                 subgraph sec1["seccomp allowlist"]
-                    C1["cella VMM"] --> G1["guest A"]
+                    C1["cella VMM"]
                 end
             end
-            subgraph jail2["bwrap jail, machine B"]
-                subgraph sec2["seccomp allowlist"]
-                    C2["cella VMM"] --> G2["guest B"]
+            subgraph guestA["guest A -- a host of its own"]
+                V2["in-guest cella verb process"]
+                subgraph jail2["bwrap jail, inner machine"]
+                    subgraph sec2["seccomp allowlist"]
+                        C2["inner cella VMM"] --> G2["inner guest"]
+                    end
+                end
+            end
+            subgraph jail3["bwrap jail, machine B"]
+                subgraph sec3["seccomp allowlist"]
+                    C3["cella VMM"] --> G3["guest B"]
                 end
             end
         end
     end
+    C1 --> guestA
     V -.->|spawns, then exits| jail1
-    V -.->|spawns, then exits| jail2
+    V -.->|spawns, then exits| jail3
+    V2 -.->|spawns, then exits| jail2
 ```
+
+The inner jail is not optional: the nested images will carry a static
+bwrap, and the in-guest verbs will run it exactly as the host does.
+Today the inner cella runs through the flag interface without a jail
+(the probes drive it directly); the static bwrap and the in-guest
+verb recursion are the next work item after this branch merges.
 
 | Layer   | Scope   | What it removes | Status |
 |---------|---------|-----------------|--------|
