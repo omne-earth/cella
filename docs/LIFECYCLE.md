@@ -4,6 +4,52 @@ cella is the guest manager. One binary owns the verbs, the state is
 files, and no daemon exists. The motto: rootless, daemonless, and
 seccomp, SELinux, and jail confinement per VM.
 
+## The security boundary
+
+Confinement is per VM, and it nests. The verb process runs rootless
+and exits; each machine runs inside its own jail; inside the jail,
+the VMM installs its seccomp filter before the run loop; the guest
+sees only KVM and the bound devices. SELinux frames the whole
+process set.
+
+```mermaid
+flowchart TD
+    subgraph selinux["SELinux domain (policy sketch today, enforcement planned)"]
+        subgraph host["host: rootless, daemonless"]
+            V["cella verb process<br/>(create, start, ... -- exits after the verb)"]
+            subgraph jail1["bwrap jail, machine A"]
+                subgraph sec1["seccomp allowlist"]
+                    C1["cella VMM"] --> G1["guest A"]
+                end
+            end
+            subgraph jail2["bwrap jail, machine B"]
+                subgraph sec2["seccomp allowlist"]
+                    C2["cella VMM"] --> G2["guest B"]
+                end
+            end
+        end
+    end
+    V -.->|spawns, then exits| jail1
+    V -.->|spawns, then exits| jail2
+```
+
+| Layer   | Scope   | What it removes | Status |
+|---------|---------|-----------------|--------|
+| rootless | everything | No privilege to lose: the one CAP_NET_ADMIN moment is the network setup, out of band | enforced |
+| bwrap jail | per VM | The filesystem, except the machine directory, the golden kernel, /dev/kvm, and the TAP; the pid, ipc, uts, user, and cgroup namespaces | enforced |
+| seccomp | per VMM process | Every syscall outside the allowlist (~26 entries, each commented); socket(2) stays the canary | enforced |
+| SELinux | per domain | Lateral movement between machine directories and device types | example policy only |
+
+### The network privilege
+
+Creating and addressing a TAP needs CAP_NET_ADMIN, thus the VMM never
+does it. The setup provisions a pool of persistent taps and the NAT
+once, with sudo, out of band; `create` then allocates a free tap from
+the pool into the manifest, rootless. The planned verb: `cella setup
+net --taps N`, the one verb that asks for privilege. A later step can
+evaluate user-mode networking (passt), which would remove the
+privileged moment entirely at the cost of a new integration.
+
 ## The verbs
 
 ```mermaid
@@ -57,6 +103,10 @@ configuration (flavors, memory, network, root mode) in the manifest;
 
 `build` runs when `create` misses a golden artifact, and it runs
 ad-hoc: `cella build kernel <flavor>`.
+
+The defaults of `create`: kernel `canonical`, rootfs `cella` -- the
+interactive mvp image. The probes request the canonical rootfs
+explicitly.
 
 `$HOME/.cella/` is the one artifact home. The repository's `dist/`
 retires as the migration proceeds: each step re-points its probes and
