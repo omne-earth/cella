@@ -21,7 +21,7 @@ stateDiagram-v2
 | build   | Makes a golden artifact (kernel, rootfs) of a named flavor | Rust orchestrates; the toolchain runs in the toolbox |
 | create  | Stages a named machine from the golden artifacts. No process starts | Rust only |
 | start   | Runs the machine. Detaches, writes the pid, signals readiness | Rust only |
-| stop    | Ends the machine as fast as possible. An emergency maneuver: in-flight state is disposable, and the next start boots fresh | Rust only |
+| stop    | Ends the machine as fast as possible, and clears the transients: ram.img, the pid file, the console socket, and any stale sidecar. An emergency maneuver: in-flight state is disposable, and the next start boots fresh from the disk | Rust only |
 | freeze  | Stops the machine and preserves the in-flight state: RAM, vCPU, clocks, devices. The next thaw resumes the same instant | Rust only |
 | thaw    | Resumes a frozen machine | Rust only |
 | enter   | Attaches the terminal to the serial console. An exit of the guest shell detaches | Rust only |
@@ -29,8 +29,9 @@ stateDiagram-v2
 
 The difference between stop and freeze is intent. Freeze preserves the
 in-flight reality of the guest, and time stays cryogenic across the
-gap. Stop declares the in-flight reality disposable and ends the VM
-with no resumption in mind.
+gap. Stop declares the in-flight reality disposable, ends the VM with
+no resumption in mind, and removes the transients: a stopped machine
+is its manifest and its disk, nothing else.
 
 ## The homes
 
