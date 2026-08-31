@@ -21,7 +21,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
 .PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist dist-nested setup-tap \
-        boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
+        boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp test-machine \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -34,7 +34,7 @@ help: ## Show this help
 	grep -hE '^(build|build-static|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
-	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Run: a real jailed guest, interactively:"
 	grep -hE '^(boot|enter|freeze|thaw|remove|demo):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -123,7 +123,11 @@ test-seccomp: build ## The real BPF filter kills a disallowed syscall (scripts/t
 	$(LOG)
 	$(SCRIPTS)/test/seccomp.sh
 
-test: check lint unit-test integration-test test-jail test-seccomp ## Everything above: build hygiene + all no-KVM tests
+test-machine: build ## The machine registry verbs against a sandboxed CELLA_HOME (scripts/test/machine.sh)
+	$(LOG)
+	$(SCRIPTS)/test/machine.sh
+
+test: check lint unit-test integration-test test-jail test-seccomp test-machine ## Everything above: build hygiene + all no-KVM tests
 	$(LOG)
 	echo ""
 	echo "=== make test: all no-KVM checks passed ==="
