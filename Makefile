@@ -137,6 +137,11 @@ VM_DIR ?= vm1
 # NET=none boots without the TAP. A persistent TAP admits one guest at
 # a time, thus a second concurrent guest must run without the network.
 NET ?= tap
+# ROOT=ro mounts the root filesystem read-only. A guest that must
+# survive a freeze and a thaw needs this today: the freeze does not
+# save the virtio device state, and the first post-thaw disk write
+# hangs (see docs/FREEZE-THAW.md, "Next steps: virtio state").
+ROOT ?= rw
 
 $(DIST)/rootfs-cella.ext4: $(SCRIPTS)/build/rootfs-cella.sh $(SCRIPTS)/build/assets-cella.sh $(DIST)/rootfs.ext4 | .toolbox
 	$(LOG)
@@ -156,10 +161,10 @@ boot: build dist $(DIST)/rootfs-cella.ext4 ## Boot a detached jailed guest at $(
 	HOST_IP="$(CELLA_TAP_CIDR)"; HOST_IP="$${HOST_IP%%/*}"
 	if [ "$(NET)" = none ]; then
 		TAPARGS=""
-		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5"
+		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda $(ROOT) virtio_mmio.device=4K@0xd0000000:5"
 	else
 		TAPARGS="--tap $(CELLA_TAP)"
-		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=$(CELLA_GUEST_IP)::$$HOST_IP:255.255.255.0::eth0:off"
+		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda $(ROOT) virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=$(CELLA_GUEST_IP)::$$HOST_IP:255.255.255.0::eth0:off"
 	fi
 	# Detached: the guest runs in a tmux session, and the pane is the
 	# serial console. pipe-pane mirrors the console into .logs/.

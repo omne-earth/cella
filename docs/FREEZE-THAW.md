@@ -259,6 +259,16 @@ ring indices advanced. But the thaw constructs new MmioTransport
 objects, and their state is the reset state: status 0, no queue ready,
 and a next-available index of 0. The two sides disagree.
 
+The gap is no longer theoretical: the interactive demo detected it in
+the field (2026-08-30, bare metal). After a thaw, the shell of the
+guest appended to its history file, the write entered the ext4
+journal, and the journal commit waited on a virtio-blk request that
+the reset transport never processed. The in-guest diagnostics showed
+the shell in the D state in do_get_write_access, and jbd2 in
+jbd2_journal_commit_transaction, while the serial interrupts kept
+arriving. `make demo` therefore runs its guest with ROOT=ro until
+this work lands: a read-only root writes nothing to the disk.
+
 The smoke tests and the clock probes do not detect this, because the
 heartbeat needs no virtio. The guest reads /proc and writes to the
 serial console only. The first post-thaw disk request, and the first
