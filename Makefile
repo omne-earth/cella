@@ -171,6 +171,14 @@ boot: build dist $(DIST)/rootfs-cella.ext4 ## Boot a detached jailed guest at $(
 	tmux new-session -d -s "cella-$(VM_DIR)" \
 		"$(SCRIPTS)/jail.sh --state-dir $(VM_DIR) --kernel dist/bzImage --disk $(VM_DIR)/disk.img $$TAPARGS --mem-mb 256 --cmdline '$$CMD'"
 	tmux pipe-pane -t "cella-$(VM_DIR)" -o "cat >> $(LOGDIR)/console-$(VM_DIR)-$$(date +%Y%m%d-%H%M%S).log"
+	# Do not report a running guest before the guest survives its start:
+	# a stale sidecar or a busy TAP kills it within the first second.
+	sleep 1
+	if ! tmux has-session -t "cella-$(VM_DIR)" 2>/dev/null; then
+		echo "cella: the guest exited at start -- last console lines:"
+		tail -n 5 $$(ls -t $(LOGDIR)/console-$(VM_DIR)-* | head -1)
+		exit 1
+	fi
 	echo "cella: guest running detached at $(VM_DIR)"
 	echo "cella: attach:  make enter    (detach again: Ctrl-b d)"
 	echo "cella: freeze:  make freeze   thaw: make thaw"
