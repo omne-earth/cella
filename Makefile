@@ -24,7 +24,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 .PHONY: help build install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested setup-tap \
-        boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean test-jail test-seccomp test-machine \
+        boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
         clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -43,7 +43,7 @@ help: ## Show this help
 	grep -hE '^(boot|enter|freeze|thaw|remove|demo):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean|smoke-device-state|device-state-ac1|device-state-ac2|device-state-ac3|device-state-ac4):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
 	grep -hE '^(init|golden|golden-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -221,6 +221,32 @@ smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-machine probe-inc
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
+
+# --- Device state across freeze/thaw (docs/DEVICE-STATE.md) ----------
+#
+# One gate per acceptance criterion, in dependency order. Each gate
+# fails until its implementation lands.
+
+device-state-ac1: build golden ## AC1: the disk survives the thaw -- transport state rides the sidecar (v7); write a file, freeze, thaw, read it back, sync; make demo drops ROOT=ro
+	$(LOG)
+	$(SCRIPTS)/test/device-state.sh ac1
+
+device-state-ac2: build golden ## AC2: the network survives the thaw -- the tap claim persists through the manifest, the tap is recreated by convention, and the host pings the guest after a thaw
+	$(LOG)
+	$(SCRIPTS)/test/device-state.sh ac2
+
+device-state-ac3: build golden ## AC3: the in-flight layer is exact -- a parked egress frame is delivered and completed after the thaw; the same request works, with no retransmission
+	$(LOG)
+	$(SCRIPTS)/test/device-state.sh ac3
+
+device-state-ac4: build golden ## AC4: the verdict is external -- every egress frame parks by default; the test, as the stand-in engine, releases with an allow or freezes, grows the world, and thaws (the world-ratchet gate)
+	$(LOG)
+	$(SCRIPTS)/test/device-state.sh ac4
+
+smoke-device-state: device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 ## All four device-state acceptance gates, in dependency order
+	$(LOG)
+	echo ""
+	echo "=== make smoke-device-state: all gates passed ==="
 
 smoke-clean: ## Kill any stray cella process left running by an interrupted smoke test
 	$(LOG)
