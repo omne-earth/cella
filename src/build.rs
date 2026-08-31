@@ -543,9 +543,10 @@ fn build_static_binaries() -> Result<(PathBuf, PathBuf), String> {
     Ok((bin, probe))
 }
 
-/// One nested-family rootfs: the canonical tree plus /opt with the
-/// static cella and the canonical inner assets, and the given init.
-/// The inception variant adds the static probe.
+/// One nested-family rootfs: the canonical tree, the static cella on
+/// the path, the canonical inner assets at the golden layout of the
+/// guest (/root/.cella, the same convention as the host), and the
+/// given init. The inception variant adds the static probe.
 fn rootfs_nested_family(
     golden: &Path,
     init_name: &str,
@@ -587,15 +588,24 @@ fn rootfs_nested_family(
         ],
         None,
     )?;
-    fs::create_dir_all(nroot.join("opt")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(nroot.join("root/.cella/kernel/canonical")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(nroot.join("root/.cella/rootfs/canonical")).map_err(|e| e.to_string())?;
     let mut copies = vec![
-        (bin, nroot.join("opt/cella"), 0o755),
-        (inner_kernel, nroot.join("opt/bzImage"), 0o644),
-        (inner_rootfs, nroot.join("opt/rootfs.ext4"), 0o644),
+        (bin, nroot.join("bin/cella"), 0o755),
+        (
+            inner_kernel,
+            nroot.join("root/.cella/kernel/canonical/bzImage"),
+            0o644,
+        ),
+        (
+            inner_rootfs,
+            nroot.join("root/.cella/rootfs/canonical/rootfs.ext4"),
+            0o644,
+        ),
         (init, nroot.join("sbin/init"), 0o755),
     ];
     if with_probe {
-        copies.push((probe, nroot.join("opt/freeze-thaw-clock-probe"), 0o755));
+        copies.push((probe, nroot.join("bin/freeze-thaw-clock-probe"), 0o755));
     }
     for (from, to, mode) in copies {
         fs::copy(&from, &to).map_err(|e| format!("copying {}: {e}", from.display()))?;

@@ -1,7 +1,7 @@
 #!/bin/sh
 # /sbin/init for the nested test rootfs (dist/rootfs-nested.ext4).
 # This guest is a host: it starts the inner cella with the canonical
-# assets from /opt. The inner guest prints the standard heartbeat
+# assets from the golden layout of the guest (/root/.cella). The inner guest prints the standard heartbeat
 # ("cella-rootfs: ..."), and this init prints "cella-nested: ..."
 # lines only. The test script tells the two layers apart by that
 # prefix.
@@ -24,12 +24,12 @@ if [ ! -c /dev/kvm ]; then
     while true; do sleep 1; done
 fi
 mkdir -p /tmp/state
-BASE="$(/opt/cella --print-default-cmdline)"
+BASE="$(/bin/cella --print-default-cmdline)"
 
 if grep -q cella_nested_mode=www /proc/cmdline; then
     echo "cella-nested: starting the inner cella (www: block + net)"
-    /opt/cella --state-dir /tmp/state \
-        --kernel /opt/bzImage --disk /opt/rootfs.ext4 --tap tap0 \
+    /bin/cella --state-dir /tmp/state \
+        --kernel /root/.cella/kernel/canonical/bzImage --disk /root/.cella/rootfs/canonical/rootfs.ext4 --tap tap0 \
         --mem-mb 64 --cmdline "$BASE root=/dev/vda rw \
 virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 \
 ip=192.168.201.2::192.168.201.1:255.255.255.0::eth0:off" &
@@ -56,8 +56,8 @@ ip=192.168.201.2::192.168.201.1:255.255.255.0::eth0:off" &
 else
     # The inner guest gets the block device only: no TAP in this mode.
     echo "cella-nested: starting the inner cella (block only)"
-    /opt/cella --state-dir /tmp/state \
-        --kernel /opt/bzImage --disk /opt/rootfs.ext4 \
+    /bin/cella --state-dir /tmp/state \
+        --kernel /root/.cella/kernel/canonical/bzImage --disk /root/.cella/rootfs/canonical/rootfs.ext4 \
         --mem-mb 64 --cmdline "$BASE root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5"
 fi
 echo "cella-nested: inner cella exited with code $?"
