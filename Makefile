@@ -21,7 +21,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
 .PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist dist-nested setup-tap \
-        boot enter freeze thaw demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
+        boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -37,7 +37,7 @@ help: ## Show this help
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Run: a real jailed guest, interactively:"
-	grep -hE '^(boot|enter|freeze|thaw|demo):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(boot|enter|freeze|thaw|remove|demo):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
 	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -198,7 +198,15 @@ thaw: ## Thaw the frozen guest at $(VM_DIR), detached (fails when no frozen stat
 	[ -f $(VM_DIR)/state ] || { echo "cella: no frozen state in $(VM_DIR) -- run: make boot, then: make freeze"; exit 1; }
 	$(MAKE) boot
 
-freeze: ## Freeze the running guest (SIGUSR1); thaw it with: make boot
+remove: ## Discard the guest at $(VM_DIR): end its session and delete its state directory
+	$(LOG)
+	tmux kill-session -t "cella-$(VM_DIR)" 2>/dev/null \
+		&& echo "cella: ended the session of $(VM_DIR)" \
+		|| echo "cella: no running guest at $(VM_DIR)"
+	rm -rf $(VM_DIR)
+	echo "cella: removed $(VM_DIR)"
+
+freeze: ## Freeze the running guest (SIGUSR1); thaw it with: make thaw
 	$(LOG)
 	# -x matches the process name exactly. A -f pattern would match the
 	# recipe shell itself, whose command line contains the same text.
