@@ -1,6 +1,6 @@
 //! Minimal TAP wrapper.
 //!
-//! Opens an already-created TAP interface (see `scripts/setup/tap.sh`) --
+//! Opens an already-created TAP interface (see `sudo cella setup net`) --
 //! this process never needs `CAP_NET_ADMIN` to create one, only read/write
 //! on the fd once it exists and is owned by the invoking user.
 

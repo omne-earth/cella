@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Rootless jail for cella, using bubblewrap instead of Firecracker's
 # jailer (which requires starting as root). Namespaces cost nothing here
-# -- CAP_NET_ADMIN was already spent once, out of band, in scripts/setup/tap.sh.
+# -- CAP_NET_ADMIN was already spent once, out of band, in `sudo cella setup net`.
 #
 # Usage:
 #   scripts/jail.sh --state-dir ./vm1 --disk ./rootfs.img --tap tap0 \

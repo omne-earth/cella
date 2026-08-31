@@ -14,8 +14,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/release/cella
-KERNEL=dist/bzImage-nested
-DISK=dist/rootfs-inception.ext4
+CH="${CELLA_HOME:-$HOME/.cella}"
+KERNEL="$CH/kernel/nested/bzImage"
+DISK="$CH/rootfs/inception/rootfs.ext4"
 TIMEOUT=240
 # The RAM of the outer guest. 384 MB starves the outer guest: its own
 # reclaim then evicts the warmed mappings between the warming and the
@@ -28,7 +29,7 @@ TIMEOUT=240
 MEM_MB="${CELLA_INCEPTION_MEM_MB:-768}"
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
-[ -f "$KERNEL" ] && [ -f "$DISK" ] || { echo "SKIP: inception assets missing -- run: make dist-nested"; exit 0; }
+[ -f "$KERNEL" ] && [ -f "$DISK" ] || { echo "SKIP: inception assets missing -- run: make golden-nested"; exit 0; }
 if ! [ -r /dev/kvm ] || ! [ -w /dev/kvm ]; then
     echo "SKIP: no read and write access to /dev/kvm"
     exit 0

@@ -10,7 +10,7 @@
 //! plumbing that ties memory.rs / boot/x86_64.rs / vcpu.rs / devices/ /
 //! freeze.rs / seccomp.rs together.
 
-use cella::{boot, config, devices, freeze, memory, seccomp, vcpu, warm};
+use cella::{boot, config, devices, freeze, machine, memory, seccomp, vcpu, warm};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,6 +51,7 @@ struct Args {
     kernel: Option<PathBuf>,
     cmdline: String,
     mem_mb: u64,
+    console: Option<PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -60,6 +61,7 @@ fn parse_args() -> Args {
     let mut tap = None;
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
+    let mut console = None;
     // The defaults are in cella::config, in one place.
     let mut cmdline = config::default_cmdline();
     let mut mem_mb = 256u64;
@@ -77,6 +79,7 @@ fn parse_args() -> Args {
             "--tap" => tap = Some(next()),
             "--mac" => mac = parse_mac(&next()),
             "--kernel" => kernel = Some(PathBuf::from(next())),
+            "--console" => console = Some(PathBuf::from(next())),
             "--cmdline" => cmdline = next(),
             "--mem-mb" => {
                 mem_mb = next()
@@ -99,6 +102,7 @@ fn parse_args() -> Args {
         kernel,
         cmdline,
         mem_mb,
+        console,
     }
 }
 
@@ -119,7 +123,185 @@ fn usage_error(msg: &str) -> ! {
     std::process::exit(2);
 }
 
+/// The lifecycle verbs (see docs/LIFECYCLE.md). The first argument
+/// selects a verb; anything else falls through to the legacy flag
+/// interface, which the probes and the test scripts use.
+fn run_verb(verb: &str, args: &[String]) -> ! {
+    // A verb is a CLI citizen: `cella list | head` must not panic.
+    // Rust ignores SIGPIPE by default, and println then panics on a
+    // closed pipe; the default disposition ends the process quietly.
+    // SAFETY: setting a signal disposition before any other work.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+    let ok = match verb {
+        "build" => match args {
+            [axis, flavor] => machine::build(axis, flavor),
+            _ => Err("usage: cella build <kernel|rootfs> <flavor>".to_string()),
+        },
+        "create" => {
+            // cella create <name> [--kernel F] [--rootfs F] [--mem-mb N]
+            //   [--net TAP|none] [--root rw|ro]
+            let mut it = args.iter();
+            let Some(name) = it.next() else {
+                fatal("usage: cella create <name> [--kernel F] [--rootfs F] [--mem-mb N] [--net TAP|none] [--root rw|ro]")
+            };
+            // Precedence: flags, then ~/.cella/config.json, then the
+            // built-in defaults.
+            let mut m = machine::defaults();
+            m.name = name.clone();
+            let mut res = Ok(());
+            while let Some(a) = it.next() {
+                let mut val = |what: &str| {
+                    it.next()
+                        .cloned()
+                        .unwrap_or_else(|| fatal(&format!("missing value for {what}")))
+                };
+                match a.as_str() {
+                    "--kernel" => m.kernel = val("--kernel"),
+                    "--rootfs" => m.rootfs = val("--rootfs"),
+                    "--mem-mb" => {
+                        m.mem_mb = val("--mem-mb")
+                            .parse()
+                            .unwrap_or_else(|_| fatal("--mem-mb must be a number"))
+                    }
+                    "--net" => m.net = val("--net"),
+                    "--root" => m.root = val("--root"),
+                    "--diag" => m.diag = "on".to_string(),
+                    other => {
+                        res = Err(format!("unknown create option {other:?}"));
+                        break;
+                    }
+                }
+            }
+            res.and_then(|()| machine::create(&m)).map(|()| {
+                let net = machine::read_manifest(&m.name)
+                    .map(|r| r.net)
+                    .unwrap_or_else(|_| m.net.clone());
+                println!(
+                    "cella: created machine {:?} at {} (net {net})",
+                    m.name,
+                    machine::machine_dir(&m.name).display()
+                );
+            })
+        }
+        "destroy" => match args {
+            [name] => machine::destroy(name).map(|()| {
+                println!("cella: destroyed machine {name:?}");
+            }),
+            _ => Err("usage: cella destroy <name>".to_string()),
+        },
+        "start" => match args {
+            [name] => machine::start(name),
+            _ => Err("usage: cella start <name>".to_string()),
+        },
+        "stop" => match args {
+            [name] => machine::stop(name),
+            _ => Err("usage: cella stop <name>".to_string()),
+        },
+        "freeze" => match args {
+            [name] => machine::freeze(name),
+            _ => Err("usage: cella freeze <name>".to_string()),
+        },
+        "thaw" => match args {
+            [name] => machine::thaw(name),
+            _ => Err("usage: cella thaw <name>".to_string()),
+        },
+        "enter" => match args {
+            [name] => machine::enter(name),
+            _ => Err("usage: cella enter <name>".to_string()),
+        },
+        "list" => match args {
+            [] => machine::list(),
+            _ => Err("usage: cella list".to_string()),
+        },
+        "info" => match args {
+            [name] => machine::info(name),
+            _ => Err("usage: cella info <name>".to_string()),
+        },
+        "selftest" => machine::selftest(),
+        "setup" => match args.first().map(|s| s.as_str()) {
+            Some("net") => {
+                let mut taps = 4u32;
+                let mut it = args[1..].iter();
+                while let Some(a) = it.next() {
+                    match a.as_str() {
+                        "--taps" => {
+                            taps = it
+                                .next()
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or_else(|| usage_error("--taps needs a number"));
+                        }
+                        other => usage_error(&format!("unknown setup net option: {other}")),
+                    }
+                }
+                machine::setup_net(taps)
+            }
+            _ => Err("usage: sudo cella setup net [--taps N]".to_string()),
+        },
+        "help" | "--help" | "-h" => {
+            print_help();
+            Ok(())
+        }
+        _ => unreachable!(),
+    };
+    match ok {
+        Ok(()) => std::process::exit(0),
+        Err(e) => fatal(&e),
+    }
+}
+
+fn print_help() {
+    println!(
+        "cella -- a cryogenic chamber for agents\n\n\
+         The machine lifecycle (see docs/LIFECYCLE.md):\n\
+         \x20 cella build <kernel|rootfs> <flavor>   make a golden artifact\n\
+         \x20 cella create <name> [options]          stage a machine from the goldens\n\
+         \x20 cella start <name>                     run it (detached, jailed)\n\
+         \x20 cella enter <name>                     attach to its console (Ctrl-] detaches)\n\
+         \x20 cella freeze <name>                    stop it and keep the instant\n\
+         \x20 cella thaw <name>                      resume the instant\n\
+         \x20 cella stop <name>                      end it fast, clear the transients\n\
+         \x20 cella destroy <name>                   delete it, once and for all\n\
+         \x20 cella list                             every machine, one line each\n\
+         \x20 cella info <name>                      everything about one machine\n\
+         \x20 cella selftest                         run the lifecycle cycle end to end\n\
+         \x20 sudo $(which cella) setup net --taps N provision the tap pool + NAT (the one root verb)\n\n\
+         create options: --kernel F --rootfs F --mem-mb N --net TAP|auto|none --root rw|ro --diag\n\
+         Defaults live in ~/.cella/config.json; flags override them.\n\n\
+         The flag interface (--state-dir ...) stays for the probes and the tests."
+    );
+}
+
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.is_empty() {
+        print_help();
+        std::process::exit(0);
+    }
+    if let Some(first) = argv.first() {
+        if matches!(
+            first.as_str(),
+            "build"
+                | "create"
+                | "destroy"
+                | "start"
+                | "stop"
+                | "freeze"
+                | "thaw"
+                | "enter"
+                | "list"
+                | "info"
+                | "selftest"
+                | "setup"
+                | "help"
+                | "--help"
+                | "-h"
+        ) {
+            run_verb(first.clone().as_str(), &argv[1..]);
+        }
+    }
+
     // Hidden self-test hook for `make test-seccomp`: install the real
     // filter and deliberately trip it. See seccomp::selftest_provoke_kill
     // for what the harness expects to observe.
@@ -241,7 +423,33 @@ fn main() {
         None => None,
     };
 
-    let mut serial = SerialDevice::new(vm.clone());
+    // The console socket. The listener binds before the seccomp
+    // filter, thus socket(2) stays outside the allowlist (the canary
+    // of test-seccomp); only accept4 runs at runtime. The client
+    // handle is shared with the serial output, which tees to it.
+    let console_client: devices::serial::ConsoleClient =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let console_listener = args.console.as_ref().map(|path| {
+        let _ = std::fs::remove_file(path);
+        // A unix socket path caps at ~108 bytes. Bind by the file name
+        // from inside the parent directory, thus any home path works.
+        // Single-threaded startup: the chdir dance is safe here.
+        let cwd = std::env::current_dir().unwrap_or_else(|e| fatal(&format!("cwd: {e}")));
+        let parent = path
+            .parent()
+            .unwrap_or_else(|| fatal("console path has no parent"));
+        std::env::set_current_dir(parent)
+            .unwrap_or_else(|e| fatal(&format!("entering {parent:?}: {e}")));
+        let l = std::os::unix::net::UnixListener::bind(path.file_name().unwrap())
+            .unwrap_or_else(|e| fatal(&format!("binding the console socket {path:?}: {e}")));
+        std::env::set_current_dir(&cwd)
+            .unwrap_or_else(|e| fatal(&format!("returning to {cwd:?}: {e}")));
+        l.set_nonblocking(true).expect("nonblocking listener");
+        set_async(&l);
+        l
+    });
+
+    let mut serial = SerialDevice::new(vm.clone(), console_client.clone());
     // Serial input needs the SIGIO handler even without a TAP.
     install_sigio_handler();
     setup_stdin_async();
@@ -296,7 +504,7 @@ fn main() {
         // back the IOAPIC routing and the PIT programming that the guest
         // set before the freeze. Without this call, a halted guest waits
         // for a timer interrupt that does not occur.
-        serial = SerialDevice::restore(vm.clone(), frozen_state.serial);
+        serial = SerialDevice::restore(vm.clone(), frozen_state.serial, console_client.clone());
         vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
             .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
@@ -349,6 +557,19 @@ fn main() {
         );
     }
 
+    // Readiness for the start verb: one line on the inherited pipe,
+    // immediately before the first KVM_RUN. See machine::start.
+    if let Ok(fd) = std::env::var("CELLA_READY_FD") {
+        if let Ok(fd) = fd.parse::<i32>() {
+            // SAFETY: the fd comes from the parent's pipe and belongs
+            // to this process; write and close are its whole use.
+            unsafe {
+                libc::write(fd, b"ready\n".as_ptr() as *const libc::c_void, 6);
+                libc::close(fd);
+            }
+        }
+    }
+
     run_loop(
         vcpu_fd,
         &vm,
@@ -356,6 +577,8 @@ fn main() {
         &mut serial,
         &mut mmio_devices,
         net_poll,
+        console_listener,
+        console_client,
         &args.state_dir,
         mem_size_bytes,
     );
@@ -369,6 +592,8 @@ fn run_loop(
     serial: &mut SerialDevice,
     mmio_devices: &mut [(u64, u64, MmioTransport)],
     net_poll: Option<(usize, i32)>,
+    console_listener: Option<std::os::unix::net::UnixListener>,
+    console_client: devices::serial::ConsoleClient,
     state_dir: &std::path::Path,
     mem_size_bytes: u64,
 ) {
@@ -422,6 +647,13 @@ fn run_loop(
         // raises SIGIO, KVM_RUN returns with EINTR, and the byte lands
         // here even when the guest is idle in HLT.
         poll_stdin_rx(serial);
+        // The console socket: accept a client, and drain its input into
+        // the serial RX FIFO. The accepted stream carries O_ASYNC, thus
+        // a keystroke from the client wakes an idle guest the same way
+        // stdin does.
+        if let Some(listener) = &console_listener {
+            poll_console(listener, &console_client, serial);
+        }
     }
 }
 
@@ -454,6 +686,50 @@ fn setup_stdin_async() {
         libc::fcntl(0, libc::F_SETOWN, libc::getpid());
         let flags = libc::fcntl(0, libc::F_GETFL);
         libc::fcntl(0, libc::F_SETFL, flags | libc::O_ASYNC | libc::O_NONBLOCK);
+    }
+}
+
+/// Accept a console client and drain its input. One client at a
+/// time: a new connection replaces a dead one, and a second live
+/// client is refused by the accept order (the first stays).
+fn poll_console(
+    listener: &std::os::unix::net::UnixListener,
+    client: &devices::serial::ConsoleClient,
+    serial: &mut SerialDevice,
+) {
+    if client.borrow().is_none() {
+        if let Ok((stream, _)) = listener.accept() {
+            let _ = stream.set_nonblocking(true);
+            set_async(&stream);
+            *client.borrow_mut() = Some(stream);
+        }
+    }
+    let mut drop_client = false;
+    if let Some(stream) = client.borrow_mut().as_mut() {
+        use std::io::Read;
+        let mut buf = [0u8; 64];
+        match stream.read(&mut buf) {
+            Ok(0) => drop_client = true,
+            Ok(n) => serial.enqueue(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(_) => drop_client = true,
+        }
+    }
+    if drop_client {
+        *client.borrow_mut() = None;
+    }
+}
+
+/// Give a socket O_ASYNC with this process as the owner, so that its
+/// readiness raises SIGIO and interrupts KVM_RUN (see tap.rs for the
+/// same pattern).
+fn set_async<F: std::os::fd::AsRawFd>(f: &F) {
+    let fd = f.as_raw_fd();
+    // SAFETY: fcntl on an owned fd with valid commands.
+    unsafe {
+        libc::fcntl(fd, libc::F_SETOWN, libc::getpid());
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_ASYNC);
     }
 }
 

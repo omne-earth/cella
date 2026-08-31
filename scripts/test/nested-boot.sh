@@ -23,15 +23,16 @@ case "$MODE" in airgapped|hybrid|www) ;; *) echo "usage: $0 airgapped|hybrid|www
 
 cd "$(dirname "$0")/../.."
 BIN=target/release/cella
-KERNEL=dist/bzImage-nested
-DISK=dist/rootfs-nested.ext4
+CH="${CELLA_HOME:-$HOME/.cella}"
+KERNEL="$CH/kernel/nested/bzImage"
+DISK="$CH/rootfs/nested/rootfs.ext4"
 TAP="${CELLA_TEST_TAP:-tap0}"
 HOST_IP="${CELLA_TAP_CIDR:-192.168.200.1/24}"; HOST_IP="${HOST_IP%%/*}"
 OUTER_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
 TIMEOUT=120
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
-[ -f "$KERNEL" ] && [ -f "$DISK" ] || { echo "SKIP: nested assets missing -- run: make dist-nested"; exit 0; }
+[ -f "$KERNEL" ] && [ -f "$DISK" ] || { echo "SKIP: nested assets missing -- run: make golden-nested"; exit 0; }
 if ! [ -r /dev/kvm ] || ! [ -w /dev/kvm ]; then
     echo "SKIP: no read and write access to /dev/kvm"
     exit 0

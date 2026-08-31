@@ -4,9 +4,11 @@
 //! `/dev/kvm`, as ordinary `cargo test` integration tests.
 
 pub mod boot;
+pub mod build;
 pub mod config;
 pub mod devices;
 pub mod freeze;
+pub mod machine;
 pub mod memory;
 pub mod seccomp;
 pub mod vcpu;
