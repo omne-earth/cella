@@ -18,7 +18,7 @@ KERNEL_VERSION ?= 7.2.2
 BUSYBOX_VERSION ?= 1.37.0
 export KERNEL_VERSION BUSYBOX_VERSION
 
-.PHONY: help build build-static debug check lint fmt fmt-check \
+.PHONY: help build build-static install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist dist-nested setup-tap \
         boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean test-jail test-seccomp test-machine \
@@ -31,7 +31,7 @@ help: ## Show this help
 	echo "cella -- build, lint, and test targets"
 	echo ""
 	echo "Build:"
-	grep -hE '^(build|build-static|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(build|build-static|install|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -72,6 +72,22 @@ debug: ## Debug build (target/debug/cella), faster to compile
 	touch .static
 
 build-static: .static ## Static cella + probe for the nested rootfs, built inside the toolbox (mtime-tracked via .static)
+
+install: build ## Install cella to ~/.local/bin, and add it to PATH in ~/.bashrc when absent
+	$(LOG)
+	install -D -m 0755 target/release/cella $$HOME/.local/bin/cella
+	case ":$$PATH:" in
+	*":$$HOME/.local/bin:"*) echo "cella: ~/.local/bin is already on PATH" ;;
+	*)
+		if ! grep -qs '\.local/bin' $$HOME/.bashrc; then
+			printf '\nexport PATH="$$HOME/.local/bin:$$PATH"\n' >> $$HOME/.bashrc
+			echo "cella: added ~/.local/bin to PATH in ~/.bashrc -- open a new shell"
+		else
+			echo "cella: ~/.bashrc already mentions ~/.local/bin -- open a new shell"
+		fi
+		;;
+	esac
+	echo "cella: installed -> $$HOME/.local/bin/cella"
 
 check: ## cargo check, no codegen
 	$(LOG)
@@ -265,9 +281,9 @@ smoke-nested-boot-www: build ## cella hosts cella, both layers networked (the ou
 
 smoke-nested-boot: smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www ## All three nested variants
 
-smoke-machine: build ## The lifecycle verbs with a real guest: create, start, readiness, stop, restart, destroy (scripts/test/machine-smoke.sh)
+smoke-machine: build ## The lifecycle cycle with a real guest: cella selftest (the first migrated target)
 	$(LOG)
-	$(SCRIPTS)/test/machine-smoke.sh
+	./target/release/cella selftest
 
 smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	$(LOG)

@@ -765,3 +765,141 @@ pub fn stop(name: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+// --- selftest ---------------------------------------------------------
+
+/// The lifecycle cycle as a verb: create, start, freeze, thaw, stop,
+/// restart, destroy, with every refusal checked, in a sandboxed home.
+/// The golden artifacts come from the real home, and build seeds them
+/// from dist/ when the current directory is the repository. Prints
+/// SKIP and succeeds when the machine cannot run here (no /dev/kvm,
+/// no bwrap, no goldens): the callers include the smoke battery,
+/// which must degrade gracefully.
+/// Serial output is not guaranteed UTF-8: the guest console emits a
+/// stray byte at the 8250 init, and read_to_string fails the entire
+/// read on it. Decode lossily -- the same lesson as the probes.
+fn read_lossy(p: &Path) -> String {
+    fs::read(p)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default()
+}
+
+pub fn selftest() -> Result<(), String> {
+    let kvm_ok = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/kvm")
+        .is_ok();
+    if !kvm_ok {
+        println!("SKIP: no read and write access to /dev/kvm");
+        return Ok(());
+    }
+    if std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        println!("SKIP: bwrap not found");
+        return Ok(());
+    }
+    // Goldens: use the real home, and seed from dist/ when possible.
+    for (axis, flavor) in [("kernel", "canonical"), ("rootfs", "cella")] {
+        let p = if axis == "kernel" {
+            kernel_path(flavor)
+        } else {
+            rootfs_path(flavor)
+        };
+        if !p.is_file() && build(axis, flavor).is_err() {
+            println!("SKIP: golden {axis} {flavor} missing -- run: cella build {axis} {flavor}");
+            return Ok(());
+        }
+    }
+    let real_kernel = kernel_path("canonical");
+    let real_rootfs = rootfs_path("cella");
+
+    // A sandboxed home, so that the test disturbs no machine. The
+    // goldens link in from the real home.
+    let sandbox = std::env::temp_dir().join(format!("cella-selftest-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&sandbox);
+    fs::create_dir_all(&sandbox).map_err(|e| format!("creating the sandbox: {e}"))?;
+    std::env::set_var("CELLA_HOME", &sandbox);
+    for (p, src) in [
+        (kernel_path("canonical"), real_kernel),
+        (rootfs_path("cella"), real_rootfs),
+    ] {
+        fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+        fs::copy(&src, &p).map_err(|e| format!("copying a golden: {e}"))?;
+    }
+
+    let result = selftest_cycle();
+    let _ = stop("m1");
+    if let Err(e) = &result {
+        // A failure carries its evidence: the logs stay, and their
+        // tails print.
+        eprintln!("selftest failed: {e}");
+        for f in ["vmm.log", "console.log"] {
+            let p = machine_dir("m1").join(f);
+            let content = read_lossy(&p);
+            let tail = content
+                .lines()
+                .rev()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join("\n  ");
+            eprintln!("-- {f} (last lines, reversed):\n  {tail}");
+        }
+        eprintln!("(sandbox kept: {})", sandbox.display());
+        std::env::remove_var("CELLA_HOME");
+        return result;
+    }
+    std::env::remove_var("CELLA_HOME");
+    let _ = fs::remove_dir_all(&sandbox);
+    println!("PASS: the lifecycle cycle, with every refusal checked");
+    Ok(())
+}
+
+fn selftest_cycle() -> Result<(), String> {
+    fn step(what: &str, r: Result<(), String>) -> Result<(), String> {
+        r.map_err(|e| format!("{what}: {e}"))
+    }
+    fn refuse(what: &str, r: Result<(), String>) -> Result<(), String> {
+        match r {
+            Ok(()) => Err(format!("{what}: accepted, and it must refuse")),
+            Err(_) => Ok(()),
+        }
+    }
+    let mut m = defaults();
+    m.name = "m1".into();
+    m.net = "none".into();
+    step("create", create(&m))?;
+    step("start", start("m1"))?;
+    let console = machine_dir("m1").join("console.log");
+    let mut booted = false;
+    for _ in 0..200 {
+        if read_lossy(&console).contains("cella-rootfs: init running") {
+            booted = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if !booted {
+        return Err("the guest did not reach its init".to_string());
+    }
+    refuse("double start", start("m1"))?;
+    step("freeze", freeze("m1"))?;
+    if !is_frozen("m1") {
+        return Err("no sidecar after the freeze".to_string());
+    }
+    refuse("start while frozen", start("m1"))?;
+    refuse("stop while frozen", stop("m1"))?;
+    step("thaw", thaw("m1"))?;
+    if is_frozen("m1") {
+        return Err("the sidecar survived the thaw".to_string());
+    }
+    refuse("thaw while running", thaw("m1"))?;
+    step("stop", stop("m1"))?;
+    step("restart", start("m1"))?;
+    step("stop again", stop("m1"))?;
+    step("destroy", destroy("m1"))?;
+    Ok(())
+}

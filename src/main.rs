@@ -195,6 +195,11 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             [name] => machine::thaw(name),
             _ => Err("usage: cella thaw <name>".to_string()),
         },
+        "selftest" => machine::selftest(),
+        "help" | "--help" | "-h" => {
+            print_help();
+            Ok(())
+        }
         _ => unreachable!(),
     };
     match ok {
@@ -203,12 +208,44 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
     }
 }
 
+fn print_help() {
+    println!(
+        "cella -- a cryogenic chamber for agents\n\n\
+         The machine lifecycle (see docs/LIFECYCLE.md):\n\
+         \x20 cella build <kernel|rootfs> <flavor>   make a golden artifact\n\
+         \x20 cella create <name> [options]          stage a machine from the goldens\n\
+         \x20 cella start <name>                     run it (detached, jailed)\n\
+         \x20 cella freeze <name>                    stop it and keep the instant\n\
+         \x20 cella thaw <name>                      resume the instant\n\
+         \x20 cella stop <name>                      end it fast, clear the transients\n\
+         \x20 cella destroy <name>                   delete it, once and for all\n\
+         \x20 cella selftest                         run the lifecycle cycle end to end\n\n\
+         create options: --kernel F --rootfs F --mem-mb N --net TAP|auto|none --root rw|ro\n\
+         Defaults live in ~/.cella/config.json; flags override them.\n\n\
+         The flag interface (--state-dir ...) stays for the probes and the tests."
+    );
+}
+
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.is_empty() {
+        print_help();
+        std::process::exit(0);
+    }
     if let Some(first) = argv.first() {
         if matches!(
             first.as_str(),
-            "build" | "create" | "destroy" | "start" | "stop" | "freeze" | "thaw"
+            "build"
+                | "create"
+                | "destroy"
+                | "start"
+                | "stop"
+                | "freeze"
+                | "thaw"
+                | "selftest"
+                | "help"
+                | "--help"
+                | "-h"
         ) {
             run_verb(first.clone().as_str(), &argv[1..]);
         }
