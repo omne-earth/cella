@@ -69,7 +69,9 @@ which destination needs the world to grow, thus every egress frame
 parks, and the verdict comes from outside. A release forwards the
 frame and completes it; a release can carry an allow, which installs
 a pass entry for the destination, and the rest of the flow runs at
-full speed -- one park per new part of the world, not one per frame.
+full speed: the verdict cost is amortized per destination, not paid
+per frame -- one park and one verdict for each destination without a
+pass entry, and an inline table match for every frame after it.
 The other verdict is a freeze: the world grows first, the thaw
 delivers the same frame, and the decision time never enters the
 clock of the guest. The VMM offers park, report, release, and allow;
@@ -132,12 +134,12 @@ Each criterion stands alone, in dependency order. Each has a gate
 target (`make device-state-ac1` .. `device-state-ac4`), and
 `make smoke-device-state` runs all four.
 
-| Criterion | Current state | Target state | On target |
-|---|---|---|---|
-| **AC1 -- the disk survives the thaw** | The sidecar (v7) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. | The same. | yes |
-| **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, the transport restore covers virtio-net, and the gate pings the guest before the freeze and after the thaw. A missing tap fails at start; `setup net` recreates the pool by convention. | The same. | yes |
-| **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, a signal turns the hold on, the sidecar carries the parked frames with their descriptor head indices, and the thaw delivers and completes them. The gate fetches a real www page: the fetch parks, the machine freezes, and the same request completes after the thaw. | The same. | yes |
-| **AC4 -- the verdict is external** | Every egress frame parks under hold, the park reports its destination, and the verdicts come from outside: release with allow installs a pass entry and the flow runs at full speed, or freeze, grow the world, thaw, deliver. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. | The same. | yes |
+| Criterion | State |
+|---|---|
+| **AC1 -- the disk survives the thaw** | The sidecar (v7) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. |
+| **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, the transport restore covers virtio-net, and the gate pings the guest before the freeze and after the thaw. A missing tap fails at start; `setup net` recreates the pool by convention. |
+| **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, a signal turns the hold on, the sidecar carries the parked frames with their descriptor head indices, and the thaw delivers and completes them. The gate fetches a real www page: the fetch parks, the machine freezes, and the same request completes after the thaw. |
+| **AC4 -- the verdict is external** | Every egress frame parks under hold, the park reports its destination, and the verdicts come from outside: release with allow installs a pass entry and the flow runs at full speed, or freeze, grow the world, thaw, deliver. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. |
 
 The clock gates must not move: the transport restore adds host-time
 work outside the clock window, and the probes verify that nothing

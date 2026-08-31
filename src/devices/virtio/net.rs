@@ -31,7 +31,9 @@ pub struct Net {
     parked: Vec<(u16, Vec<u8>)>,
     /// Pass entries, installed by an allow verdict: a destination
     /// IPv4 address and port whose frames flow at full speed under
-    /// hold. One park per new part of the world, not one per frame.
+    /// hold. The verdict cost is amortized per destination: one park
+    /// for a destination without a pass entry, and an inline match
+    /// for every frame after it.
     allowed: Vec<([u8; 4], u16)>,
 }
 

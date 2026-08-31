@@ -182,18 +182,27 @@ ac4)
 	trap 'stop_srv; "$BIN" stop "$VM" >/dev/null 2>&1 || true; rm -rf "$CELLA_HOME"' EXIT
 	VMM="$CELLA_HOME/machines/$VM/vmm.log"
 
-	say "step 1: create and start a machine on $TAP; egress hold on"
+	say "step 1: create and start a machine on $TAP"
 	"$BIN" create "$VM" --net "$TAP" >/dev/null
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
-	kill -USR2 "$VMM_PID"
-	sleep 1
 
-	say "step 2: a request to a known part of the world -- it parks, and reports"
+	say "step 2: prove the path to the host endpoint, before any hold"
 	python3 -m http.server 8080 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV1=$!
 	sleep 1
 	type_in "H=http://$HOST_IP"
+	type_in 'wget -q -O /dev/null $H:8080 && echo pre-o"k"'
+	if ! wait_for "pre-ok"; then
+		# ICMP passes through most zones; unsolicited TCP to the host
+		# does not. The taps must sit in the trusted zone.
+		echo "SKIP: the guest cannot reach $HOST_IP:8080 -- rerun: sudo cella setup net"
+		exit 0
+	fi
+
+	say "step 3: egress hold on; the same request parks, and reports"
+	kill -USR2 "$VMM_PID"
+	sleep 1
 	type_in 'wget -q -O /dev/null $H:8080 && echo rel-o"k" &'
 	deadline=$((SECONDS + 15))
 	until grep -aq "parked egress to $HOST_IP:8080" "$VMM"; do
@@ -203,18 +212,23 @@ ac4)
 	grep -aq "rel-ok" "$CON" && { echo "FAIL: the request passed without a verdict"; exit 1; }
 	echo "  parked, and reported"
 
-	say "step 3: the engine renders release with allow -- the flow completes"
+	say "step 4: the engine renders release with allow -- the flow completes"
 	echo "allow $HOST_IP:8080" > "$CELLA_HOME/machines/$VM/verdict"
 	kill -WINCH "$VMM_PID"
-	wait_for "rel-ok" || { echo "FAIL: the released request did not complete"; exit 1; }
+	wait_for "rel-ok" || {
+		echo "FAIL: the released request did not complete"
+		echo "-- vmm.log:"; tail -6 "$VMM" | sed "s/^/   /"
+		echo "-- console:"; tail -4 "$CON" | sed "s/^/   /"
+		exit 1
+	}
 	PARKS=$(grep -ac "parked egress to $HOST_IP:8080" "$VMM")
 	type_in 'wget -q -O /dev/null $H:8080 && echo rel2-o"k"'
 	wait_for "rel2-ok" || { echo "FAIL: the allowed flow did not run at full speed"; exit 1; }
 	[ "$(grep -ac "parked egress to $HOST_IP:8080" "$VMM")" = "$PARKS" ] \
 		|| { echo "FAIL: the allow entry did not pass the second request"; exit 1; }
-	echo "  one park per new part of the world, not one per frame"
+	echo "  one park and one verdict per destination; later frames match inline"
 
-	say "step 4: a request to a part of the world that does not exist -- it parks"
+	say "step 5: a request to a part of the world that does not exist -- it parks"
 	type_in 'wget -q -O /dev/null $H:9090 && echo world-o"k" &'
 	deadline=$((SECONDS + 15))
 	until grep -aq "parked egress to $HOST_IP:9090" "$VMM"; do
@@ -223,17 +237,22 @@ ac4)
 	done
 	echo "  parked, and reported"
 
-	say "step 5: the engine freezes the machine, and grows the world"
+	say "step 6: the engine freezes the machine, and grows the world"
 	"$BIN" freeze "$VM" >/dev/null
 	grep -aq "held egress frame" "$VMM" || { echo "FAIL: the freeze holds no egress frame"; exit 1; }
 	python3 -m http.server 9090 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV2=$!
 	sleep 1
 	echo "  the endpoint at :9090 now exists"
 
-	say "step 6: thaw -- the same request lands on the endpoint that now exists"
+	say "step 7: thaw -- the same request lands on the endpoint that now exists"
 	"$BIN" thaw "$VM" >/dev/null
-	wait_for "world-ok" || { echo "FAIL: the parked request did not land after the thaw"; exit 1; }
-	echo "  the world grew, and the guest never knew"
+	wait_for "world-ok" || {
+		echo "FAIL: the parked request did not land after the thaw"
+		echo "-- vmm.log:"; tail -6 "$VMM" | sed "s/^/   /"
+		echo "-- console:"; tail -4 "$CON" | sed "s/^/   /"
+		exit 1
+	}
+	echo "  the request completed against the new endpoint; the guest saw no failure"
 
 	echo
 	echo "PASS: AC4 -- the verdict is external"
