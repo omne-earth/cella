@@ -8,3 +8,4 @@ __pycache__/
 # Per-target run logs written by the $(LOG) sentinel (see Makefile).
 .logs/
 /.static
+/vm1/

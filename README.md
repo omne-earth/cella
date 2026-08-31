@@ -180,6 +180,15 @@ mkfs.ext4 rootfs.img
 
 ```sh
 make init          # once per host: deps, toolbox, tap0, dist
+make boot          # a jailed guest in the foreground, state in ./vm1 (VM_DIR=... for another)
+make freeze        # from another terminal: freeze it (SIGUSR1)
+make thaw          # resume it, exactly where it stopped
+```
+
+`boot` copies the canonical disk into the state directory on the first
+run: a guest owns its disk. The equivalent by hand:
+
+```sh
 make dist          # or use your own kernel/disk
 
 scripts/jail.sh \
@@ -201,8 +210,8 @@ kill -USR1 $(pgrep -f 'target/release/cella')
 ```
 
 Run the exact same `jail.sh` command again against the same
-`--state-dir`: it detects the frozen `state` file and thaws instead of
-booting. `--kernel`/`--cmdline`/`--mem-mb` are ignored on thaw (memory
+`--state-dir` (or `make thaw`): it detects the frozen `state` file and
+thaws instead of booting. `--kernel`/`--cmdline`/`--mem-mb` are ignored on thaw (memory
 size comes from the frozen state itself, so it can't disagree with the
 RAM file being reopened).
 

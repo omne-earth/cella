@@ -21,7 +21,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
 .PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist dist-nested setup-tap \
-        smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
+        boot freeze thaw smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -35,6 +35,9 @@ help: ## Show this help
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	echo ""
+	echo "Run: a real jailed guest, interactively:"
+	grep -hE '^(boot|freeze|thaw):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
 	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -124,6 +127,42 @@ test: check lint unit-test integration-test test-jail test-seccomp ## Everything
 	$(LOG)
 	echo ""
 	echo "=== make test: all no-KVM checks passed ==="
+
+# --- Run: a jailed guest in the foreground ---------------------------
+
+# The guest address on the TAP subnet, for the in-kernel ip= config.
+CELLA_GUEST_IP ?= 192.168.200.2
+# The state directory of the guest. One directory is one guest.
+VM_DIR ?= vm1
+
+boot: build dist ## Boot a jailed guest in the foreground at $(VM_DIR) -- or thaw it, when $(VM_DIR) holds a frozen state
+	$(LOG)
+	mkdir -p $(VM_DIR)
+	# A guest owns its disk. The first boot copies the canonical image
+	# into the state directory; the jail binds dist/ read-only.
+	[ -f $(VM_DIR)/disk.img ] || cp dist/rootfs.ext4 $(VM_DIR)/disk.img
+	HOST_IP="$(CELLA_TAP_CIDR)"; HOST_IP="$${HOST_IP%%/*}"
+	CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=$(CELLA_GUEST_IP)::$$HOST_IP:255.255.255.0::eth0:off"
+	$(SCRIPTS)/jail.sh \
+		--state-dir $(VM_DIR) \
+		--kernel dist/bzImage \
+		--disk $(VM_DIR)/disk.img \
+		--tap $(CELLA_TAP) \
+		--mem-mb 256 \
+		--cmdline "$$CMD"
+
+thaw: ## Thaw the frozen guest at $(VM_DIR) (fails when no frozen state exists; boot also thaws)
+	$(LOG)
+	[ -f $(VM_DIR)/state ] || { echo "cella: no frozen state in $(VM_DIR) -- run: make boot, then: make freeze"; exit 1; }
+	$(MAKE) boot
+
+freeze: ## Freeze the running guest (SIGUSR1); thaw it with: make boot
+	$(LOG)
+	# -x matches the process name exactly. A -f pattern would match the
+	# recipe shell itself, whose command line contains the same text.
+	pkill -USR1 -x cella \
+		&& echo "cella: freeze signal sent -- the process exits once the state file is written" \
+		|| { echo "cella: no running cella process"; exit 1; }
 
 # --- Smoke tests: required real KVM ---------------
 
