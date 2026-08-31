@@ -384,9 +384,11 @@ probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time i
 #     bare metal:  -0.128 ms           -> PASS, inside the interval
 #   The nested KVM remainder comes from the outer hypervisor: a thaw
 #   makes a new VM, and the outer hypervisor rebuilds its shadow of the
-#   stage-2 tables on the first guest access. That work is below the
-#   reach of the VMM. It does not exist on bare metal, thus the probe
-#   passes there. Bare metal is the reference for this gate.
+#   stage-2 tables on the first guest access. No ioctl reaches that
+#   shadow; a real guest access does. The warming stub (src/warm.rs,
+#   thaw mode "deep", the default) performs those accesses before the
+#   clock restore, and the gate then passes on both machines. See
+#   docs/NESTED-BOOT.md, "The fix".
 # - The probe measures wake-up lateness after the thaw, not a clock step.
 #   A clock step smaller than the remaining sleep does not show in the
 #   crossing interval, because the wake-up is scheduled in the same clock.

@@ -188,10 +188,75 @@ access. No VMM at any layer can fill that mapping today: the host
 kernel does not propagate a pre-fault through the nested shadow. The
 cost repeats per layer, ~4 ms per level on this hardware.
 
+## The fix
+
+The inception goal was seamless time at every depth. Five changes
+reached it, in the order that the investigation found them. The
+tables above measure each one.
+
+### 1. The ioctl prefill (KVM_PRE_FAULT_MEMORY)
+
+The thaw makes a new KVM VM with empty stage-2 tables, and the first
+heartbeat cycle of the guest paid one fault per touched page: ~25 ms
+of guest-visible lateness. The prefill fills the tables of the direct
+host before the clock restore, and the cost falls outside the clock
+window of the guest. This removed ~21 ms. It reaches one layer only:
+the ioctl cannot touch the mappings of any hypervisor below the
+direct host.
+
+### 2. clock_gettime in the seccomp filter
+
+Not a clock fix: an enabler. On a host the vDSO serves clock_gettime,
+and the syscall never reaches the filter of cella. Inside a guest,
+kvm-clock without PVCLOCK_TSC_STABLE_BIT makes the vDSO refuse, glibc
+falls back to the real syscall, and the inner cella died with SIGSYS
+in do_freeze. probe-inception found this on its first run. Every
+deeper measurement depended on this entry.
+
+### 3. The warming stub (src/warm.rs)
+
+The remainder after the prefill (~4 ms per nesting level) came from
+the layers below the direct host: each one builds its combined
+mapping on the first guest access, and no ioctl at any layer reaches
+them. A real guest access does: the architecture forces every layer
+to resolve the translation. The thaw therefore runs a throwaway stub
+on the fresh vCPU, before the restore of the state and of the clock:
+one byte read and written back per page (the read path and the write
+path both warm), code and page tables in a scratch memslot, exit
+through an OUT instruction (HLT blocks inside KVM with the in-kernel
+irqchip). This works under hypervisors that we do not own, and it
+composes recursively: each layer of a cella stack warms its own view,
+and the touches cascade to the metal.
+
+### 4. Keep the scratch memslot
+
+A deletion of a memslot makes KVM zap all roots, and that discards
+the warming that step 3 just performed. The scratch slot therefore
+stays in place. The guest never addresses its range.
+
+### 5. Memory headroom
+
+Depth three still showed +30 ms after the warming. The cause was not
+a hypervisor: the outer guest had 384 MB, its own reclaim ran during
+the inner boot, and the reclaim evicted the warmed mappings between
+the warming and the first heartbeat. With 1024 MB the gate passes.
+Warming builds the mappings; headroom keeps them.
+
+### Paths not taken
+
+- **A kernel patch** (propagate the prefill through the nested
+  shadow) was the first plan. The warming stub reached the same
+  mappings from userspace, thus no kernel changed at any layer. The
+  patch remains a possible upstream contribution: it would remove the
+  host-time cost of the warming for every user of the kernel.
+- **A module flag** (kvm_intel.eptad) was a diagnostic candidate for
+  the depth-three remainder. The nested development machine runs AMD,
+  the flag does not exist there, and the headroom experiment resolved
+  the remainder first.
+
 ## Next steps
 
-- The per-layer floor lives in the host kernel: nested EPT shadows do
-  not prefetch on KVM_PRE_FAULT_MEMORY of the L1. A kernel-side change
-  would remove the floor for every layer at once.
 - Freeze the outer guest while the inner guest runs, and thaw it: the
   cryogenic principle applied to a hypervisor.
+- Offer the kernel-side prefill propagation upstream, so that the
+  warming cost disappears for every user of the kernel.
