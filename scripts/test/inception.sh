@@ -6,9 +6,10 @@
 # arrives on the outer serial console. This test relays that verdict.
 #
 # The outer guest runs without a TAP, and the inner guest runs with
-# the block device only. On a nested development host the inner guest
-# is four layers from the metal; a missing /dev/kvm in the outer
-# guest is a SKIP, and bare metal is the reference.
+# the block device only. Depth counts the hypervisors between the
+# metal and the inner guest: two on bare metal, three on a nested
+# development host. A missing /dev/kvm in the outer guest is a SKIP,
+# and bare metal is the reference.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

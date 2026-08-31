@@ -128,13 +128,52 @@ seccomp filter of cella lacked clock_gettime, because the vDSO serves
 that call on a host and refuses it inside a guest without
 PVCLOCK_TSC_STABLE_BIT.
 
-Measured difference of the inner thaw against the baseline mean
-(2026-08-30, guest kernel 7.2.2):
+Measured difference of the thawed guest against its baseline mean, at
+every depth (2026-08-30, guest kernel 7.2.2). "Before" is the thaw
+with the ioctl prefill only; "after" adds the stage-2 warming stub
+(src/warm.rs), which reaches every layer below through real guest
+accesses. Depth counts the hypervisor layers between the metal and
+the thawed guest:
 
-| Machine    | Layers from the metal | Difference | Interval    | Verdict |
-|------------|----------------------|------------|-------------|---------|
-| bare metal | 3                    | +4.4 ms    | +/-3.9 ms   | FAIL    |
-| nested KVM | 4                    | +70.1 ms   | +/-10.4 ms  | FAIL    |
+Depth counts the hypervisors between the metal and the thawed guest.
+A direct thaw and an inception differ by one: the KVM of the outer
+guest. The two machines differ by one as well: the nested KVM machine
+is itself a guest of its cloud host.
+
+Bare metal:
+
+| Depth | Experiment  | Before   | After    | Verdict |
+|-------|-------------|----------|----------|---------|
+| 1     | direct thaw | +0.33 ms | -1.17 ms | PASS    |
+| 2     | inception   | +4.4 ms  | +0.04 ms | PASS    |
+
+Nested KVM:
+
+NOTE: this table starts at depth two. The machine is itself a guest
+of its cloud host, thus one hypervisor already sits between the metal
+and everything it runs. Its direct thaw therefore measures the same
+depth as the inception of the bare-metal machine.
+
+| Depth | Experiment  | Before        | After    | Verdict |
+|-------|-------------|---------------|----------|---------|
+| 2     | direct thaw | +2.5..4.3 ms  | +0.15 ms | PASS    |
+| 3     | inception   | +70.1 ms      | +29.8 ms | FAIL    |
+
+The two depth-two rows come from different machines and different
+rigs, and they agree before the warming (+4.4 against +2.5..4.3 ms)
+and after it (+0.04 against +0.15 ms). That agreement is the
+cross-validation of the whole measurement.
+
+The trend before the warming: near zero at depth one, ~4 ms at depth
+two, and a multiplicative jump at depth three. The trend after the
+warming: zero within the interval at depths one and two, on both
+machines, without a kernel change at any layer.
+
+The one open case is depth three: the warming halves the excess and
+does not remove it. The remainder there is specific to the compounded
+stack; the candidates are eviction between the warming and the first
+heartbeat, and the accessed and dirty bit writes of the page walker,
+which a data touch does not warm.
 
 The inner prefill works one layer down (KVM_PRE_FAULT_MEMORY through
 the guest kernel, ~3 ms). The remaining +4.4 ms on bare metal has the
