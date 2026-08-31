@@ -105,6 +105,9 @@ an address and pings the inner guest. The packet path is: outer init
 | nested KVM | 3 hypervisor layers       | PASS      | PASS   | PASS |
 | bare metal | 2 hypervisor layers       | PASS      | PASS   | PASS |
 
+Re-validation with the guest kernel 7.2.2 (2026-08-30): all six
+cells pass unchanged.
+
 ## Reproduce
 
 ```
