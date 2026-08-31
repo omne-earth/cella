@@ -135,14 +135,10 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             let Some(name) = it.next() else {
                 fatal("usage: cella create <name> [--kernel F] [--rootfs F] [--mem-mb N] [--net TAP|none] [--root rw|ro]")
             };
-            let mut m = machine::Manifest {
-                name: name.clone(),
-                kernel: "canonical".into(),
-                rootfs: "cella".into(),
-                mem_mb: 256,
-                net: "none".into(),
-                root: "rw".into(),
-            };
+            // Precedence: flags, then ~/.cella/config.json, then the
+            // built-in defaults.
+            let mut m = machine::defaults();
+            m.name = name.clone();
             let mut res = Ok(());
             while let Some(a) = it.next() {
                 let mut val = |what: &str| {
@@ -167,8 +163,11 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
                 }
             }
             res.and_then(|()| machine::create(&m)).map(|()| {
+                let net = machine::read_manifest(&m.name)
+                    .map(|r| r.net)
+                    .unwrap_or_else(|_| m.net.clone());
                 println!(
-                    "cella: created machine {:?} at {}",
+                    "cella: created machine {:?} at {} (net {net})",
                     m.name,
                     machine::machine_dir(&m.name).display()
                 );

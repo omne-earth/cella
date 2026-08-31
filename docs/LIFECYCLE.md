@@ -83,6 +83,7 @@ is its manifest and its disk, nothing else.
 
 ```
 $HOME/.cella/
+  config.json                    the defaults of create; flags override it
   kernel/<flavor>/bzImage        golden kernels (build)
   rootfs/<flavor>/rootfs.ext4    golden root filesystems (build)
   machines/<name>/
@@ -105,8 +106,14 @@ configuration (flavors, memory, network, root mode) in the manifest;
 ad-hoc: `cella build kernel <flavor>`.
 
 The defaults of `create`: kernel `canonical`, rootfs `cella` -- the
-interactive mvp image. The probes request the canonical rootfs
-explicitly.
+interactive mvp image. `~/.cella/config.json` overrides any of the
+defaults, and flags override both. The probes request the canonical
+rootfs explicitly.
+
+A networked machine claims its tap in the manifest, and the claim is
+exclusive from create to destroy: `create --net auto` allocates the
+lowest tap that is present on the host and claimed by no machine, and
+an explicit `--net tapN` is refused when another manifest holds it.
 
 `$HOME/.cella/` is the one artifact home. The repository's `dist/`
 retires as the migration proceeds: each step re-points its probes and

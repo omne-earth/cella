@@ -62,6 +62,53 @@ pub struct Manifest {
     pub root: String,
 }
 
+/// Read one field of a flat JSON object: a quoted string or a bare
+/// number. Returns None when the key is absent.
+fn json_field<'a>(s: &'a str, key: &str) -> Option<&'a str> {
+    let pat = format!("\"{key}\":");
+    let i = s.find(&pat)?;
+    let rest = s[i + pat.len()..].trim_start();
+    if let Some(r) = rest.strip_prefix('"') {
+        r.split('"').next()
+    } else {
+        rest.split(|c: char| c == ',' || c == '}' || c.is_whitespace())
+            .next()
+    }
+}
+
+/// The defaults of create, from ~/.cella/config.json. Every field is
+/// optional; an absent file or an absent field falls back to the
+/// built-in default. Flags override both.
+pub fn defaults() -> Manifest {
+    let mut m = Manifest {
+        name: String::new(),
+        kernel: "canonical".into(),
+        rootfs: "cella".into(),
+        mem_mb: 256,
+        net: "none".into(),
+        root: "rw".into(),
+    };
+    let Ok(s) = fs::read_to_string(home().join("config.json")) else {
+        return m;
+    };
+    if let Some(v) = json_field(&s, "kernel") {
+        m.kernel = v.to_string();
+    }
+    if let Some(v) = json_field(&s, "rootfs") {
+        m.rootfs = v.to_string();
+    }
+    if let Some(v) = json_field(&s, "mem_mb").and_then(|v| v.parse().ok()) {
+        m.mem_mb = v;
+    }
+    if let Some(v) = json_field(&s, "net") {
+        m.net = v.to_string();
+    }
+    if let Some(v) = json_field(&s, "root") {
+        m.root = v.to_string();
+    }
+    m
+}
+
 impl Manifest {
     pub fn to_json(&self) -> String {
         format!(
@@ -74,21 +121,11 @@ impl Manifest {
     /// numbers, thus no escape handling is necessary; a manifest that
     /// does not parse is an error, not a guess.
     pub fn from_json(s: &str) -> Result<Manifest, String> {
-        fn field<'a>(s: &'a str, key: &str) -> Result<&'a str, String> {
-            let pat = format!("\"{key}\":");
-            let i = s.find(&pat).ok_or_else(|| format!("missing field {key}"))?;
-            let rest = s[i + pat.len()..].trim_start();
-            if let Some(r) = rest.strip_prefix('"') {
-                r.split('"')
-                    .next()
-                    .ok_or_else(|| format!("bad field {key}"))
-            } else {
-                Ok(rest
-                    .split(|c: char| c == ',' || c == '}' || c.is_whitespace())
-                    .next()
-                    .unwrap_or(""))
-            }
-        }
+        let field = |s: &str, key: &str| -> Result<String, String> {
+            json_field(s, key)
+                .map(str::to_string)
+                .ok_or_else(|| format!("missing field {key}"))
+        };
         Ok(Manifest {
             name: field(s, "name")?.to_string(),
             kernel: field(s, "kernel")?.to_string(),
@@ -126,8 +163,49 @@ pub fn read_manifest(name: &str) -> Result<Manifest, String> {
     Manifest::from_json(&s)
 }
 
-/// Stage a machine: verify the goldens, copy the rootfs flavor to the
-/// machine's own disk, and write the manifest. No process starts.
+/// The tap devices that the existing machines claim. The manifest is
+/// the record of an allocation: one tap belongs to one machine, from
+/// create to destroy.
+fn claimed_taps() -> Vec<String> {
+    let Ok(entries) = fs::read_dir(home().join("machines")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let s = fs::read_to_string(e.path().join("manifest.json")).ok()?;
+            let net = json_field(&s, "net")?.to_string();
+            (net != "none").then_some(net)
+        })
+        .collect()
+}
+
+/// Allocate the lowest free tap: present on the host, and claimed by
+/// no machine.
+fn allocate_tap() -> Result<String, String> {
+    let claimed = claimed_taps();
+    let mut taps: Vec<(u32, String)> = fs::read_dir("/sys/class/net")
+        .map_err(|e| format!("listing /sys/class/net: {e}"))?
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let n: u32 = name.strip_prefix("tap")?.parse().ok()?;
+            Some((n, name))
+        })
+        .collect();
+    taps.sort();
+    taps.into_iter()
+        .map(|(_, name)| name)
+        .find(|t| !claimed.contains(t))
+        .ok_or_else(|| {
+            "no free tap in the pool -- run: make setup-tap (or free one with destroy)".to_string()
+        })
+}
+
+/// Stage a machine: verify the goldens, resolve the network claim,
+/// copy the rootfs flavor to the machine's own disk, and write the
+/// manifest. No process starts. The manifest records the resolved tap
+/// name, thus two machines cannot share one tap.
 pub fn create(m: &Manifest) -> Result<(), String> {
     if !valid_name(&m.name) {
         return Err(format!(
@@ -140,6 +218,15 @@ pub fn create(m: &Manifest) -> Result<(), String> {
         return Err(format!(
             "machine {:?} already exists -- destroy it first, or pick another name",
             m.name
+        ));
+    }
+    let mut m = m.clone();
+    if m.net == "auto" {
+        m.net = allocate_tap()?;
+    } else if m.net != "none" && claimed_taps().contains(&m.net) {
+        return Err(format!(
+            "tap {:?} is already claimed by another machine",
+            m.net
         ));
     }
     let kernel = kernel_path(&m.kernel);
@@ -229,7 +316,15 @@ mod tests {
     use super::*;
 
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let dir = std::env::temp_dir().join(format!("cella-machine-test-{}", std::process::id()));
+        // The environment is process-global and the tests run in
+        // parallel threads: serialize every test that sets CELLA_HOME.
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "cella-machine-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         std::env::set_var("CELLA_HOME", &dir);
@@ -264,6 +359,47 @@ mod tests {
         assert!(!valid_name("a/b"));
         assert!(!valid_name("A"));
         assert!(!valid_name(".."));
+    }
+
+    #[test]
+    fn defaults_read_config_and_flags_win() {
+        with_temp_home(|| {
+            let d = defaults();
+            assert_eq!(
+                (d.kernel.as_str(), d.rootfs.as_str()),
+                ("canonical", "cella")
+            );
+            fs::write(
+                home().join("config.json"),
+                "{\n  \"rootfs\": \"canonical\",\n  \"mem_mb\": 128\n}\n",
+            )
+            .unwrap();
+            let d = defaults();
+            assert_eq!(d.rootfs, "canonical");
+            assert_eq!(d.mem_mb, 128);
+            assert_eq!(d.kernel, "canonical"); // absent field keeps the built-in
+        });
+    }
+
+    #[test]
+    fn a_tap_claim_is_exclusive() {
+        with_temp_home(|| {
+            for p in [kernel_path("canonical"), rootfs_path("canonical")] {
+                fs::create_dir_all(p.parent().unwrap()).unwrap();
+                fs::write(&p, b"fake").unwrap();
+            }
+            let mut a = sample();
+            a.net = "tap7".into();
+            create(&a).unwrap();
+            let mut b = sample();
+            b.name = "m2".into();
+            b.net = "tap7".into();
+            let err = create(&b).unwrap_err();
+            assert!(err.contains("already claimed"), "{err}");
+            destroy("m1").unwrap();
+            create(&b).unwrap(); // the destroy freed the claim
+            destroy("m2").unwrap();
+        });
     }
 
     #[test]
