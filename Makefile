@@ -188,7 +188,7 @@ freeze: ## Freeze the running guest (SIGUSR1); thaw it with: make boot
 		&& echo "cella: freeze signal sent -- the process exits once the state file is written" \
 		|| { echo "cella: no running cella process"; exit 1; }
 
-demo: build dist $(DIST)/rootfs-cella.ext4 ## The chamber, narrated: boot a shell, freeze it mid-conversation, thaw it, ask what it remembers. Tears down after.
+demo: build dist $(DIST)/rootfs-cella.ext4 ## End-to-end demonstration: boot a shell, store a value, freeze, thaw, read the value back. Tears down after.
 	$(LOG)
 	$(SCRIPTS)/test/demo.sh
 
