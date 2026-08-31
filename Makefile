@@ -173,8 +173,12 @@ boot: build dist $(DIST)/rootfs-cella.ext4 ## Boot a detached jailed guest at $(
 	[ "$(DIAG)" = 1 ] && CMD="$$CMD cella_diag" || true
 	# Detached: the guest runs in a tmux session, and the pane is the
 	# serial console. pipe-pane mirrors the console into .logs/.
+	# The pane carries the guest serial console only. The stderr of the
+	# VMM (timing, restore, warm lines) goes to its own log: a reader of
+	# the console -- a person, or an agent whose world is this pane --
+	# must not see the instrumentation of the operator.
 	tmux new-session -d -s "cella-$(VM_DIR)" \
-		"$(SCRIPTS)/jail.sh --state-dir $(VM_DIR) --kernel dist/bzImage --disk $(VM_DIR)/disk.img $$TAPARGS --mem-mb 256 --cmdline '$$CMD'"
+		"$(SCRIPTS)/jail.sh --state-dir $(VM_DIR) --kernel dist/bzImage --disk $(VM_DIR)/disk.img $$TAPARGS --mem-mb 256 --cmdline '$$CMD' 2>> $(LOGDIR)/vmm-$(VM_DIR)-$$(date +%Y%m%d-%H%M%S).log"
 	tmux pipe-pane -t "cella-$(VM_DIR)" -o "cat >> $(LOGDIR)/console-$(VM_DIR)-$$(date +%Y%m%d-%H%M%S).log"
 	# Do not report a running guest before the guest survives its start:
 	# a stale sidecar or a busy TAP kills it within the first second.
