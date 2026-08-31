@@ -1104,6 +1104,17 @@ pub fn info(name: &str) -> Result<(), String> {
     let dir = machine_dir(name);
     println!("name:    {}", m.name);
     println!("state:   {}", state_of(name));
+    if is_frozen(name) {
+        if let Ok(md) = fs::metadata(dir.join("state")) {
+            if let Ok(t) = md.modified() {
+                let secs = t
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                println!("frozen:  since epoch {secs} (the mtime of the sidecar)");
+            }
+        }
+    }
     if is_running(name) {
         if let Ok(pid) = fs::read_to_string(pid_path(name)) {
             println!("pid:     {}", pid.trim());
