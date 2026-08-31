@@ -46,7 +46,7 @@ struct Args {
     state_dir: PathBuf,
     disk: PathBuf,
     disk_ro: bool,
-    tap: String,
+    tap: Option<String>,
     mac: [u8; 6],
     kernel: Option<PathBuf>,
     cmdline: String,
@@ -84,7 +84,7 @@ fn parse_args() -> Args {
                     .unwrap_or_else(|_| usage_error("--mem-mb must be a number"))
             }
             "-h" | "--help" => usage_error(
-                "cella --state-dir DIR --disk PATH --tap NAME [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
+                "cella --state-dir DIR --disk PATH [--tap NAME] [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
             ),
             other => usage_error(&format!("unknown argument: {other}")),
         }
@@ -94,7 +94,7 @@ fn parse_args() -> Args {
         state_dir: state_dir.unwrap_or_else(|| usage_error("--state-dir is required")),
         disk: disk.unwrap_or_else(|| usage_error("--disk is required")),
         disk_ro,
-        tap: tap.unwrap_or_else(|| usage_error("--tap is required")),
+        tap,
         mac,
         kernel,
         cmdline,
@@ -213,27 +213,33 @@ fn main() {
 
     let block = Block::new(&args.disk, args.disk_ro)
         .unwrap_or_else(|e| fatal(&format!("open disk {:?}: {e}", args.disk)));
-    // Must precede Tap::open (inside Net::new): the TAP fd is O_ASYNC,
-    // and SIGIO's default action is to terminate the process. A frame
-    // can arrive the instant the fd exists.
-    install_sigio_handler();
-    let net = Net::new(&args.tap, args.mac)
-        .unwrap_or_else(|e| fatal(&format!("open tap {:?}: {e}", args.tap)));
-    let net_fd = net.tap_fd();
-
-    let mut mmio_devices: Vec<(u64, u64, MmioTransport)> = vec![
-        (
-            BLOCK_MMIO_BASE,
-            MMIO_LEN,
-            MmioTransport::new(Box::new(block), irq_raiser.clone(), BLOCK_IRQ),
-        ),
-        (
-            NET_MMIO_BASE,
-            MMIO_LEN,
-            MmioTransport::new(Box::new(net), irq_raiser.clone(), NET_IRQ),
-        ),
-    ];
-    let net_transport_idx = 1usize;
+    let mut mmio_devices: Vec<(u64, u64, MmioTransport)> = vec![(
+        BLOCK_MMIO_BASE,
+        MMIO_LEN,
+        MmioTransport::new(Box::new(block), irq_raiser.clone(), BLOCK_IRQ),
+    )];
+    // The network is optional. A guest without --tap gets the block
+    // device only, and the kernel command line then must name one
+    // virtio_mmio device, not two. The nested smoke test runs the inner
+    // cella in this mode, because the inner guest has no TAP device.
+    let net_poll: Option<(usize, i32)> = match &args.tap {
+        Some(tap) => {
+            // Must precede Tap::open (inside Net::new): the TAP fd is
+            // O_ASYNC, and SIGIO's default action is to terminate the
+            // process. A frame can arrive the instant the fd exists.
+            install_sigio_handler();
+            let net = Net::new(tap, args.mac)
+                .unwrap_or_else(|e| fatal(&format!("open tap {tap:?}: {e}")));
+            let net_fd = net.tap_fd();
+            mmio_devices.push((
+                NET_MMIO_BASE,
+                MMIO_LEN,
+                MmioTransport::new(Box::new(net), irq_raiser.clone(), NET_IRQ),
+            ));
+            Some((mmio_devices.len() - 1, net_fd))
+        }
+        None => None,
+    };
 
     let mut serial = SerialDevice::new(vm.clone());
 
@@ -338,8 +344,7 @@ fn main() {
         &mem,
         &mut serial,
         &mut mmio_devices,
-        net_transport_idx,
-        net_fd,
+        net_poll,
         &args.state_dir,
         mem_size_bytes,
     );
@@ -352,8 +357,7 @@ fn run_loop(
     mem: &vm_memory::GuestMemoryMmap,
     serial: &mut SerialDevice,
     mmio_devices: &mut [(u64, u64, MmioTransport)],
-    net_transport_idx: usize,
-    net_fd: i32,
+    net_poll: Option<(usize, i32)>,
     state_dir: &std::path::Path,
     mem_size_bytes: u64,
 ) {
@@ -392,7 +396,9 @@ fn run_loop(
         // what forces the EINTR that lands us here; safe to call
         // unconditionally -- a no-op if nothing is pending or no RX
         // buffers are posted (see mmio.rs::poll_queue and net.rs).
-        poll_net_rx(mmio_devices, net_transport_idx, net_fd, mem);
+        if let Some((idx, net_fd)) = net_poll {
+            poll_net_rx(mmio_devices, idx, net_fd, mem);
+        }
     }
 }
 

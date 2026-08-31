@@ -18,10 +18,10 @@ KERNEL_VERSION ?= 6.18.47
 BUSYBOX_VERSION ?= 1.37.0
 export KERNEL_VERSION BUSYBOX_VERSION
 
-.PHONY: help build debug check lint fmt fmt-check \
+.PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
-        init dist setup-tap \
-        smoke smoke-boot smoke-thaw smoke-net smoke-clean test-jail test-seccomp \
+        init dist dist-nested setup-tap \
+        smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate \
         kernel-config-check
@@ -31,16 +31,16 @@ help: ## Show this help
 	echo "cella -- build, lint, and test targets"
 	echo ""
 	echo "Build:"
-	grep -hE '^(build|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(build|build-static|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
-	grep -hE '^(init|dist|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(init|dist|dist-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Everything:"
 	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -57,6 +57,10 @@ build: ## Release build (target/release/cella)
 debug: ## Debug build (target/debug/cella), faster to compile
 	$(LOG)
 	$(CARGO) build
+
+build-static: .toolbox ## Static cella for the nested rootfs, built inside the toolbox
+	$(LOG)
+	$(SCRIPTS)/build/static.sh
 
 check: ## cargo check, no codegen
 	$(LOG)
@@ -135,11 +139,28 @@ smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> 
 	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0 PROBE_CARGO_FLAGS=--release
 	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0 PROBE_CARGO_FLAGS=--release
 
+# Deliberately not dist-nested: at test time only the artifacts matter,
+# and the bare-metal machine receives them through the shared copy.
+# Build them with: make dist-nested (needs the toolbox).
+smoke-nested-boot-airgapped: build ## cella hosts cella, no network on either layer
+	$(LOG)
+	$(SCRIPTS)/test/nested-boot.sh airgapped
+
+smoke-nested-boot-hybrid: build ## cella hosts cella, the outer guest networked, the inner airgapped
+	$(LOG)
+	$(SCRIPTS)/test/nested-boot.sh hybrid
+
+smoke-nested-boot-www: build ## cella hosts cella, both layers networked (the outer init pings the inner guest)
+	$(LOG)
+	$(SCRIPTS)/test/nested-boot.sh www
+
+smoke-nested-boot: smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www ## All three nested variants
+
 smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	$(LOG)
 	$(SCRIPTS)/test/net.sh
 
-smoke: smoke-boot smoke-thaw smoke-net ## All three smoke-* targets (skips gracefully without KVM)
+smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot ## All smoke-* targets (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
@@ -167,6 +188,12 @@ $(DIST)/bzImage $(DIST)/rootfs.ext4: | .toolbox
 	$(SCRIPTS)/build/assets.sh
 
 dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
+
+$(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4: | .toolbox
+	$(LOG)
+	$(SCRIPTS)/build/assets-nested.sh
+
+dist-nested: dist build-static $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 ## Nested test assets: bzImage-nested (KVM host stack) + rootfs-nested.ext4 (static cella + canonical inner assets)
 
 kernel-config-check: ## Resolve kernel-fragment.config against defconfig and report any line kconfig silently overruled (seconds, no compile)
 	$(LOG)
