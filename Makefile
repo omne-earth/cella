@@ -235,7 +235,7 @@ smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/tes
 	$(LOG)
 	$(SCRIPTS)/test/net.sh
 
-smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot ## All smoke-* targets (skips gracefully without KVM)
+smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot probe-inception ## All smoke-* targets + the deep clock probe (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
