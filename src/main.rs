@@ -223,6 +223,7 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
         "setup" => match args.first().map(|s| s.as_str()) {
             Some("net") => {
                 let mut taps = 4u32;
+                let mut first = 0u32;
                 let mut it = args[1..].iter();
                 while let Some(a) = it.next() {
                     match a.as_str() {
@@ -232,10 +233,16 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
                                 .and_then(|v| v.parse().ok())
                                 .unwrap_or_else(|| usage_error("--taps needs a number"));
                         }
+                        "--from" => {
+                            first = it
+                                .next()
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or_else(|| usage_error("--from needs a number"));
+                        }
                         other => usage_error(&format!("unknown setup net option: {other}")),
                     }
                 }
-                machine::setup_net(taps)
+                machine::setup_net(taps, first)
             }
             _ => Err("usage: sudo cella setup net [--taps N]".to_string()),
         },
