@@ -220,6 +220,25 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             _ => Err("usage: cella info <name>".to_string()),
         },
         "selftest" => machine::selftest(),
+        "setup" => match args.first().map(|s| s.as_str()) {
+            Some("net") => {
+                let mut taps = 4u32;
+                let mut it = args[1..].iter();
+                while let Some(a) = it.next() {
+                    match a.as_str() {
+                        "--taps" => {
+                            taps = it
+                                .next()
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or_else(|| usage_error("--taps needs a number"));
+                        }
+                        other => usage_error(&format!("unknown setup net option: {other}")),
+                    }
+                }
+                machine::setup_net(taps)
+            }
+            _ => Err("usage: sudo cella setup net [--taps N]".to_string()),
+        },
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -246,7 +265,8 @@ fn print_help() {
          \x20 cella destroy <name>                   delete it, once and for all\n\
          \x20 cella list                             every machine, one line each\n\
          \x20 cella info <name>                      everything about one machine\n\
-         \x20 cella selftest                         run the lifecycle cycle end to end\n\n\
+         \x20 cella selftest                         run the lifecycle cycle end to end\n\
+         \x20 sudo $(which cella) setup net --taps N provision the tap pool + NAT (the one root verb)\n\n\
          create options: --kernel F --rootfs F --mem-mb N --net TAP|auto|none --root rw|ro --diag\n\
          Defaults live in ~/.cella/config.json; flags override them.\n\n\
          The flag interface (--state-dir ...) stays for the probes and the tests."
@@ -273,6 +293,7 @@ fn main() {
                 | "list"
                 | "info"
                 | "selftest"
+                | "setup"
                 | "help"
                 | "--help"
                 | "-h"

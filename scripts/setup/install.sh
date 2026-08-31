@@ -53,9 +53,12 @@ cella: install done.
 
 Next, from any directory (no make needed from here on):
 
-  1. The network, once per host boot (the one sudo moment;
-     a future `cella setup net` verb will own this):
-       sudo $(cd "$(dirname "$0")" && pwd)/tap.sh tap0 192.168.200.1/24
+  1. The network, once per host boot (the one root verb; the pool
+     feeds `cella create --net auto`, and the manifests are the
+     allocation record). sudo does not search ~/.local/bin, thus the
+     full path:
+       NUMBER_OF_TAPS=4
+       sudo "\$(which cella)" setup net --taps "\$NUMBER_OF_TAPS"
 
   2. Prove the lifecycle end to end:
        cella selftest

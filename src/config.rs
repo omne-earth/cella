@@ -58,7 +58,7 @@ pub const DEFAULT_TIME_ARGS: &str = "tsc=reliable clocksource=kvm-clock trace_cl
 pub const DEFAULT_THAW_PREFAULT: &str = "deep";
 
 /// The static addresses of the TAP subnet, in one place: the guest
-/// address and the host gateway. scripts/setup/tap.sh creates the
+/// address and the host gateway. `sudo cella setup net` creates the
 /// host side; a networked machine uses these on its ip= argument.
 pub const DEFAULT_GUEST_IP: &str = "192.168.200.2";
 pub const DEFAULT_HOST_IP: &str = "192.168.200.1";

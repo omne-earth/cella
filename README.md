@@ -84,7 +84,6 @@ scripts/
   jail.sh                  rootless bwrap wrapper, no jailer binary
   setup/
     install.sh                 host setup: deps, toolbox prerequisites, the cella binary to ~/.local/bin
-    tap.sh                       one-time (per boot) TAP device creation, needs sudo once
   build/
     assets.sh                 build a busybox rootfs + a bzImage kernel from source
     assets-nested.sh           the nested artifacts: bzImage-nested + the nested/inception rootfs
@@ -283,9 +282,9 @@ state directory first and thaw the copy.
 - **Jail:** `scripts/jail.sh` wraps the binary in `bubblewrap`
   (`--unshare-user/pid/ipc/uts/cgroup`), binding in only the specific
   kernel/disk/state paths given on the command line, `/dev/kvm`, and
-  `/dev/net/tun`. No jailer binary, no root at runtime -- `scripts/setup/tap.sh`
-  is the only step that needs `sudo`, once per boot, purely to create the
-  TAP device (`CAP_NET_ADMIN`).
+  `/dev/net/tun`. No jailer binary, no root at runtime -- `sudo cella setup net`
+  is the only step that needs root, once per boot, purely to provision
+  the TAP pool and the NAT (`CAP_NET_ADMIN`).
 - **seccomp:** `seccomp.rs` is a hand-rolled classic-BPF allowlist
   (~25 syscalls, no argument filtering), installed once right before the
   run loop. It's wider than "just `KVM_RUN`" because freezing needs
