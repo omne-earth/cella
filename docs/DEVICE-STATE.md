@@ -87,9 +87,9 @@ then net when present):
 - queue select (u32)
 - per queue: ready (u8), size (u16), and the three ring addresses
   (u64 each), next-available (u16), next-used (u16)
-- held egress frames: a count, then each frame with its length
-  (frames read from the TX ring and not yet written to the TAP at
-  the freeze instant)
+- held egress frames: a count, then each frame with its descriptor
+  head index and its length (frames read from the TX ring and not
+  yet written to the TAP at the freeze instant)
 
 At thaw, after the vCPU restore and before the first KVM_RUN, each
 transport rebuilds from its block: the Queue objects take their
@@ -100,7 +100,10 @@ same persistent tap.
 
 A machine frozen with net and thawed on a host where the tap is gone
 fails at start with the existing tap error; the manifest records the
-claim, and setup net recreates the pool.
+claim, and setup net recreates the pool. Each pool tap carries a
+deterministic MAC, by convention, thus a recreated tap is
+indistinguishable from the tap that froze: the cached neighbor entry
+of the guest stays valid, and the guest cannot tell.
 
 ## Order in the thaw
 
@@ -128,7 +131,7 @@ target (`make device-state-ac1` .. `device-state-ac4`), and
 |---|---|---|---|
 | **AC1 -- the disk survives the thaw** | The sidecar (v7) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. | The same. | yes |
 | **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, the transport restore covers virtio-net, and the gate pings the guest before the freeze and after the thaw. A missing tap fails at start; `setup net` recreates the pool by convention. | The same. | yes |
-| **AC3 -- the in-flight layer is exact** | The sidecar format carries held egress frames, and the block path is synchronous by construction. No park point exists, and no held frame is delivered at thaw. | A parked egress frame is delivered and completed after the thaw: the same request works, with no retransmission. | no |
+| **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, a signal turns the hold on, the sidecar carries the parked frames with their descriptor head indices, and the thaw delivers and completes them. The gate fetches a real www page: the fetch parks, the machine freezes, and the same request completes after the thaw. | The same. | yes |
 | **AC4 -- the verdict is external** | Nothing parks. | Every egress frame parks by default, and the manager (standing in for the engine) renders the verdict: release with allow for a known destination, or freeze, grow the world, thaw, deliver. The guest never knows. The world-ratchet gate below proves it end to end. | no |
 
 The clock gates must not move: the transport restore adds host-time

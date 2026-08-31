@@ -32,9 +32,14 @@ const BLOCK_IRQ: u32 = 5;
 const NET_IRQ: u32 = 6;
 
 static FREEZE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static HOLD_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_sigusr1(_: libc::c_int) {
     FREEZE_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn on_sigusr2(_: libc::c_int) {
+    HOLD_REQUESTED.store(true, Ordering::SeqCst);
 }
 
 // SIGIO from the TAP fd (see tap.rs). The handler's only job is to exist
@@ -530,6 +535,12 @@ fn main() {
         for (st, (_, _, transport)) in frozen_state.devices.iter().zip(mmio_devices.iter_mut()) {
             transport.restore_state(st);
         }
+        // Deliver and complete the held egress frames: write each to
+        // the TAP, oldest first, mark its buffer used, and raise the
+        // interrupt (see docs/DEVICE-STATE.md, "Order in the thaw").
+        for (_, _, transport) in mmio_devices.iter_mut() {
+            transport.deliver_held(&mem);
+        }
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
         // PVCLOCK_GUEST_STOPPED in the pvclock page, and the flag tells
         // the guest that it was stopped. The freeze must not exist for
@@ -621,11 +632,24 @@ fn run_loop(
     mem_size_bytes: u64,
 ) {
     loop {
+        if HOLD_REQUESTED.swap(false, Ordering::SeqCst) {
+            // The egress hold, before the freeze: hold-then-freeze,
+            // in that order (see docs/DEVICE-STATE.md). Every
+            // transport gets the call; only virtio-net acts on it.
+            for (_, _, t) in mmio_devices.iter_mut() {
+                t.set_hold(true);
+            }
+            eprintln!("cella: egress hold on");
+        }
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
             let device_states: Vec<_> = mmio_devices
                 .iter()
                 .map(|(_, _, t)| t.save_state())
                 .collect();
+            let held: usize = device_states.iter().map(|d| d.held_frames.len()).sum();
+            if held > 0 {
+                eprintln!("cella: freezing with {held} held egress frame(s)");
+            }
             do_freeze(
                 &vcpu_fd,
                 vm,
@@ -850,6 +874,12 @@ fn install_sigusr1_handler() {
         // through it.
         sa.sa_flags = 0;
         libc::sigaction(libc::SIGUSR1, &sa, std::ptr::null_mut());
+        // SIGUSR2 turns the egress hold on (see docs/DEVICE-STATE.md).
+        let mut sa2: libc::sigaction = std::mem::zeroed();
+        sa2.sa_sigaction = on_sigusr2 as *const () as usize;
+        libc::sigemptyset(&mut sa2.sa_mask);
+        sa2.sa_flags = 0;
+        libc::sigaction(libc::SIGUSR2, &sa2, std::ptr::null_mut());
     }
 }
 

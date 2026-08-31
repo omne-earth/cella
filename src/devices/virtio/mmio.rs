@@ -64,7 +64,9 @@ pub struct TransportState {
     pub isr: u32,
     pub driver_features: u64,
     pub queues: Vec<QueueState>,
-    pub held_frames: Vec<Vec<u8>>,
+    /// Parked egress frames: the descriptor head index, and the frame
+    /// bytes (vnet header included).
+    pub held_frames: Vec<(u16, Vec<u8>)>,
 }
 
 pub struct MmioTransport {
@@ -250,9 +252,8 @@ impl MmioTransport {
         }
     }
 
-    /// Copy the device-side state out, for the freeze sidecar. The
-    /// held-frames field stays empty here: the run loop owns the parked
-    /// egress frames and fills the field itself.
+    /// Copy the device-side state out, for the freeze sidecar,
+    /// parked egress frames included.
     pub fn save_state(&self) -> TransportState {
         TransportState {
             status: self.status,
@@ -272,7 +273,7 @@ impl MmioTransport {
                     next_used: q.next_used(),
                 })
                 .collect(),
-            held_frames: Vec::new(),
+            held_frames: self.device.held_frames(),
         }
     }
 
@@ -304,6 +305,33 @@ impl MmioTransport {
             q.set_next_used(qs.next_used);
             q.set_ready(qs.ready);
         }
+        self.device.restore_held(st.held_frames.clone());
+    }
+
+    /// Turn the egress hold on or off (see docs/DEVICE-STATE.md).
+    pub fn set_hold(&mut self, on: bool) {
+        self.device.set_hold(on);
+    }
+
+    /// Deliver the parked egress frames, at thaw: write each frame to
+    /// the TAP, oldest first, and complete it -- the buffer is marked
+    /// used and the interrupt is raised. At the trap instant the
+    /// guest owned no completion, and without this step its driver
+    /// would leak the descriptor.
+    pub fn deliver_held(&mut self, mem: &GuestMemoryMmap) {
+        let frames = self.device.take_held();
+        if frames.is_empty() {
+            return;
+        }
+        let qidx = self.device.egress_queue() as usize;
+        for (head, frame) in &frames {
+            self.device.write_egress(frame);
+            if let Some(q) = self.queues.get_mut(qidx) {
+                let _ = q.add_used(mem, *head, 0);
+            }
+        }
+        self.isr |= 0x1;
+        self.irq_raiser.pulse(self.irq);
     }
 
     /// Re-poll every queue for available work without a guest notification

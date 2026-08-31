@@ -48,6 +48,20 @@ else
          "-- check its owner/permissions manually" >&2
 fi
 
+# Docker hooks the forward chain with policy drop, and DOCKER-USER is
+# its extension point. Without these rules a host with docker drops
+# every forwarded guest packet, whatever the firewall zone says. A
+# host without docker needs nothing here.
+if sudo nft list chain ip filter DOCKER-USER &>/dev/null; then
+    if [ "$(sudo nft list chain ip filter DOCKER-USER | grep -c 'tap\*')" = "0" ]; then
+        sudo nft insert rule ip filter DOCKER-USER iifname '"tap*"' accept
+        sudo nft insert rule ip filter DOCKER-USER oifname '"tap*"' accept
+        echo "cella: tap forwarding allowed through DOCKER-USER"
+    else
+        echo "cella: DOCKER-USER already forwards the taps"
+    fi
+fi
+
 cat <<EOT
 cella: install done.
 

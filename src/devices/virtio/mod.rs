@@ -39,4 +39,27 @@ pub trait VirtioDevice: Send {
     /// true if the guest should be interrupted (i.e. at least one
     /// descriptor was completed).
     fn process_queue(&mut self, idx: u16, mem: &GuestMemoryMmap, queue: &mut Queue) -> bool;
+
+    /// Egress hold, for the freeze at the egress moment (see
+    /// docs/DEVICE-STATE.md). With hold on, an outbound frame parks
+    /// at a defined point instead of leaving the machine. Only
+    /// virtio-net implements these; the defaults are inert.
+    fn set_hold(&mut self, _on: bool) {}
+    /// The parked frames, without draining them (the freeze reads
+    /// them into the sidecar and then exits).
+    fn held_frames(&self) -> Vec<(u16, Vec<u8>)> {
+        Vec::new()
+    }
+    /// Put parked frames back, at thaw, before delivery.
+    fn restore_held(&mut self, _frames: Vec<(u16, Vec<u8>)>) {}
+    /// Drain the parked frames, for delivery.
+    fn take_held(&mut self) -> Vec<(u16, Vec<u8>)> {
+        Vec::new()
+    }
+    /// Write one frame out of the machine, past the park point.
+    fn write_egress(&mut self, _frame: &[u8]) {}
+    /// The queue whose descriptors the parked frames came from.
+    fn egress_queue(&self) -> u16 {
+        0
+    }
 }

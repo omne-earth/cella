@@ -115,11 +115,53 @@ ac2)
 	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
 	;;
 ac3)
-	echo "AC3: the in-flight layer is exact."
-	echo "  Gate: a parked egress frame is delivered and completed"
-	echo "  after the thaw; the same request works, no retransmission."
-	echo "FAIL: ac3 is not implemented yet (see docs/DEVICE-STATE.md)"
-	exit 1
+	echo "AC3: the in-flight layer is exact (a parked egress request is delivered"
+	echo "and completed after the thaw; the same request works, no retransmission)."
+	TAP="${CELLA_TEST_TAP:-tap0}"
+	HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
+	if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
+		echo "SKIP: $TAP is not configured with $HOST_IP -- run: sudo cella setup net"
+		exit 0
+	fi
+
+	say "step 1: create and start a machine on $TAP"
+	"$BIN" create "$VM" --net "$TAP" >/dev/null
+	"$BIN" start "$VM" >/dev/null
+	sleep 6
+	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
+
+	# The serial RX FIFO holds 64 bytes; every typed line stays short.
+	say "step 2: prove real egress -- the guest fetches the hugging face page"
+	type_in 'mkdir -p /etc; echo nameserver 1.1.1.1 >/etc/resolv.conf'
+	type_in 'U=http://huggingface.co'
+	type_in 'wget -q -O /dev/null $U && echo www-o"k"'
+	if ! wait_for "www-ok"; then
+		echo "SKIP: the guest has no route to the www (host forwarding/NAT -- see install.sh)"
+		exit 0
+	fi
+
+	say "step 3: egress hold on, then the same fetch -- its frames park"
+	kill -USR2 "$VMM_PID"
+	sleep 1
+	type_in 'wget -q -O /dev/null $U && echo held-o"k" &'
+	sleep 1
+	grep -aq "held-ok" "$CON" && { echo "FAIL: the request left the machine while held"; exit 1; }
+	echo "  the request is in flight, and parked"
+
+	say "step 4: freeze -- the parked frames ride the sidecar"
+	"$BIN" freeze "$VM" >/dev/null
+	grep -aq "held egress frame" "$CELLA_HOME/machines/$VM/vmm.log" \
+		|| { echo "FAIL: the freeze holds no egress frame"; exit 1; }
+	grep -a "held egress frame" "$CELLA_HOME/machines/$VM/vmm.log" | tail -1 | sed "s/^/  /"
+
+	say "step 5: thaw -- the held frames are delivered and completed"
+	"$BIN" thaw "$VM" >/dev/null
+	wait_for "held-ok" || { echo "FAIL: the parked request did not complete after the thaw"; exit 1; }
+	echo "  the same request landed, and the page came back"
+
+	echo
+	echo "PASS: AC3 -- the in-flight layer is exact"
+	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
 	;;
 ac4)
 	echo "AC4: the verdict is external (the world-ratchet gate)."

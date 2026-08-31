@@ -166,7 +166,7 @@ pub fn write_state(
 /// The virtio transport blocks, after the serial registers:
 /// a transport count, then per transport the status, the queue
 /// select, the ISR, the negotiated features, the queue states, and
-/// the held egress frames.
+/// the held egress frames (each with its descriptor head index).
 fn write_devices(f: &mut impl Write, devices: &[TransportState]) -> Result<(), Error> {
     f.write_all(&(devices.len() as u32).to_le_bytes())?;
     for d in devices {
@@ -185,7 +185,8 @@ fn write_devices(f: &mut impl Write, devices: &[TransportState]) -> Result<(), E
             f.write_all(&q.next_used.to_le_bytes())?;
         }
         f.write_all(&(d.held_frames.len() as u32).to_le_bytes())?;
-        for frame in &d.held_frames {
+        for (head, frame) in &d.held_frames {
+            f.write_all(&head.to_le_bytes())?;
             f.write_all(&(frame.len() as u32).to_le_bytes())?;
             f.write_all(frame)?;
         }
@@ -283,8 +284,9 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
         let n_frames = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
         let mut held_frames = Vec::with_capacity(n_frames);
         for _ in 0..n_frames {
+            let head = u16::from_le_bytes(take(2)?.try_into().unwrap());
             let len = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
-            held_frames.push(take(len)?.to_vec());
+            held_frames.push((head, take(len)?.to_vec()));
         }
         devices.push(TransportState {
             status,
@@ -393,7 +395,7 @@ mod tests {
                 next_avail: 17,
                 next_used: 17,
             }],
-            held_frames: vec![vec![0xaa; 60], vec![0x55; 1514]],
+            held_frames: vec![(3, vec![0xaa; 60]), (9, vec![0x55; 1514])],
         }]
     }
 

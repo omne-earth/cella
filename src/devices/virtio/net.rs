@@ -23,6 +23,12 @@ const MAX_FRAME: usize = 65550; // 65535 + vnet hdr + slack
 pub struct Net {
     tap: Tap,
     mac: [u8; 6],
+    hold: bool,
+    /// Egress frames read from the TX ring and not yet written to the
+    /// TAP: the descriptor head index and the frame bytes. The guest
+    /// considers these sent, and their completion is owed (see
+    /// docs/DEVICE-STATE.md).
+    parked: Vec<(u16, Vec<u8>)>,
 }
 
 impl Net {
@@ -30,6 +36,8 @@ impl Net {
         Ok(Net {
             tap: Tap::open(tap_name)?,
             mac,
+            hold: false,
+            parked: Vec::new(),
         })
     }
 
@@ -101,6 +109,13 @@ impl Net {
                 }
                 len += take;
             }
+            if self.hold {
+                // The park point: after the read from the TX ring, and
+                // before the write to the TAP. No completion here --
+                // the thaw delivers and completes the frame.
+                self.parked.push((head_index, buf[..len].to_vec()));
+                continue;
+            }
             let _ = self.tap.write_frame(&buf[..len]);
             let _ = queue.add_used(mem, head_index, 0);
             used_any = true;
@@ -136,5 +151,29 @@ impl VirtioDevice for Net {
             QUEUE_TX => self.drain_tx(mem, queue),
             _ => false,
         }
+    }
+
+    fn set_hold(&mut self, on: bool) {
+        self.hold = on;
+    }
+
+    fn held_frames(&self) -> Vec<(u16, Vec<u8>)> {
+        self.parked.clone()
+    }
+
+    fn restore_held(&mut self, frames: Vec<(u16, Vec<u8>)>) {
+        self.parked = frames;
+    }
+
+    fn take_held(&mut self) -> Vec<(u16, Vec<u8>)> {
+        std::mem::take(&mut self.parked)
+    }
+
+    fn write_egress(&mut self, frame: &[u8]) {
+        let _ = self.tap.write_frame(frame);
+    }
+
+    fn egress_queue(&self) -> u16 {
+        QUEUE_TX
     }
 }

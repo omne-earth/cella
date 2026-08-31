@@ -341,9 +341,37 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
         }
         let (_, host) = tap_addresses(&tap);
         create_persistent_tap(&tap, owner)?;
+        // A deterministic MAC, by convention. A recreated tap then
+        // carries the same address, and a thawed guest with a cached
+        // neighbor entry sees no change: the recreation is
+        // indistinguishable from the tap that froze.
+        ip(&[
+            "link",
+            "set",
+            &tap,
+            "address",
+            &format!("02:ce:11:a0:00:{n:02x}"),
+        ])?;
         ip(&["addr", "add", &format!("{host}/24"), "dev", &tap])?;
         ip(&["link", "set", &tap, "up"])?;
         println!("cella: created {tap} owned by uid {owner}, host side {host}/24");
+    }
+    // Guest egress needs forwarding on, and a forward path past the
+    // host firewall. The taps go to the trusted zone where firewalld
+    // runs; the nft accept below covers hosts without it.
+    let _ = std::fs::write("/proc/sys/net/ipv4/ip_forward", "1");
+    let fw = find_program("firewall-cmd");
+    if Path::new(&fw).is_absolute() {
+        for n in first..first + taps {
+            let tap = format!("tap{n}");
+            let _ = std::process::Command::new(&fw)
+                .args(["--zone=trusted", "--change-interface", &tap])
+                .output();
+            let _ = std::process::Command::new(&fw)
+                .args(["--permanent", "--zone=trusted", "--change-interface", &tap])
+                .output();
+        }
+        println!("cella: taps in the trusted firewalld zone");
     }
     // NAT once: one table, one masquerade rule on the default egress.
     let sh_bin = find_program("sh");
