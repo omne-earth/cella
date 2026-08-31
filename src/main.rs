@@ -33,6 +33,7 @@ const NET_IRQ: u32 = 6;
 
 static FREEZE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static HOLD_REQUESTED: AtomicBool = AtomicBool::new(false);
+static RELEASE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_sigusr1(_: libc::c_int) {
     FREEZE_REQUESTED.store(true, Ordering::SeqCst);
@@ -40,6 +41,10 @@ extern "C" fn on_sigusr1(_: libc::c_int) {
 
 extern "C" fn on_sigusr2(_: libc::c_int) {
     HOLD_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn on_sigwinch(_: libc::c_int) {
+    RELEASE_REQUESTED.store(true, Ordering::SeqCst);
 }
 
 // SIGIO from the TAP fd (see tap.rs). The handler's only job is to exist
@@ -642,6 +647,9 @@ fn run_loop(
             }
             eprintln!("cella: egress hold on");
         }
+        if RELEASE_REQUESTED.swap(false, Ordering::SeqCst) {
+            apply_verdicts(state_dir, mmio_devices, mem);
+        }
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
             let device_states: Vec<_> = mmio_devices
                 .iter()
@@ -804,6 +812,41 @@ fn poll_net_rx(
     }
 }
 
+/// The release verdict, from outside: read the verdict file, install
+/// each allow entry, and release every parked frame -- delivered to
+/// the TAP and completed, the same path as the thaw delivery. The
+/// engine writes the file and sends SIGWINCH (see
+/// docs/DEVICE-STATE.md). Reapplying a stale file is harmless: allow
+/// entries deduplicate, and an empty park delivers nothing.
+fn apply_verdicts(
+    state_dir: &std::path::Path,
+    mmio_devices: &mut [(u64, u64, MmioTransport)],
+    mem: &vm_memory::GuestMemoryMmap,
+) {
+    if let Ok(text) = std::fs::read_to_string(state_dir.join("verdict")) {
+        for line in text.lines() {
+            let Some(rest) = line.strip_prefix("allow ") else {
+                continue;
+            };
+            let Some((ip_s, port_s)) = rest.rsplit_once(':') else {
+                continue;
+            };
+            let octets: Vec<u8> = ip_s.split('.').filter_map(|o| o.parse().ok()).collect();
+            let (Ok(port), [a, b, c, d]) = (port_s.parse::<u16>(), octets.as_slice()) else {
+                continue;
+            };
+            for (_, _, t) in mmio_devices.iter_mut() {
+                t.allow([*a, *b, *c, *d], port);
+            }
+            eprintln!("cella: allow {ip_s}:{port}");
+        }
+    }
+    for (_, _, t) in mmio_devices.iter_mut() {
+        t.deliver_held(mem);
+    }
+    eprintln!("cella: egress release");
+}
+
 fn do_freeze(
     vcpu_fd: &kvm_ioctls::VcpuFd,
     vm: &kvm_ioctls::VmFd,
@@ -875,12 +918,18 @@ fn install_sigusr1_handler() {
         // through it.
         sa.sa_flags = 0;
         libc::sigaction(libc::SIGUSR1, &sa, std::ptr::null_mut());
-        // SIGUSR2 turns the egress hold on (see docs/DEVICE-STATE.md).
+        // SIGUSR2 turns the egress hold on, and SIGWINCH applies the
+        // verdict file (see docs/DEVICE-STATE.md).
         let mut sa2: libc::sigaction = std::mem::zeroed();
         sa2.sa_sigaction = on_sigusr2 as *const () as usize;
         libc::sigemptyset(&mut sa2.sa_mask);
         sa2.sa_flags = 0;
         libc::sigaction(libc::SIGUSR2, &sa2, std::ptr::null_mut());
+        let mut sa3: libc::sigaction = std::mem::zeroed();
+        sa3.sa_sigaction = on_sigwinch as *const () as usize;
+        libc::sigemptyset(&mut sa3.sa_mask);
+        sa3.sa_flags = 0;
+        libc::sigaction(libc::SIGWINCH, &sa3, std::ptr::null_mut());
     }
 }
 

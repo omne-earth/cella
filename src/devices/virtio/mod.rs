@@ -62,4 +62,7 @@ pub trait VirtioDevice: Send {
     fn egress_queue(&self) -> u16 {
         0
     }
+    /// Install a pass entry: frames to this destination flow at full
+    /// speed under hold (the allow verdict).
+    fn allow(&mut self, _ip: [u8; 4], _port: u16) {}
 }

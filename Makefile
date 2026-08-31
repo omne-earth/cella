@@ -252,7 +252,10 @@ smoke-clean: ## Kill any stray cella process left running by an interrupted smok
 	$(LOG)
 	# -x matches the process name exactly. A -f pattern kills any
 	# invoker whose own command line mentions the binary path.
-	pkill -x cella && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
+	# SIGKILL, not SIGTERM: the VMM runs as pid 1 of its namespace
+	# (--as-pid-1), and a namespace init ignores a signal without a
+	# handler.
+	pkill -9 -x cella && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
 
 # --- Setup --------------------------------------------------------------
 

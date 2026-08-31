@@ -73,7 +73,12 @@ full speed -- one park per new part of the world, not one per frame.
 The other verdict is a freeze: the world grows first, the thaw
 delivers the same frame, and the decision time never enters the
 clock of the guest. The VMM offers park, report, release, and allow;
-every policy lives outside it.
+every policy lives outside it. The concrete surface: SIGUSR2 turns
+the hold on, each park writes a report line with its destination,
+and SIGWINCH applies the verdict file in the state directory --
+`allow <ip>:<port>` lines install pass entries, and every parked
+frame is then released, delivered, and completed. The freeze verdict
+is the ordinary freeze signal.
 
 Therefore the save is a copy of registers, indices, and the held
 egress frames; no drain step exists beyond them.
@@ -132,7 +137,7 @@ target (`make device-state-ac1` .. `device-state-ac4`), and
 | **AC1 -- the disk survives the thaw** | The sidecar (v7) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. | The same. | yes |
 | **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, the transport restore covers virtio-net, and the gate pings the guest before the freeze and after the thaw. A missing tap fails at start; `setup net` recreates the pool by convention. | The same. | yes |
 | **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, a signal turns the hold on, the sidecar carries the parked frames with their descriptor head indices, and the thaw delivers and completes them. The gate fetches a real www page: the fetch parks, the machine freezes, and the same request completes after the thaw. | The same. | yes |
-| **AC4 -- the verdict is external** | Nothing parks. | Every egress frame parks by default, and the manager (standing in for the engine) renders the verdict: release with allow for a known destination, or freeze, grow the world, thaw, deliver. The guest never knows. The world-ratchet gate below proves it end to end. | no |
+| **AC4 -- the verdict is external** | Every egress frame parks under hold, the park reports its destination, and the verdicts come from outside: release with allow installs a pass entry and the flow runs at full speed, or freeze, grow the world, thaw, deliver. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. | The same. | yes |
 
 The clock gates must not move: the transport restore adds host-time
 work outside the clock window, and the probes verify that nothing

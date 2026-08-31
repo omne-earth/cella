@@ -313,6 +313,11 @@ impl MmioTransport {
         self.device.set_hold(on);
     }
 
+    /// Install a pass entry (the allow verdict).
+    pub fn allow(&mut self, ip: [u8; 4], port: u16) {
+        self.device.allow(ip, port);
+    }
+
     /// Deliver the parked egress frames, at thaw: write each frame to
     /// the TAP, oldest first, and complete it -- the buffer is marked
     /// used and the interrupt is raised. At the trap instant the

@@ -164,10 +164,79 @@ ac3)
 	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
 	;;
 ac4)
-	echo "AC4: the verdict is external (the world-ratchet gate)."
-	echo "  Gate: every egress frame parks; the test, as the stand-in"
-	echo "  engine, renders release-with-allow or freeze-grow-thaw."
-	echo "FAIL: ac4 is not implemented yet (see docs/DEVICE-STATE.md)"
-	exit 1
+	echo "AC4: the verdict is external (the world-ratchet gate). Every egress"
+	echo "frame parks; the test, as the stand-in engine, renders the verdicts."
+	TAP="${CELLA_TEST_TAP:-tap0}"
+	HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
+	if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
+		echo "SKIP: $TAP is not configured with $HOST_IP -- run: sudo cella setup net"
+		exit 0
+	fi
+	command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoints)"; exit 0; }
+	# A stand-in endpoint leaked by an interrupted run squats its port
+	# and serves a deleted directory; sweep them first.
+	pkill -f "http.server (8080|9090) --bind $HOST_IP" 2>/dev/null || true
+	WWW=$(mktemp -d); echo world > "$WWW/index.html"
+	SRV1=""; SRV2=""
+	stop_srv() { kill $SRV1 $SRV2 2>/dev/null; rm -rf "$WWW"; }
+	trap 'stop_srv; "$BIN" stop "$VM" >/dev/null 2>&1 || true; rm -rf "$CELLA_HOME"' EXIT
+	VMM="$CELLA_HOME/machines/$VM/vmm.log"
+
+	say "step 1: create and start a machine on $TAP; egress hold on"
+	"$BIN" create "$VM" --net "$TAP" >/dev/null
+	"$BIN" start "$VM" >/dev/null
+	sleep 6
+	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
+	kill -USR2 "$VMM_PID"
+	sleep 1
+
+	say "step 2: a request to a known part of the world -- it parks, and reports"
+	python3 -m http.server 8080 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV1=$!
+	sleep 1
+	type_in "H=http://$HOST_IP"
+	type_in 'wget -q -O /dev/null $H:8080 && echo rel-o"k" &'
+	deadline=$((SECONDS + 15))
+	until grep -aq "parked egress to $HOST_IP:8080" "$VMM"; do
+		[ $SECONDS -lt $deadline ] || { echo "FAIL: no park report for :8080"; exit 1; }
+		sleep 1
+	done
+	grep -aq "rel-ok" "$CON" && { echo "FAIL: the request passed without a verdict"; exit 1; }
+	echo "  parked, and reported"
+
+	say "step 3: the engine renders release with allow -- the flow completes"
+	echo "allow $HOST_IP:8080" > "$CELLA_HOME/machines/$VM/verdict"
+	kill -WINCH "$VMM_PID"
+	wait_for "rel-ok" || { echo "FAIL: the released request did not complete"; exit 1; }
+	PARKS=$(grep -ac "parked egress to $HOST_IP:8080" "$VMM")
+	type_in 'wget -q -O /dev/null $H:8080 && echo rel2-o"k"'
+	wait_for "rel2-ok" || { echo "FAIL: the allowed flow did not run at full speed"; exit 1; }
+	[ "$(grep -ac "parked egress to $HOST_IP:8080" "$VMM")" = "$PARKS" ] \
+		|| { echo "FAIL: the allow entry did not pass the second request"; exit 1; }
+	echo "  one park per new part of the world, not one per frame"
+
+	say "step 4: a request to a part of the world that does not exist -- it parks"
+	type_in 'wget -q -O /dev/null $H:9090 && echo world-o"k" &'
+	deadline=$((SECONDS + 15))
+	until grep -aq "parked egress to $HOST_IP:9090" "$VMM"; do
+		[ $SECONDS -lt $deadline ] || { echo "FAIL: no park report for :9090"; exit 1; }
+		sleep 1
+	done
+	echo "  parked, and reported"
+
+	say "step 5: the engine freezes the machine, and grows the world"
+	"$BIN" freeze "$VM" >/dev/null
+	grep -aq "held egress frame" "$VMM" || { echo "FAIL: the freeze holds no egress frame"; exit 1; }
+	python3 -m http.server 9090 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV2=$!
+	sleep 1
+	echo "  the endpoint at :9090 now exists"
+
+	say "step 6: thaw -- the same request lands on the endpoint that now exists"
+	"$BIN" thaw "$VM" >/dev/null
+	wait_for "world-ok" || { echo "FAIL: the parked request did not land after the thaw"; exit 1; }
+	echo "  the world grew, and the guest never knew"
+
+	echo
+	echo "PASS: AC4 -- the verdict is external"
+	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
 	;;
 esac
