@@ -405,122 +405,6 @@ pub fn build(axis: &str, flavor: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn with_temp_home<F: FnOnce()>(f: F) {
-        // The environment is process-global and the tests run in
-        // parallel threads: serialize every test that sets CELLA_HOME.
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!(
-            "cella-machine-test-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("CELLA_HOME", &dir);
-        f();
-        std::env::remove_var("CELLA_HOME");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    fn sample() -> Manifest {
-        Manifest {
-            name: "m1".into(),
-            kernel: "canonical".into(),
-            rootfs: "canonical".into(),
-            mem_mb: 256,
-            net: "none".into(),
-            root: "rw".into(),
-            diag: "off".into(),
-        }
-    }
-
-    #[test]
-    fn manifest_round_trips() {
-        let m = sample();
-        assert_eq!(Manifest::from_json(&m.to_json()).unwrap(), m);
-    }
-
-    #[test]
-    fn names_are_path_safe() {
-        assert!(valid_name("m1"));
-        assert!(valid_name("agent-7"));
-        assert!(!valid_name(""));
-        assert!(!valid_name("-x"));
-        assert!(!valid_name("a/b"));
-        assert!(!valid_name("A"));
-        assert!(!valid_name(".."));
-    }
-
-    #[test]
-    fn defaults_read_config_and_flags_win() {
-        with_temp_home(|| {
-            let d = defaults();
-            assert_eq!(
-                (d.kernel.as_str(), d.rootfs.as_str()),
-                ("canonical", "cella")
-            );
-            fs::write(
-                home().join("config.json"),
-                "{\n  \"rootfs\": \"canonical\",\n  \"mem_mb\": 128\n}\n",
-            )
-            .unwrap();
-            let d = defaults();
-            assert_eq!(d.rootfs, "canonical");
-            assert_eq!(d.mem_mb, 128);
-            assert_eq!(d.kernel, "canonical"); // absent field keeps the built-in
-        });
-    }
-
-    #[test]
-    fn a_tap_claim_is_exclusive() {
-        with_temp_home(|| {
-            for p in [kernel_path("canonical"), rootfs_path("canonical")] {
-                fs::create_dir_all(p.parent().unwrap()).unwrap();
-                fs::write(&p, b"fake").unwrap();
-            }
-            let mut a = sample();
-            a.net = "tap7".into();
-            create(&a).unwrap();
-            let mut b = sample();
-            b.name = "m2".into();
-            b.net = "tap7".into();
-            let err = create(&b).unwrap_err();
-            assert!(err.contains("already claimed"), "{err}");
-            destroy("m1").unwrap();
-            create(&b).unwrap(); // the destroy freed the claim
-            destroy("m2").unwrap();
-        });
-    }
-
-    #[test]
-    fn create_requires_goldens_and_destroy_removes() {
-        with_temp_home(|| {
-            let m = sample();
-            let err = create(&m).unwrap_err();
-            assert!(err.contains("cella build kernel canonical"), "{err}");
-
-            // Stage fake goldens, then the cycle works.
-            for p in [kernel_path("canonical"), rootfs_path("canonical")] {
-                fs::create_dir_all(p.parent().unwrap()).unwrap();
-                fs::write(&p, b"fake").unwrap();
-            }
-            create(&m).unwrap();
-            assert!(machine_dir("m1").join("disk.img").is_file());
-            assert_eq!(read_manifest("m1").unwrap(), m);
-            let err = create(&m).unwrap_err();
-            assert!(err.contains("already exists"), "{err}");
-            destroy("m1").unwrap();
-            assert!(!machine_dir("m1").exists());
-            assert!(destroy("m1").is_err());
-        });
-    }
-}
-
 // --- start and stop ---------------------------------------------------
 
 use crate::config;
@@ -1255,4 +1139,120 @@ pub fn info(name: &str) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_temp_home<F: FnOnce()>(f: F) {
+        // The environment is process-global and the tests run in
+        // parallel threads: serialize every test that sets CELLA_HOME.
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "cella-machine-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("CELLA_HOME", &dir);
+        f();
+        std::env::remove_var("CELLA_HOME");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn sample() -> Manifest {
+        Manifest {
+            name: "m1".into(),
+            kernel: "canonical".into(),
+            rootfs: "canonical".into(),
+            mem_mb: 256,
+            net: "none".into(),
+            root: "rw".into(),
+            diag: "off".into(),
+        }
+    }
+
+    #[test]
+    fn manifest_round_trips() {
+        let m = sample();
+        assert_eq!(Manifest::from_json(&m.to_json()).unwrap(), m);
+    }
+
+    #[test]
+    fn names_are_path_safe() {
+        assert!(valid_name("m1"));
+        assert!(valid_name("agent-7"));
+        assert!(!valid_name(""));
+        assert!(!valid_name("-x"));
+        assert!(!valid_name("a/b"));
+        assert!(!valid_name("A"));
+        assert!(!valid_name(".."));
+    }
+
+    #[test]
+    fn defaults_read_config_and_flags_win() {
+        with_temp_home(|| {
+            let d = defaults();
+            assert_eq!(
+                (d.kernel.as_str(), d.rootfs.as_str()),
+                ("canonical", "cella")
+            );
+            fs::write(
+                home().join("config.json"),
+                "{\n  \"rootfs\": \"canonical\",\n  \"mem_mb\": 128\n}\n",
+            )
+            .unwrap();
+            let d = defaults();
+            assert_eq!(d.rootfs, "canonical");
+            assert_eq!(d.mem_mb, 128);
+            assert_eq!(d.kernel, "canonical"); // absent field keeps the built-in
+        });
+    }
+
+    #[test]
+    fn a_tap_claim_is_exclusive() {
+        with_temp_home(|| {
+            for p in [kernel_path("canonical"), rootfs_path("canonical")] {
+                fs::create_dir_all(p.parent().unwrap()).unwrap();
+                fs::write(&p, b"fake").unwrap();
+            }
+            let mut a = sample();
+            a.net = "tap7".into();
+            create(&a).unwrap();
+            let mut b = sample();
+            b.name = "m2".into();
+            b.net = "tap7".into();
+            let err = create(&b).unwrap_err();
+            assert!(err.contains("already claimed"), "{err}");
+            destroy("m1").unwrap();
+            create(&b).unwrap(); // the destroy freed the claim
+            destroy("m2").unwrap();
+        });
+    }
+
+    #[test]
+    fn create_requires_goldens_and_destroy_removes() {
+        with_temp_home(|| {
+            let m = sample();
+            let err = create(&m).unwrap_err();
+            assert!(err.contains("cella build kernel canonical"), "{err}");
+
+            // Stage fake goldens, then the cycle works.
+            for p in [kernel_path("canonical"), rootfs_path("canonical")] {
+                fs::create_dir_all(p.parent().unwrap()).unwrap();
+                fs::write(&p, b"fake").unwrap();
+            }
+            create(&m).unwrap();
+            assert!(machine_dir("m1").join("disk.img").is_file());
+            assert_eq!(read_manifest("m1").unwrap(), m);
+            let err = create(&m).unwrap_err();
+            assert!(err.contains("already exists"), "{err}");
+            destroy("m1").unwrap();
+            assert!(!machine_dir("m1").exists());
+            assert!(destroy("m1").is_err());
+        });
+    }
 }
