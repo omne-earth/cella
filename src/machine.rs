@@ -805,6 +805,24 @@ pub fn enter(name: &str) -> Result<(), String> {
         }
         eprintln!("(connected to {name:?} -- detach: Ctrl-])\r");
     }
+    // Replay the recent console output, so that the prompt of the
+    // guest is visible at attach. Reading the log touches nothing in
+    // the guest: an attach must not inject input.
+    {
+        let log = read_lossy(&machine_dir(name).join("console.log"));
+        let tail: String = log
+            .lines()
+            .rev()
+            .take(12)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        let mut out = std::io::stdout();
+        let _ = out.write_all(tail.as_bytes());
+        let _ = out.flush();
+    }
     // SAFETY: fcntl on stdin, restored implicitly at exit.
     unsafe {
         let flags = libc::fcntl(0, libc::F_GETFL);
