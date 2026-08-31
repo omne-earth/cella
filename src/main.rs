@@ -167,6 +167,7 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
                     }
                     "--net" => m.net = val("--net"),
                     "--root" => m.root = val("--root"),
+                    "--diag" => m.diag = "on".to_string(),
                     other => {
                         res = Err(format!("unknown create option {other:?}"));
                         break;
@@ -245,7 +246,7 @@ fn print_help() {
          \x20 cella list                             every machine, one line each\n\
          \x20 cella info <name>                      everything about one machine\n\
          \x20 cella selftest                         run the lifecycle cycle end to end\n\n\
-         create options: --kernel F --rootfs F --mem-mb N --net TAP|auto|none --root rw|ro\n\
+         create options: --kernel F --rootfs F --mem-mb N --net TAP|auto|none --root rw|ro --diag\n\
          Defaults live in ~/.cella/config.json; flags override them.\n\n\
          The flag interface (--state-dir ...) stays for the probes and the tests."
     );

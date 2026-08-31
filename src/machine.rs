@@ -60,6 +60,9 @@ pub struct Manifest {
     pub net: String,
     /// "rw" or "ro".
     pub root: String,
+    /// "on" adds cella_diag to the kernel command line: the image
+    /// then prints its heartbeat and its diagnostic listings.
+    pub diag: String,
 }
 
 /// Read one field of a flat JSON object: a quoted string or a bare
@@ -87,6 +90,7 @@ pub fn defaults() -> Manifest {
         mem_mb: 256,
         net: "none".into(),
         root: "rw".into(),
+        diag: "off".into(),
     };
     let path = home().join("config.json");
     let Ok(s) = fs::read_to_string(&path) else {
@@ -117,14 +121,17 @@ pub fn defaults() -> Manifest {
     if let Some(v) = json_field(&s, "root") {
         m.root = v.to_string();
     }
+    if let Some(v) = json_field(&s, "diag") {
+        m.diag = v.to_string();
+    }
     m
 }
 
 impl Manifest {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\n  \"name\": \"{}\",\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\"\n}}\n",
-            self.name, self.kernel, self.rootfs, self.mem_mb, self.net, self.root
+            "{{\n  \"name\": \"{}\",\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\",\n  \"diag\": \"{}\"\n}}\n",
+            self.name, self.kernel, self.rootfs, self.mem_mb, self.net, self.root, self.diag
         )
     }
 
@@ -146,6 +153,8 @@ impl Manifest {
                 .map_err(|_| "mem_mb is not a number".to_string())?,
             net: field(s, "net")?.to_string(),
             root: field(s, "root")?.to_string(),
+            // Absent in older manifests: default off.
+            diag: json_field(s, "diag").unwrap_or("off").to_string(),
         })
     }
 }
@@ -352,6 +361,7 @@ mod tests {
             mem_mb: 256,
             net: "none".into(),
             root: "rw".into(),
+            diag: "off".into(),
         }
     }
 
@@ -472,7 +482,10 @@ fn is_frozen(name: &str) -> bool {
 /// source: config.rs holds the defaults, and the manifest holds the
 /// choices of create.
 fn cmdline_for(m: &Manifest) -> String {
-    let base = config::default_cmdline();
+    let mut base = config::default_cmdline();
+    if m.diag == "on" {
+        base.push_str(" cella_diag");
+    }
     if m.net == "none" {
         format!(
             "{base} root=/dev/vda {} virtio_mmio.device=4K@0xd0000000:5",
@@ -774,22 +787,26 @@ pub fn stop(name: &str) -> Result<(), String> {
 /// tests), raw mode is skipped, and the end of the input detaches
 /// after a short drain, so that the caller can read the response from
 /// console.log.
-pub fn enter(name: &str) -> Result<(), String> {
-    use std::io::{Read, Write};
+/// Connect to the console socket of a running machine. A unix socket
+/// path caps at ~108 bytes: connect by the file name from inside the
+/// machine directory, thus any home path works.
+pub fn connect_console(name: &str) -> Result<std::os::unix::net::UnixStream, String> {
     if !is_running(name) {
         return Err(format!(
             "machine {name:?} is not running -- start it (or thaw it)"
         ));
     }
-    // A unix socket path caps at ~108 bytes: connect by the file name
-    // from inside the machine directory, thus any home path works.
     let dir = machine_dir(name);
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     std::env::set_current_dir(&dir).map_err(|e| format!("entering {}: {e}", dir.display()))?;
     let connected = std::os::unix::net::UnixStream::connect("console.sock");
     std::env::set_current_dir(&cwd).map_err(|e| e.to_string())?;
-    let mut stream = connected
-        .map_err(|e| format!("connecting to {}: {e}", dir.join("console.sock").display()))?;
+    connected.map_err(|e| format!("connecting to {}: {e}", dir.join("console.sock").display()))
+}
+
+pub fn enter(name: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let mut stream = connect_console(name)?;
     stream.set_nonblocking(true).map_err(|e| e.to_string())?;
 
     // SAFETY: isatty on fd 0 reads a fact.
@@ -1027,6 +1044,25 @@ fn selftest_cycle() -> Result<(), String> {
         return Err("the guest did not reach its init".to_string());
     }
     refuse("double start", start("m1"))?;
+    // The console round-trip: one line in through the socket, and the
+    // response lands on the console log.
+    {
+        use std::io::Write;
+        let mut c = connect_console("m1").map_err(|e| format!("console connect: {e}"))?;
+        c.write_all(b"echo selftest-rt-$((6*7))\n")
+            .map_err(|e| format!("console write: {e}"))?;
+        let mut seen = false;
+        for _ in 0..50 {
+            if read_lossy(&console).contains("selftest-rt-42") {
+                seen = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if !seen {
+            return Err("the console round-trip produced no response".to_string());
+        }
+    }
     step("freeze", freeze("m1"))?;
     if !is_frozen("m1") {
         return Err("no sidecar after the freeze".to_string());
