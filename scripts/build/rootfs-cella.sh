@@ -8,6 +8,11 @@ mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t tmpfs tmpfs /tmp
 echo "cella-rootfs: init running (pid $$)"
+# The serial console is also the shell of the user. The heartbeat and
+# the diagnostic listings therefore print only when the kernel command
+# line carries cella_diag: the demo boots with it, and an interactive
+# `make boot` stays quiet.
+if grep -q cella_diag /proc/cmdline; then
 (
     while true; do
         awk '
@@ -45,6 +50,7 @@ echo "cella-rootfs: init running (pid $$)"
         sleep 10
     done
 ) &
+fi
 N=0
 while true; do
     N=$((N+1))

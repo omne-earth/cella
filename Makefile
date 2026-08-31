@@ -137,6 +137,10 @@ VM_DIR ?= vm1
 # NET=none boots without the TAP. A persistent TAP admits one guest at
 # a time, thus a second concurrent guest must run without the network.
 NET ?= tap
+# DIAG=1 adds cella_diag to the kernel command line: the interactive
+# image then prints its heartbeat and its diagnostic listings on the
+# console. The demo needs them; an interactive session does not.
+DIAG ?= 0
 # ROOT=ro mounts the root filesystem read-only. A guest that must
 # survive a freeze and a thaw needs this today: the freeze does not
 # save the virtio device state, and the first post-thaw disk write
@@ -166,6 +170,7 @@ boot: build dist $(DIST)/rootfs-cella.ext4 ## Boot a detached jailed guest at $(
 		TAPARGS="--tap $(CELLA_TAP)"
 		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda $(ROOT) virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=$(CELLA_GUEST_IP)::$$HOST_IP:255.255.255.0::eth0:off"
 	fi
+	[ "$(DIAG)" = 1 ] && CMD="$$CMD cella_diag" || true
 	# Detached: the guest runs in a tmux session, and the pane is the
 	# serial console. pipe-pane mirrors the console into .logs/.
 	tmux new-session -d -s "cella-$(VM_DIR)" \

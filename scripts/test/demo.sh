@@ -35,7 +35,7 @@ say "step 1: boot a detached guest with a shell on the serial console"
 # the shell in D state in do_get_write_access). A read-only root makes
 # the guest write nothing to the disk. The virtio state is the next
 # work item; see docs/FREEZE-THAW.md.
-make --no-print-directory boot VM_DIR="$DIR" NET=none ROOT=ro >/dev/null
+make --no-print-directory boot VM_DIR="$DIR" NET=none ROOT=ro DIAG=1 >/dev/null
 sleep 7
 
 say "step 2: store a value in the shell"
@@ -51,7 +51,7 @@ echo "the guest is now two files:"
 ls -l "$DIR" | tail -n +2
 
 say "step 4: thaw the guest"
-make --no-print-directory thaw VM_DIR="$DIR" NET=none ROOT=ro >/dev/null
+make --no-print-directory thaw VM_DIR="$DIR" NET=none ROOT=ro DIAG=1 >/dev/null
 sleep 8
 
 say "step 5: read the value back from the same shell"
