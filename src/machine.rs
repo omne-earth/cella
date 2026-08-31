@@ -813,6 +813,11 @@ pub fn enter(name: &str) -> Result<(), String> {
 
     let mut stdin_open = true;
     let mut drain_until: Option<std::time::Instant> = None;
+    // An exit of the guest shell detaches: the init of the image
+    // prints this marker when the shell ends, and a fresh shell
+    // respawns behind it for the next enter.
+    let mut marker_window = Vec::new();
+    const EXIT_MARKER: &[u8] = b"cella-shell: getty generation";
     let result = loop {
         let mut fds = [
             libc::pollfd {
@@ -837,6 +842,17 @@ pub fn enter(name: &str) -> Result<(), String> {
                     let mut out = std::io::stdout();
                     let _ = out.write_all(&buf[..n]);
                     let _ = out.flush();
+                    // Scan across chunk boundaries for the exit marker.
+                    marker_window.extend_from_slice(&buf[..n]);
+                    let win = String::from_utf8_lossy(&marker_window);
+                    if win
+                        .lines()
+                        .any(|l| l.contains("getty generation") && l.contains("exited"))
+                    {
+                        break Ok(());
+                    }
+                    let keep = marker_window.len().saturating_sub(EXIT_MARKER.len() + 64);
+                    marker_window.drain(..keep);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(_) => break Ok(()),
