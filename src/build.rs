@@ -39,8 +39,67 @@ fn run(what: &str, program: &str, args: &[&str], cwd: Option<&Path>) -> Result<(
     Ok(())
 }
 
+/// The toolbox packages: the kernel and busybox toolchain, mkfs, the
+/// static glibc, and rust for the crt-static in-guest binaries.
+const TOOLBOX_PACKAGES: &[&str] = &[
+    "gcc",
+    "make",
+    "bc",
+    "bison",
+    "flex",
+    "elfutils-libelf-devel",
+    "openssl-devel",
+    "perl-interpreter",
+    "perl-generators",
+    "xz",
+    "bzip2",
+    "e2fsprogs",
+    "glibc-static",
+    "rust",
+    "cargo",
+];
+
+/// Provision the cella-build toolbox when it is absent. The build verb
+/// owns its own prerequisites: after install, no path depends on the
+/// Makefile. Idempotent, and checked once per process.
+fn ensure_toolbox() -> Result<(), String> {
+    static DONE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    DONE.get_or_init(|| {
+        let list = Command::new("toolbox")
+            .args(["list", "-c"])
+            .output()
+            .map_err(|e| format!("running toolbox: {e} -- install the toolbox package"))?;
+        let have = String::from_utf8_lossy(&list.stdout)
+            .lines()
+            .any(|l| l.split_whitespace().nth(1) == Some("cella-build"));
+        if !have {
+            println!("cella: creating the cella-build toolbox");
+            run(
+                "create the toolbox",
+                "toolbox",
+                &["create", "-y", "cella-build"],
+                None,
+            )?;
+        }
+        println!("cella: provisioning the toolbox toolchain (idempotent)");
+        let mut args: Vec<&str> = vec!["run", "-c", "cella-build", "sudo", "dnf", "install", "-y"];
+        args.extend_from_slice(TOOLBOX_PACKAGES);
+        let status = Command::new("toolbox")
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .map_err(|e| format!("provisioning the toolbox: {e}"))?;
+        if !status.success() {
+            return Err("provisioning the toolbox failed".to_string());
+        }
+        Ok(())
+    })
+    .clone()
+}
+
 /// Run one command inside the cella-build toolbox.
 fn run_in_toolbox(what: &str, cwd: &Path, args: &[&str]) -> Result<(), String> {
+    ensure_toolbox()?;
     let mut full: Vec<&str> = vec!["run", "-c", "cella-build"];
     full.extend_from_slice(args);
     run(what, "toolbox", &full, Some(cwd))
@@ -184,6 +243,7 @@ pub const BUSYBOX_VERSION: &str = "1.37.0";
 /// Run a toolbox command with silenced stdout and a closed stdin: the
 /// kconfig steps prompt on a terminal and print pages otherwise.
 fn run_in_toolbox_quiet(what: &str, cwd: &Path, args: &[&str]) -> Result<(), String> {
+    ensure_toolbox()?;
     let mut full: Vec<&str> = vec!["run", "-c", "cella-build"];
     full.extend_from_slice(args);
     let status = Command::new("toolbox")

@@ -230,15 +230,9 @@ smoke-clean: ## Kill any stray cella process left running by an interrupted smok
 
 # --- Setup --------------------------------------------------------------
 
-.toolbox: $(SCRIPTS)/build/toolbox.sh ## Sentinel: creates + provisions the cella-build toolbox (kernel build toolchain lives there, not on the host)
-	$(LOG)
-	$(SCRIPTS)/build/toolbox.sh
-	touch .toolbox
-
 init: ## One-time host setup (Fedora): deps, toolbox, tap0, and every golden (needs sudo)
 	$(LOG)
 	$(SCRIPTS)/setup/install.sh
-	$(MAKE) .toolbox
 	$(MAKE) setup-tap
 	$(MAKE) golden
 	$(MAKE) golden-nested
