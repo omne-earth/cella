@@ -40,6 +40,17 @@ done
 
 "$BIN" start m1 2>/dev/null && { echo "FAIL: a second start must refuse"; exit 1; }
 
+"$BIN" freeze m1 >/dev/null
+[ -f "$DIR/state" ] || { echo "FAIL: no sidecar after freeze"; exit 1; }
+[ ! -f "$DIR/pid" ] || { echo "FAIL: pid file survived the freeze"; exit 1; }
+"$BIN" start m1 2>/dev/null && { echo "FAIL: start must refuse a frozen machine"; exit 1; }
+"$BIN" stop m1 2>/dev/null && { echo "FAIL: stop must refuse a frozen machine"; exit 1; }
+
+"$BIN" thaw m1 >/dev/null
+[ ! -f "$DIR/state" ] || { echo "FAIL: the sidecar survived the thaw"; exit 1; }
+grep -aq "cella: thawed" "$DIR/vmm.log" || { echo "FAIL: the VMM did not report the thaw"; exit 1; }
+"$BIN" thaw m1 2>/dev/null && { echo "FAIL: thaw must refuse a running machine"; exit 1; }
+
 "$BIN" stop m1 >/dev/null
 [ ! -f "$DIR/pid" ] && [ ! -f "$DIR/ram.img" ] || { echo "FAIL: stop left transients"; exit 1; }
 
@@ -48,4 +59,4 @@ done
 "$BIN" destroy m1 >/dev/null
 [ ! -d "$DIR" ] || { echo "FAIL: destroy left the directory"; exit 1; }
 
-echo "PASS: create, start, readiness, refuse-double-start, stop, restart, destroy"
+echo "PASS: create, start, freeze, thaw, stop, restart, destroy, with every refusal checked"

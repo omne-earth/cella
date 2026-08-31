@@ -187,6 +187,14 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             [name] => machine::stop(name),
             _ => Err("usage: cella stop <name>".to_string()),
         },
+        "freeze" => match args {
+            [name] => machine::freeze(name),
+            _ => Err("usage: cella freeze <name>".to_string()),
+        },
+        "thaw" => match args {
+            [name] => machine::thaw(name),
+            _ => Err("usage: cella thaw <name>".to_string()),
+        },
         _ => unreachable!(),
     };
     match ok {
@@ -200,7 +208,7 @@ fn main() {
     if let Some(first) = argv.first() {
         if matches!(
             first.as_str(),
-            "build" | "create" | "destroy" | "start" | "stop"
+            "build" | "create" | "destroy" | "start" | "stop" | "freeze" | "thaw"
         ) {
             run_verb(first.clone().as_str(), &argv[1..]);
         }

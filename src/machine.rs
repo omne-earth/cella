@@ -490,22 +490,75 @@ fn cmdline_for(m: &Manifest) -> String {
     }
 }
 
-/// Start the machine: spawn the VMM inside the jail, detached, and
-/// return when the VMM signals readiness (immediately before the
-/// first KVM_RUN). The jail is the bwrap invocation of
-/// scripts/jail.sh, spawned directly with no shell. One deliberate
-/// difference: no --die-with-parent. The verb process exits after
-/// readiness, and the machine must survive it; the pid file and stop
-/// own the cleanup instead.
+/// Start the machine: a fresh boot. Refuses a frozen machine, so
+/// that a sidecar cannot vanish by accident; thaw is the verb for it.
 pub fn start(name: &str) -> Result<(), String> {
+    if is_frozen(name) {
+        return Err(format!("machine {name:?} is frozen -- thaw it"));
+    }
+    spawn(name, "started")
+}
+
+/// Thaw the frozen machine: the same spawn, and the VMM detects the
+/// sidecar and resumes instead of booting. Readiness fires after the
+/// warming and the clock restore, thus the verb returns when the
+/// guest lives again on its frozen clock.
+pub fn thaw(name: &str) -> Result<(), String> {
+    if !is_frozen(name) {
+        return Err(format!(
+            "machine {name:?} is not frozen -- start it, or freeze it first"
+        ));
+    }
+    spawn(name, "thawed")
+}
+
+/// Freeze the running machine: SIGUSR1 to the VMM, then wait for the
+/// process to exit and for the sidecar to appear. The pid file holds
+/// the host pid of the VMM itself (bwrap reports it at spawn through
+/// --info-fd), thus the signal goes straight to the right process.
+pub fn freeze(name: &str) -> Result<(), String> {
+    if !is_running(name) {
+        return Err(format!("machine {name:?} is not running"));
+    }
+    let pid: i32 = fs::read_to_string(pid_path(name))
+        .map_err(|e| format!("reading the pid file: {e}"))?
+        .trim()
+        .parse()
+        .map_err(|_| "the pid file is not a number".to_string())?;
+    // SAFETY: pid comes from the machine's own pid file.
+    unsafe { libc::kill(pid, libc::SIGUSR1) };
+    for _ in 0..600 {
+        // SAFETY: signal 0 probes only.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        if !alive && is_frozen(name) {
+            let _ = fs::remove_file(pid_path(name));
+            println!("cella: machine {name:?} frozen");
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Err(format!(
+        "machine {name:?} did not freeze within the timeout -- see {}",
+        machine_dir(name).join("vmm.log").display()
+    ))
+}
+
+/// The shared spawn of start and thaw: the VMM inside the jail,
+/// detached, with readiness on a pipe. The jail is the bwrap
+/// invocation of scripts/jail.sh, spawned directly with no shell.
+/// One deliberate difference: no --die-with-parent. The verb process
+/// exits after readiness, and the machine must survive it; the pid
+/// file and stop own the cleanup instead.
+fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     let m = read_manifest(name)?;
     if is_running(name) {
         return Err(format!("machine {name:?} is already running"));
     }
-    if is_frozen(name) {
-        return Err(format!("machine {name:?} is frozen -- thaw it"));
+    // A thaw must keep ram.img and the sidecar: they are the frozen
+    // guest. A fresh start clears the leftovers of a crash.
+    if !is_frozen(name) {
+        clear_transients(name);
     }
-    clear_transients(name);
     let dir = machine_dir(name);
     let kernel = kernel_path(&m.kernel);
     if !kernel.is_file() {
@@ -526,6 +579,16 @@ pub fn start(name: &str) -> Result<(), String> {
         return Err("creating the readiness pipe failed".to_string());
     }
     let (read_fd, write_fd) = (fds[0], fds[1]);
+    // The info pipe. bwrap reports the host pid of its child (the VMM)
+    // on --info-fd, and that pid is the fact the pid file records: the
+    // freeze signal then goes straight to the VMM, with no process
+    // walking.
+    let mut ifds = [0i32; 2];
+    // SAFETY: ifds is a valid two-element array.
+    if unsafe { libc::pipe(ifds.as_mut_ptr()) } != 0 {
+        return Err("creating the info pipe failed".to_string());
+    }
+    let (info_read, info_write) = (ifds[0], ifds[1]);
 
     let console = fs::OpenOptions::new()
         .create(true)
@@ -546,6 +609,12 @@ pub fn start(name: &str) -> Result<(), String> {
         "--unshare-uts",
         "--unshare-cgroup",
     ]);
+    // --as-pid-1: the VMM is pid 1 of the namespace, with no bwrap
+    // init in front of it. The child-pid of --info-fd is then the
+    // host pid of the VMM itself, and the freeze signal lands on the
+    // right process. The VMM spawns nothing, thus pid-1 reaping
+    // duties are vacuous.
+    cmd.args(["--as-pid-1", "--info-fd", &info_write.to_string()]);
     // The mounts apply in order, and a later mount shadows an earlier
     // one. The /tmp tmpfs therefore comes first: a machine directory
     // under /tmp (the sandboxed tests) must bind over it, not under
@@ -595,9 +664,23 @@ pub fn start(name: &str) -> Result<(), String> {
     }
     use std::os::unix::process::CommandExt;
     let child = cmd.spawn().map_err(|e| format!("spawning the jail: {e}"))?;
-    // SAFETY: write_fd is this process's end; the child holds its own.
-    unsafe { libc::close(write_fd) };
-    let pid = child.id() as i32;
+    // SAFETY: these are this process's ends; the child holds its own.
+    unsafe {
+        libc::close(write_fd);
+        libc::close(info_write);
+    }
+    // Read the info JSON from bwrap and take child-pid: the host pid
+    // of the VMM.
+    let mut info = String::new();
+    {
+        use std::io::Read;
+        // SAFETY: info_read is an owned fd, and from_raw_fd takes it.
+        let mut f = unsafe { <fs::File as std::os::fd::FromRawFd>::from_raw_fd(info_read) };
+        let _ = f.read_to_string(&mut info);
+    }
+    let pid: i32 = json_field(&info, "child-pid")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(child.id() as i32);
     write_atomic(&pid_path(name), format!("{pid}\n").as_bytes())
         .map_err(|e| format!("writing the pid file: {e}"))?;
 
@@ -639,7 +722,7 @@ pub fn start(name: &str) -> Result<(), String> {
             "machine {name:?} did not reach readiness -- last vmm.log lines:\n{tail}"
         ));
     }
-    println!("cella: machine {name:?} running (pid {pid})");
+    println!("cella: machine {name:?} {done_word} (pid {pid})");
     Ok(())
 }
 
