@@ -324,3 +324,98 @@ pub fn rootfs_canonical(golden: &Path) -> Result<(), String> {
     println!("cella: golden rootfs canonical -> {}", golden.display());
     Ok(())
 }
+
+pub const GUEST_BASH_VERSION: &str = "5.3";
+
+/// The interactive rootfs, natively: the canonical root plus a real
+/// static bash and the interactive init. Builds the canonical tree
+/// first when it is absent: the flavor extends it.
+pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String> {
+    let root = repo_root();
+    let init = root.join("scripts/build/rootfs-cella.sh");
+    if !init.is_file() {
+        return Err(format!(
+            "{} missing -- run the build from the repository checkout",
+            init.display()
+        ));
+    }
+    let rbuild = root.join("target/rootfs-build");
+    let rootdir = rbuild.join("root");
+    if !rootdir.is_dir() {
+        println!("cella: rootfs cella: the canonical tree is absent, building it first");
+        rootfs_canonical(canonical_golden)?;
+    }
+
+    let bsrc = rbuild.join(format!("bash-{GUEST_BASH_VERSION}"));
+    fetch_and_extract(
+        "bash",
+        &format!("https://ftp.gnu.org/gnu/bash/bash-{GUEST_BASH_VERSION}.tar.gz"),
+        &rbuild.join(format!("bash-{GUEST_BASH_VERSION}.tar.gz")),
+        &bsrc,
+        &rbuild,
+    )?;
+    if !bsrc.join("bash").is_file() {
+        println!("cella: bash: configuring and building (static)");
+        run_in_toolbox_quiet(
+            "bash configure",
+            &bsrc,
+            &[
+                "./configure",
+                "--enable-static-link",
+                "--without-bash-malloc",
+            ],
+        )?;
+        let jobs = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .to_string();
+        run_in_toolbox_quiet("bash build", &bsrc, &["make", "-j", &jobs])?;
+    }
+
+    println!("cella: rootfs cella: assembling");
+    let croot = rbuild.join("root-cella");
+    let _ = fs::remove_dir_all(&croot);
+    run(
+        "copy the root",
+        "cp",
+        &["-a", rootdir.to_str().unwrap(), croot.to_str().unwrap()],
+        None,
+    )?;
+    for (from, to, mode) in [
+        (bsrc.join("bash"), croot.join("bin/bash"), 0o755),
+        (init.clone(), croot.join("sbin/init"), 0o755),
+    ] {
+        fs::copy(&from, &to).map_err(|e| e.to_string())?;
+        let mut p = fs::metadata(&to).map_err(|e| e.to_string())?.permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut p, mode);
+        fs::set_permissions(&to, p).map_err(|e| e.to_string())?;
+    }
+
+    let img = rbuild.join("rootfs-cella.ext4");
+    let _ = fs::remove_file(&img);
+    let f = fs::File::create(&img).map_err(|e| e.to_string())?;
+    f.set_len(16 * 1024 * 1024).map_err(|e| e.to_string())?;
+    drop(f);
+    run_in_toolbox_quiet(
+        "mkfs",
+        &rbuild,
+        &[
+            "mkfs.ext4",
+            "-q",
+            "-F",
+            "-d",
+            croot.to_str().unwrap(),
+            img.to_str().unwrap(),
+        ],
+    )?;
+    fs::create_dir_all(golden.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = golden.with_extension("tmp");
+    fs::copy(&img, &tmp).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
+    let dist = root.join("dist/rootfs-cella.ext4");
+    if dist.parent().unwrap().is_dir() {
+        let _ = fs::copy(&img, &dist);
+    }
+    println!("cella: golden rootfs cella -> {}", golden.display());
+    Ok(())
+}
