@@ -58,9 +58,17 @@ debug: ## Debug build (target/debug/cella), faster to compile
 	$(LOG)
 	$(CARGO) build
 
-build-static: .toolbox ## Static cella for the nested rootfs, built inside the toolbox
+# Sentinel with real input dependencies: the static binaries rebuild
+# when a source file changes, and a stale binary can no longer ride
+# into a rootfs image unnoticed.
+.static: $(shell find src -name '*.rs') Cargo.toml Cargo.lock \
+         probes/freeze-thaw-clock/src/main.rs probes/freeze-thaw-clock/Cargo.toml \
+         $(SCRIPTS)/build/static.sh | .toolbox
 	$(LOG)
 	$(SCRIPTS)/build/static.sh
+	touch .static
+
+build-static: .static ## Static cella + probe for the nested rootfs, built inside the toolbox (mtime-tracked via .static)
 
 check: ## cargo check, no codegen
 	$(LOG)
@@ -171,7 +179,7 @@ smoke-clean: ## Kill any stray cella process left running by an interrupted smok
 
 # --- Setup --------------------------------------------------------------
 
-.toolbox: ## Sentinel: creates + provisions the cella-build toolbox (kernel build toolchain lives there, not on the host)
+.toolbox: $(SCRIPTS)/build/toolbox.sh ## Sentinel: creates + provisions the cella-build toolbox (kernel build toolchain lives there, not on the host)
 	$(LOG)
 	$(SCRIPTS)/build/toolbox.sh
 	touch .toolbox
@@ -183,17 +191,38 @@ init: ## One-time host setup (Fedora): installs runtime deps, provisions the bui
 	$(MAKE) setup-tap
 	$(MAKE) dist
 
-$(DIST)/bzImage $(DIST)/rootfs.ext4: | .toolbox
+# Each artifact names its real inputs. A change to a fragment or an
+# init script makes the artifact stale, and the recipe removes the one
+# stale file before the build script runs: the script rebuilds what is
+# missing and skips the rest.
+$(DIST)/bzImage: $(SCRIPTS)/build/kernel-fragment.config $(SCRIPTS)/build/kernel-config-check.sh $(SCRIPTS)/build/assets.sh | .toolbox
 	$(LOG)
+	rm -f $@
+	$(SCRIPTS)/build/assets.sh
+
+$(DIST)/rootfs.ext4: $(SCRIPTS)/build/rootfs.sh $(SCRIPTS)/build/busybox-fragment.config $(SCRIPTS)/build/assets.sh | .toolbox
+	$(LOG)
+	rm -f $@
 	$(SCRIPTS)/build/assets.sh
 
 dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
 
-$(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4: | .toolbox
+$(DIST)/bzImage-nested: $(SCRIPTS)/build/kernel-fragment.config $(SCRIPTS)/build/kernel-fragment-nested.config $(SCRIPTS)/build/assets-nested.sh | .toolbox
 	$(LOG)
+	rm -f $@
 	$(SCRIPTS)/build/assets-nested.sh
 
-dist-nested: dist build-static $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 ## Nested test assets: bzImage-nested (KVM host stack) + rootfs-nested.ext4 (static cella + canonical inner assets), and rootfs-inception.ext4 (+ the static probe)
+$(DIST)/rootfs-nested.ext4: .static $(SCRIPTS)/build/rootfs-nested.sh $(SCRIPTS)/build/assets-nested.sh $(DIST)/bzImage $(DIST)/rootfs.ext4 | .toolbox
+	$(LOG)
+	rm -f $@
+	$(SCRIPTS)/build/assets-nested.sh
+
+$(DIST)/rootfs-inception.ext4: .static $(SCRIPTS)/build/rootfs-nested.sh $(SCRIPTS)/build/rootfs-inception.sh $(SCRIPTS)/build/assets-nested.sh $(DIST)/bzImage $(DIST)/rootfs.ext4 | .toolbox
+	$(LOG)
+	rm -f $@
+	$(SCRIPTS)/build/assets-nested.sh
+
+dist-nested: dist $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 $(DIST)/rootfs-inception.ext4 ## Nested test assets: bzImage-nested (KVM host stack), rootfs-nested.ext4 (static cella + canonical inner assets), rootfs-inception.ext4 (+ the static probe)
 
 kernel-config-check: ## Resolve kernel-fragment.config against defconfig and report any line kconfig silently overruled (seconds, no compile)
 	$(LOG)
