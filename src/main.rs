@@ -10,7 +10,7 @@
 //! plumbing that ties memory.rs / boot/x86_64.rs / vcpu.rs / devices/ /
 //! freeze.rs / seccomp.rs together.
 
-use cella::{boot, config, devices, freeze, memory, seccomp, vcpu};
+use cella::{boot, config, devices, freeze, memory, seccomp, vcpu, warm};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -205,7 +205,7 @@ fn main() {
     }
 
     let cpuid = vcpu::supported_cpuid(&kvm).unwrap_or_else(|e| fatal(&format!("cpuid: {e:?}")));
-    let vcpu_fd =
+    let mut vcpu_fd =
         vcpu::create_vcpu(&vm, &cpuid).unwrap_or_else(|e| fatal(&format!("create vcpu: {e:?}")));
 
     let vm = Arc::new(vm);
@@ -244,16 +244,23 @@ fn main() {
     let mut serial = SerialDevice::new(vm.clone());
 
     if frozen {
-        // Fill the stage-2 page tables before the restore of the clock,
+        // Warm the stage-2 mappings before the restore of the clock,
         // so that the cost stays out of the clock window of the guest.
-        // See config::DEFAULT_THAW_PREFAULT for the measurements.
-        let prefault = match std::env::var("CELLA_THAW_PREFAULT").ok().as_deref() {
-            Some("off") => false,
-            Some(_) => true,
-            None => config::DEFAULT_THAW_PREFAULT,
-        };
-        if prefault {
-            prefault_ept(&vcpu_fd, mem_size_bytes);
+        // "ept" fills the tables of the direct host with an ioctl.
+        // "deep" also runs the warming stub, and that reaches every
+        // layer below (see src/warm.rs and the measurements in
+        // config::DEFAULT_THAW_PREFAULT).
+        let mode = std::env::var("CELLA_THAW_PREFAULT")
+            .unwrap_or_else(|_| config::DEFAULT_THAW_PREFAULT.to_string());
+        match mode.as_str() {
+            "off" => {}
+            "ept" => {
+                prefault_ept(&vcpu_fd, mem_size_bytes);
+            }
+            _ => {
+                prefault_ept(&vcpu_fd, mem_size_bytes);
+                warm::warm_stage2(&vm, &mut vcpu_fd, mem_size_bytes);
+            }
         }
         let frozen_state =
             freeze::read_state(&args.state_dir).unwrap_or_else(|e| fatal(&format!("{e:?}")));
