@@ -88,7 +88,18 @@ pub fn defaults() -> Manifest {
         net: "none".into(),
         root: "rw".into(),
     };
-    let Ok(s) = fs::read_to_string(home().join("config.json")) else {
+    let path = home().join("config.json");
+    let Ok(s) = fs::read_to_string(&path) else {
+        // Seed the file with the built-ins on first use, so that the
+        // knobs are discoverable by reading it. A seeded file changes
+        // nothing: its values are the built-ins.
+        let seed = format!(
+            "{{\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\"\n}}\n",
+            m.kernel, m.rootfs, m.mem_mb, m.net, m.root
+        );
+        if fs::create_dir_all(home()).is_ok() {
+            let _ = write_atomic(&path, seed.as_bytes());
+        }
         return m;
     };
     if let Some(v) = json_field(&s, "kernel") {
