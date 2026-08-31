@@ -127,7 +127,7 @@ target (`make device-state-ac1` .. `device-state-ac4`), and
 | Criterion | Current state | Target state | On target |
 |---|---|---|---|
 | **AC1 -- the disk survives the thaw** | The sidecar (v7) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. | The same. | yes |
-| **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, and the transport restore covers virtio-net. The gate does not exist, and no ping crosses a freeze. | The tap is recreated by convention where absent, and the host pings the guest after a thaw (the existing net gate, moved past a freeze). | no |
+| **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, the transport restore covers virtio-net, and the gate pings the guest before the freeze and after the thaw. A missing tap fails at start; `setup net` recreates the pool by convention. | The same. | yes |
 | **AC3 -- the in-flight layer is exact** | The sidecar format carries held egress frames, and the block path is synchronous by construction. No park point exists, and no held frame is delivered at thaw. | A parked egress frame is delivered and completed after the thaw: the same request works, with no retransmission. | no |
 | **AC4 -- the verdict is external** | Nothing parks. | Every egress frame parks by default, and the manager (standing in for the engine) renders the verdict: release with allow for a known destination, or freeze, grow the world, thaw, deliver. The guest never knows. The world-ratchet gate below proves it end to end. | no |
 

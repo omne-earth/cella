@@ -82,11 +82,37 @@ ac1)
 	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
 	;;
 ac2)
-	echo "AC2: the network survives the thaw."
-	echo "  Gate: the net gate, moved past a freeze; the tap claim"
-	echo "  persists through the manifest."
-	echo "FAIL: ac2 is not implemented yet (see docs/DEVICE-STATE.md)"
-	exit 1
+	echo "AC2: the network survives the thaw (ping, freeze, thaw, ping again)."
+	TAP="${CELLA_TEST_TAP:-tap0}"
+	HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
+	GUEST_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
+	if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
+		echo "SKIP: $TAP is not configured with $HOST_IP -- run: sudo cella setup net"
+		exit 0
+	fi
+
+	say "step 1: create and start a machine on $TAP"
+	"$BIN" create "$VM" --net "$TAP" >/dev/null
+	"$BIN" start "$VM" >/dev/null
+	sleep 6
+
+	say "step 2: the host pings the guest"
+	ping -c 3 -W 2 "$GUEST_IP" >/dev/null || { echo "FAIL: no ICMP reply before the freeze"; exit 1; }
+	echo "  $GUEST_IP answers over $TAP"
+
+	say "step 3: freeze, then thaw (the tap claim rides the manifest)"
+	"$BIN" freeze "$VM" >/dev/null
+	grep -q "$TAP" "$CELLA_HOME/machines/$VM/manifest.json" || { echo "FAIL: the manifest lost the tap claim"; exit 1; }
+	"$BIN" thaw "$VM" >/dev/null
+	sleep 2
+
+	say "step 4: the host pings the guest again, through the thawed transport"
+	ping -c 3 -W 2 "$GUEST_IP" >/dev/null || { echo "FAIL: no ICMP reply after the thaw (see docs/DEVICE-STATE.md)"; exit 1; }
+	echo "  $GUEST_IP answers over $TAP"
+
+	echo
+	echo "PASS: AC2 -- the network survived the thaw"
+	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
 	;;
 ac3)
 	echo "AC3: the in-flight layer is exact."
