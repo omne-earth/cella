@@ -196,6 +196,11 @@ window of 0 s can miss a late complaint.
 | nested KVM | on      | +2.5 ms to +4.3 ms                   | FAIL    |
 | bare metal | on      | -0.128 ms                            | PASS    |
 
+Re-validation with the guest kernel 7.2.2 (2026-08-30, the pin moved
+from 6.18.47): the same verdicts hold on both machines. On bare metal
+the 30 s observation run gives +0.33 ms, inside the +/-1.11 ms
+prediction interval, with no kernel complaints.
+
 The excess is a constant cost of each thaw. It does not change with
 the length of the freeze (0 s, 6 s, and 20 s give the same value). The
 nested KVM remainder comes from the outer hypervisor: a thaw makes a
