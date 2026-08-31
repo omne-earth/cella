@@ -58,9 +58,13 @@ configuration (flavors, memory, network, root mode) in the manifest;
 `build` runs when `create` misses a golden artifact, and it runs
 ad-hoc: `cella build kernel <flavor>`.
 
-The repository's `dist/` stays the proof path: the probes and the
-smoke tests pin against it, unchanged. `$HOME/.cella/` is the
-operational home. One recipe feeds both.
+`$HOME/.cella/` is the one artifact home. The repository's `dist/`
+retires as the migration proceeds: each step re-points its probes and
+its tests at the golden paths, re-runs the batteries on both
+machines, and records the results. During the migration, `build`
+seeds the golden home from the existing `dist/` artifacts; when the
+native build lands, it writes the golden home directly and `dist/`
+disappears.
 
 ## Golden flavors
 
@@ -107,9 +111,9 @@ and after, and the results land in the documents. Sequence:
    seccomp filter gains the accept path and keeps socket(2) as the
    canary.
 5. **build.** Rust orchestrates the downloads, the config merges, and
-   one toolbox invocation per artifact; the assets scripts retire.
-   `make dist` and `dist-nested` become wrappers, and the proof
-   artifacts re-verify.
+   one toolbox invocation per artifact; the assets scripts retire,
+   the probes and the smoke tests read the golden paths, `dist/`
+   disappears, and the proof artifacts re-verify at their new home.
 
 Each step is a commit series with green batteries on both machines
 before the next step begins.
