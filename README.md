@@ -180,13 +180,19 @@ mkfs.ext4 rootfs.img
 
 ```sh
 make init          # once per host: deps, toolbox, tap0, dist
-make boot          # a jailed guest in the foreground, state in ./vm1 (VM_DIR=... for another)
-make freeze        # from another terminal: freeze it (SIGUSR1)
-make thaw          # resume it, exactly where it stopped
+make demo          # the chamber, narrated: a shell freezes mid-conversation and wakes intact
+make boot          # a detached jailed guest with a shell, state in ./vm1 (VM_DIR=... for another)
+make enter         # attach to its serial console (detach: Ctrl-b d)
+make freeze        # freeze it (SIGUSR1)
+make thaw          # resume it, exactly where it stopped -- enter again: same shell, same instant
 ```
 
-`boot` copies the canonical disk into the state directory on the first
-run: a guest owns its disk. The equivalent by hand:
+The guest runs detached in a tmux session whose pane is the serial
+console; the console transcript lands in `.logs/`. `boot` copies the
+interactive image (`rootfs-cella`, the latest cella mvp image) into
+the state directory on the first run: a guest owns its disk. NET=none
+boots without the TAP, for a second concurrent guest. The equivalent
+by hand:
 
 ```sh
 make dist          # or use your own kernel/disk

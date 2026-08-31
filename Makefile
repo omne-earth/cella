@@ -21,7 +21,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
 .PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist dist-nested setup-tap \
-        boot freeze thaw smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
+        boot enter freeze thaw demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -37,7 +37,7 @@ help: ## Show this help
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Run: a real jailed guest, interactively:"
-	grep -hE '^(boot|freeze|thaw):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(boot|enter|freeze|thaw|demo):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
 	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -134,24 +134,48 @@ test: check lint unit-test integration-test test-jail test-seccomp ## Everything
 CELLA_GUEST_IP ?= 192.168.200.2
 # The state directory of the guest. One directory is one guest.
 VM_DIR ?= vm1
+# NET=none boots without the TAP. A persistent TAP admits one guest at
+# a time, thus a second concurrent guest must run without the network.
+NET ?= tap
 
-boot: build dist ## Boot a jailed guest in the foreground at $(VM_DIR) -- or thaw it, when $(VM_DIR) holds a frozen state
+$(DIST)/rootfs-cella.ext4: $(SCRIPTS)/build/rootfs-cella.sh $(SCRIPTS)/build/assets-cella.sh $(DIST)/rootfs.ext4 | .toolbox
 	$(LOG)
-	mkdir -p $(VM_DIR)
-	# A guest owns its disk. The first boot copies the canonical image
-	# into the state directory; the jail binds dist/ read-only.
-	[ -f $(VM_DIR)/disk.img ] || cp dist/rootfs.ext4 $(VM_DIR)/disk.img
-	HOST_IP="$(CELLA_TAP_CIDR)"; HOST_IP="$${HOST_IP%%/*}"
-	CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=$(CELLA_GUEST_IP)::$$HOST_IP:255.255.255.0::eth0:off"
-	$(SCRIPTS)/jail.sh \
-		--state-dir $(VM_DIR) \
-		--kernel dist/bzImage \
-		--disk $(VM_DIR)/disk.img \
-		--tap $(CELLA_TAP) \
-		--mem-mb 256 \
-		--cmdline "$$CMD"
+	rm -f $@
+	$(SCRIPTS)/build/assets-cella.sh
 
-thaw: ## Thaw the frozen guest at $(VM_DIR) (fails when no frozen state exists; boot also thaws)
+boot: build dist $(DIST)/rootfs-cella.ext4 ## Boot a detached jailed guest at $(VM_DIR) -- or thaw it. Attach: make enter. Console log: .logs/
+	$(LOG)
+	@if ! command -v tmux >/dev/null; then echo "cella: tmux not found -- run: make init"; exit 1; fi
+	if tmux has-session -t "cella-$(VM_DIR)" 2>/dev/null; then \
+		echo "cella: a guest already runs at $(VM_DIR) -- attach with: make enter"; exit 1; fi
+	mkdir -p $(VM_DIR)
+	# A guest owns its disk. The first boot copies the interactive
+	# image (rootfs-cella, the latest cella mvp image) into the state
+	# directory; the jail binds dist/ read-only.
+	[ -f $(VM_DIR)/disk.img ] || cp dist/rootfs-cella.ext4 $(VM_DIR)/disk.img
+	HOST_IP="$(CELLA_TAP_CIDR)"; HOST_IP="$${HOST_IP%%/*}"
+	if [ "$(NET)" = none ]; then
+		TAPARGS=""
+		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5"
+	else
+		TAPARGS="--tap $(CELLA_TAP)"
+		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=$(CELLA_GUEST_IP)::$$HOST_IP:255.255.255.0::eth0:off"
+	fi
+	# Detached: the guest runs in a tmux session, and the pane is the
+	# serial console. pipe-pane mirrors the console into .logs/.
+	tmux new-session -d -s "cella-$(VM_DIR)" \
+		"$(SCRIPTS)/jail.sh --state-dir $(VM_DIR) --kernel dist/bzImage --disk $(VM_DIR)/disk.img $$TAPARGS --mem-mb 256 --cmdline '$$CMD'"
+	tmux pipe-pane -t "cella-$(VM_DIR)" -o "cat >> $(LOGDIR)/console-$(VM_DIR)-$$(date +%Y%m%d-%H%M%S).log"
+	echo "cella: guest running detached at $(VM_DIR)"
+	echo "cella: attach:  make enter    (detach again: Ctrl-b d)"
+	echo "cella: freeze:  make freeze   thaw: make thaw"
+
+enter: ## Attach to the console of the running guest at $(VM_DIR) (detach: Ctrl-b d)
+	@tmux has-session -t "cella-$(VM_DIR)" 2>/dev/null \
+		|| { echo "cella: no running guest at $(VM_DIR) -- run: make boot (or: make thaw)"; exit 1; }
+	@tmux attach -t "cella-$(VM_DIR)"
+
+thaw: ## Thaw the frozen guest at $(VM_DIR), detached (fails when no frozen state exists; boot also thaws)
 	$(LOG)
 	[ -f $(VM_DIR)/state ] || { echo "cella: no frozen state in $(VM_DIR) -- run: make boot, then: make freeze"; exit 1; }
 	$(MAKE) boot
@@ -163,6 +187,10 @@ freeze: ## Freeze the running guest (SIGUSR1); thaw it with: make boot
 	pkill -USR1 -x cella \
 		&& echo "cella: freeze signal sent -- the process exits once the state file is written" \
 		|| { echo "cella: no running cella process"; exit 1; }
+
+demo: build dist $(DIST)/rootfs-cella.ext4 ## The chamber, narrated: boot a shell, freeze it mid-conversation, thaw it, ask what it remembers. Tears down after.
+	$(LOG)
+	$(SCRIPTS)/test/demo.sh
 
 # --- Smoke tests: required real KVM ---------------
 
@@ -214,7 +242,9 @@ smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot ## All smoke-* targets 
 
 smoke-clean: ## Kill any stray cella process left running by an interrupted smoke test
 	$(LOG)
-	pkill -f 'target/(release|debug)/cella' && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
+	# -x matches the process name exactly. A -f pattern kills any
+	# invoker whose own command line mentions the binary path.
+	pkill -x cella && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
 
 # --- Setup --------------------------------------------------------------
 
