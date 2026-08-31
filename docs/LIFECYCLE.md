@@ -45,8 +45,11 @@ flowchart TD
 Creating and addressing a TAP needs CAP_NET_ADMIN, thus the VMM never
 does it. The setup provisions a pool of persistent taps and the NAT
 once, with sudo, out of band; `create` then allocates a free tap from
-the pool into the manifest, rootless. The planned verb: `cella setup
-net --taps N`, the one verb that asks for privilege. A later step can
+the pool into the manifest, rootless. The verb: `sudo $(which cella)
+setup net --taps N`, the one verb that asks for privilege. Each pool
+tap owns a subnet: tap<n> serves 192.168.<200+n>.0/24, the host at .1
+and the guest at .2, thus concurrent networked machines do not
+collide. A later step can
 evaluate user-mode networking (passt), which would remove the
 privileged moment entirely at the cost of a new integration.
 
@@ -115,13 +118,10 @@ exclusive from create to destroy: `create --net auto` allocates the
 lowest tap that is present on the host and claimed by no machine, and
 an explicit `--net tapN` is refused when another manifest holds it.
 
-`$HOME/.cella/` is the one artifact home. The repository's `dist/`
-retires as the migration proceeds: each step re-points its probes and
-its tests at the golden paths, re-runs the batteries on both
-machines, and records the results. During the migration, `build`
-seeds the golden home from the existing `dist/` artifacts; when the
-native build lands, it writes the golden home directly and `dist/`
-disappears.
+`$HOME/.cella/` is the one artifact home. Every golden builds
+natively through `cella build` (see src/build.rs), from the pinned
+sources and the committed fragments and init scripts, inside the
+toolbox. The repository carries the build inputs, not the artifacts.
 
 ## Golden flavors
 
@@ -175,8 +175,10 @@ and after, and the results land in the documents. Sequence:
 Each step is a commit series with green batteries on both machines
 before the next step begins.
 
-Status (2026-08-31): steps 1 through 4 are done. The verbs run --
-build (seeded from dist/), create, start, enter, freeze, thaw, stop,
-destroy, list, info, selftest -- and the make run targets are thin
-wrappers over them. tmux left the dependency list. Step 5 (the native
-build; dist/ retires) remains.
+Status (2026-08-31): all five steps are done. The verbs run --
+build (native, all six flavors), create, start, enter, freeze, thaw,
+stop, destroy, list, info, selftest, and the root verb setup net --
+and the make targets are thin wrappers over them. dist/, the assets
+scripts, and tap.sh are gone; the tests and the probes read the
+golden paths under CELLA_HOME. The guest init scripts and the kernel
+fragments stay in the repository as the build inputs.

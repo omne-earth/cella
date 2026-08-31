@@ -85,8 +85,6 @@ scripts/
   setup/
     install.sh                 host setup: deps, toolbox prerequisites, the cella binary to ~/.local/bin
   build/
-    assets.sh                 build a busybox rootfs + a bzImage kernel from source
-    assets-nested.sh           the nested artifacts: bzImage-nested + the nested/inception rootfs
     static.sh                   static cella + probe binaries, for inside a guest
     kernel-fragment.config       the driver set beyond kernel defconfig
     kernel-fragment-nested.config  + a KVM host stack, for the nested kernel only
@@ -141,21 +139,21 @@ a Linux host. No `/dev/kvm` is required to build, only to run.
 
 ## Getting a kernel and a disk image
 
-`make dist` builds both a minimal rootfs and a minimal bzImage
-kernel from real upstream source, into `dist/` -- which is what
-`make smoke-boot` / `make smoke-thaw` / `make smoke-net` use. There's no shortcut for
-either: no microVM project publishes a prebuilt bzImage with cella's
-exact driver set (virtio-mmio/blk/net + 8250 serial built in, nothing
-from a module or an initrd -- see `boot/x86_64.rs`), and pairing an
-arbitrary downloaded rootfs with a from-scratch kernel/init risks
-mismatches that are hard to tell apart from real bugs. So
-`scripts/build/assets.sh` builds a static busybox (with
-`scripts/build/rootfs.sh` as `/sbin/init`) and a kernel (with
-`scripts/build/kernel-fragment.config` merged onto `x86_64_defconfig`) that
-are provably matched to each other and to cella's boot path. The
-actual compiling happens inside the `cella-build` toolbox
-(`make .toolbox`, chained into `make init`) so the host itself
-never needs a build toolchain.
+`make golden` and `make golden-nested` (thin wrappers over
+`cella build <kernel|rootfs> <flavor>`) build every golden natively
+into `~/.cella/` from real upstream source -- which is what the smoke
+tests and the probes use. There's no shortcut: no microVM project
+publishes a prebuilt bzImage with cella's exact driver set
+(virtio-mmio/blk/net + 8250 serial built in, nothing from a module or
+an initrd -- see `boot/x86_64.rs`), and pairing an arbitrary
+downloaded rootfs with a from-scratch kernel/init risks mismatches
+that are hard to tell apart from real bugs. So `cella build` compiles
+a static busybox (with `scripts/build/rootfs.sh` as `/sbin/init`) and
+a kernel (with `scripts/build/kernel-fragment.config` merged onto
+`x86_64_defconfig`) that are provably matched to each other and to
+cella's boot path. The compiling happens inside the `cella-build`
+toolbox (`make .toolbox`, chained into `make init`) so the host
+itself never needs a build toolchain.
 
 For your own kernel instead, the essentials are the same as
 `scripts/build/kernel-fragment.config`: `CONFIG_VIRTIO_MMIO`,
@@ -199,12 +197,12 @@ its own disk, and -- while frozen -- its RAM image and sidecar. The
 flag interface below remains for the probes and the tests:
 
 ```sh
-make dist          # or use your own kernel/disk
+make golden        # or use your own kernel/disk
 
 scripts/jail.sh \
   --state-dir ./vm1 \
-  --kernel ./dist/bzImage \
-  --disk ./dist/rootfs.ext4 \
+  --kernel ~/.cella/kernel/canonical/bzImage \
+  --disk ~/.cella/rootfs/canonical/rootfs.ext4 \
   --tap tap0 \
   --mem-mb 256 \
   --cmdline "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=192.168.200.2::192.168.200.1:255.255.255.0::eth0:off"

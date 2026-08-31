@@ -35,8 +35,8 @@ Expected output ends with:
 To also exercise the boot path, on a real Linux machine with KVM:
 
 ```sh
-make init          # once per host: deps, toolbox, tap0, dist
-make dist          # rootfs + kernel build (no-op if init already did it)
+make init          # once per host: deps, toolbox, tap0, goldens
+make golden        # the canonical goldens (no-op if init already did it)
 make smoke-boot    # boots a real kernel all the way to init
 make smoke-thaw    # boot -> freeze -> thaw -> verify
 make smoke-net     # best-effort ping over the TAP
