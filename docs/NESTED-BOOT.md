@@ -103,7 +103,7 @@ an address and pings the inner guest. The packet path is: outer init
 | Machine    | Depth for the inner guest | airgapped | hybrid | www |
 |------------|---------------------------|-----------|--------|-----|
 | nested KVM | 3 hypervisor layers       | PASS      | PASS   | PASS |
-| bare metal | 2 hypervisor layers       | pending   | pending | pending |
+| bare metal | 2 hypervisor layers       | PASS      | PASS   | PASS |
 
 ## Reproduce
 
