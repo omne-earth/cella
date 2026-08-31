@@ -63,6 +63,14 @@ const ALLOWED: &[(u32, &str)] = &[
     (293, "pipe2: not currently used, reserved for a future self-pipe"),
     (302, "prlimit64: std::fs / allocator introspection on some libcs"),
     (318, "getrandom: glibc/Rust runtime init"),
+    // The vDSO serves clock_gettime on most hosts, and the syscall then
+    // never reaches this filter. Inside a guest, kvm-clock without
+    // PVCLOCK_TSC_STABLE_BIT makes the vDSO refuse, and glibc falls
+    // back to the real syscall. The timing instrumentation of the
+    // freeze and the thaw reads the clock, thus a cella that runs
+    // inside a cella guest dies with SIGSYS in do_freeze without this
+    // entry. probe-inception found this.
+    (228, "clock_gettime: freeze/thaw timing instrumentation; vDSO fallback inside a guest"),
     (82,  "rename: atomic state.tmp -> state"),
     (87,  "unlink: finalize_thaw removing the one-shot state file, on some libc versions"),
     (263, "unlinkat: finalize_thaw removing the one-shot state file"),
