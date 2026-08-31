@@ -29,6 +29,15 @@ echo "cella-rootfs: init running (pid $$)"
 # /bin/sh on the console of PID 1 gets no controlling tty, and it is
 # not interactive. The loop brings the shell back when it exits;
 # poweroff still stops the guest through the kernel.
+# A process listing every 10 s, for the diagnosis of a shell that
+# stops reading: the state letter of the shell (S, R, T, Z) tells a
+# frozen-and-thawed session apart from a stopped or a dead one.
+(
+    while true; do
+        ps | while read -r line; do echo "cella-ps: $line"; done
+        sleep 10
+    done
+) &
 N=0
 while true; do
     N=$((N+1))

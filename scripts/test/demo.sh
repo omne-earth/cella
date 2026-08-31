@@ -58,10 +58,12 @@ if grep -a "value-after-thaw: aurora-133" "$(console)" >/dev/null; then
     exit 0
 fi
 echo "FAIL: the shell did not respond after the thaw"
-echo "-- retry after an interrupt, to see whether the session is alive:"
-tmux send-keys -t "$SESSION" C-c; sleep 1
-type_in 'echo retry-value: $MARKER'
-grep -a "retry-value" "$(console)" | tail -2 || true
+# No interrupt here: Ctrl-C in the pane reaches cella itself, and
+# cella has no SIGINT handler. Wait for the in-guest process listing
+# instead, and read the state of the shell from it.
+sleep 11
+echo "-- the processes of the guest after the thaw:"
+grep -a "cella-ps:" "$(console)" | tail -8 || true
 echo "-- getty generations on the console:"
 grep -a "cella-shell:" "$(console)" || true
 tail -5 "$(console)" || true
