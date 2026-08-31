@@ -302,6 +302,11 @@ pub fn destroy(name: &str) -> Result<(), String> {
 /// build (Rust-orchestrated toolchain) is a later migration step; see
 /// docs/LIFECYCLE.md.
 pub fn build(axis: &str, flavor: &str) -> Result<(), String> {
+    // The canonical kernel builds natively; the remaining flavors
+    // seed from dist/ until their migration step lands.
+    if (axis, flavor) == ("kernel", "canonical") {
+        return crate::build::kernel_canonical(&kernel_path(flavor));
+    }
     let (dest, src) = match (axis, flavor) {
         ("kernel", "canonical") => (kernel_path(flavor), "dist/bzImage"),
         ("kernel", "nested") => (kernel_path(flavor), "dist/bzImage-nested"),
