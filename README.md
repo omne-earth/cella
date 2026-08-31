@@ -1,5 +1,7 @@
 # cella
 
+*a cryogenic chamber for agents*
+
 A minimal x86_64 KVM microVM in Rust: virtio-blk + virtio-net + serial,
 no PCI, no ACPI, single vCPU, with a cryogenic freeze/thaw that survives
 a host reboot. This is the concrete artifact from a design conversation
