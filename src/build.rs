@@ -57,6 +57,11 @@ const TOOLBOX_PACKAGES: &[&str] = &[
     "glibc-static",
     "rust",
     "cargo",
+    // The static bubblewrap for the in-guest jail.
+    "meson",
+    "ninja-build",
+    "libcap-devel",
+    "libcap-static",
 ];
 
 /// Provision the cella-build toolbox when it is absent. The build verb
@@ -516,6 +521,8 @@ pub fn kernel_nested(golden: &Path) -> Result<(), String> {
         &[
             "CONFIG_KVM",
             "CONFIG_TUN",
+            "CONFIG_USER_NS",
+            "CONFIG_PID_NS",
             "CONFIG_SECCOMP_FILTER",
             "CONFIG_DEVTMPFS_MOUNT",
         ],
@@ -537,6 +544,57 @@ pub fn kernel_nested(golden: &Path) -> Result<(), String> {
     fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
     println!("cella: golden kernel nested -> {}", golden.display());
     Ok(())
+}
+
+/// The pinned bubblewrap for the in-guest jail. The version moves
+/// only deliberately, like the kernel pin.
+pub const BWRAP_VERSION: &str = "0.11.0";
+
+/// A static bubblewrap, built in the toolbox: the nested image runs
+/// the same jail inside the guest, and the busybox rootfs has no
+/// shared libraries.
+fn bwrap_static() -> Result<PathBuf, String> {
+    let root = repo_root();
+    let bbuild = root.join("target/bwrap-build");
+    let src = bbuild.join(format!("bubblewrap-{BWRAP_VERSION}"));
+    let out = src.join("build/bwrap");
+    if out.is_file() {
+        return Ok(out);
+    }
+    let url = format!(
+        "https://github.com/containers/bubblewrap/releases/download/v{BWRAP_VERSION}/bubblewrap-{BWRAP_VERSION}.tar.xz"
+    );
+    let tarball = bbuild.join(format!("bubblewrap-{BWRAP_VERSION}.tar.xz"));
+    fetch_and_extract("bwrap", &url, &tarball, &src, &bbuild)?;
+    println!("cella: bwrap: configuring (static, no selinux, no man)");
+    run_in_toolbox_quiet(
+        "meson setup",
+        &src,
+        &[
+            "env",
+            "LDFLAGS=-static",
+            "meson",
+            "setup",
+            "build",
+            "-Dprefer_static=true",
+            "-Dselinux=disabled",
+            "-Dman=disabled",
+            "-Dtests=false",
+            "-Dbash_completion=disabled",
+            "-Dzsh_completion=disabled",
+        ],
+    )?;
+    println!("cella: bwrap: building");
+    run_in_toolbox_quiet("ninja", &src, &["ninja", "-C", "build"])?;
+    let ldd = Command::new("ldd").arg(&out).output();
+    if let Ok(o) = ldd {
+        let text =
+            String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
+        if !text.contains("not a dynamic executable") && !text.contains("statically linked") {
+            return Err("bwrap did not link statically".to_string());
+        }
+    }
+    Ok(out)
 }
 
 /// The static binaries for the in-guest layers: cella and the clock
@@ -593,6 +651,7 @@ fn rootfs_nested_family(
     golden: &Path,
     init_name: &str,
     with_probe: bool,
+    with_jail: bool,
     tree_name: &str,
 ) -> Result<(), String> {
     let root = repo_root();
@@ -648,6 +707,10 @@ fn rootfs_nested_family(
     if with_probe {
         copies.push((probe, nroot.join("bin/freeze-thaw-clock-probe"), 0o755));
     }
+    if with_jail {
+        // The in-guest verbs run the same jail as the host.
+        copies.push((bwrap_static()?, nroot.join("bin/bwrap"), 0o755));
+    }
     for (from, to, mode) in copies {
         fs::copy(&from, &to).map_err(|e| format!("copying {}: {e}", from.display()))?;
         let mut p = fs::metadata(&to).map_err(|e| e.to_string())?.permissions();
@@ -680,9 +743,9 @@ fn rootfs_nested_family(
 }
 
 pub fn rootfs_nested(golden: &Path) -> Result<(), String> {
-    rootfs_nested_family(golden, "rootfs-nested.sh", false, "root-nested")
+    rootfs_nested_family(golden, "rootfs-nested.sh", false, true, "root-nested")
 }
 
 pub fn rootfs_inception(golden: &Path) -> Result<(), String> {
-    rootfs_nested_family(golden, "rootfs-inception.sh", true, "root-inception")
+    rootfs_nested_family(golden, "rootfs-inception.sh", true, false, "root-inception")
 }
