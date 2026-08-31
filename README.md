@@ -300,3 +300,7 @@ Carried over from the conversation, not forgotten:
 - **GPU/PCIe passthrough, snapshots-as-a-product-feature, live migration.**
 - **Encrypted RAM / SEV/TDX.** Discussed and explicitly declined for this
   design -- see "The freeze/thaw design" above.
+
+---
+
+<sub>made by omne with claude</sub>
