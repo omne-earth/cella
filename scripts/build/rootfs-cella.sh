@@ -29,6 +29,10 @@ echo "cella-rootfs: init running (pid $$)"
 # /bin/sh on the console of PID 1 gets no controlling tty, and it is
 # not interactive. The loop brings the shell back when it exits;
 # poweroff still stops the guest through the kernel.
+N=0
 while true; do
+    N=$((N+1))
+    echo "cella-shell: getty generation $N starting"
     /bin/getty -n -l /bin/sh 115200 ttyS0
+    echo "cella-shell: getty generation $N exited with $?"
 done

@@ -73,6 +73,10 @@ impl SerialDevice {
             scratch: regs[8],
             in_buffer: Vec::new(),
         };
+        eprintln!(
+            "cella: serial restore: IER={:#04x} IIR={:#04x} LCR={:#04x} LSR={:#04x} MCR={:#04x} MSR={:#04x}",
+            regs[2], regs[3], regs[4], regs[5], regs[6], regs[7]
+        );
         SerialDevice {
             inner: Serial::from_state(&state, IrqTrigger { vm }, NoEvents, io::stdout())
                 .expect("an empty in_buffer cannot overflow the FIFO"),

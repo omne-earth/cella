@@ -656,6 +656,11 @@ fn dump_state(dir: &PathBuf) -> ! {
         .map(|(_, d)| *d)
         .unwrap_or(0);
     println!();
+    println!(
+        "serial:      IER={:#04x} IIR={:#04x} LCR={:#04x} LSR={:#04x} MCR={:#04x} MSR={:#04x}",
+        st.serial[2], st.serial[3], st.serial[4], st.serial[5], st.serial[6], st.serial[7]
+    );
+    println!();
     println!("pvclock page (from MSR_KVM_SYSTEM_TIME_NEW):");
     if system_time_msr & 1 == 0 {
         println!("  the page is not enabled");
