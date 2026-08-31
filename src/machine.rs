@@ -241,16 +241,86 @@ fn tap_addresses(tap: &str) -> (String, String) {
 /// The privileged setup: provision a pool of persistent taps and the
 /// NAT, once. This is the one verb that needs root; everything else
 /// runs rootless, and create allocates from this pool (--net auto).
-pub fn setup_net(taps: u32) -> Result<(), String> {
+/// Resolve an external program to an absolute path. The PATH search
+/// of execvp is not dependable from a static binary inside a guest
+/// (observed: ENOENT for a program that the shell finds), thus every
+/// spawn resolves the path itself.
+fn find_program(name: &str) -> String {
+    for dir in ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin"] {
+        let p = format!("{dir}/{name}");
+        if Path::new(&p).is_file() {
+            return p;
+        }
+    }
+    name.to_string()
+}
+
+/// Create one persistent TAP through the tun ioctls: busybox `ip` has
+/// no tuntap subcommand, thus the shell path would not work inside a
+/// guest. Persistence is the point: a jailed VMM in a user namespace
+/// has no CAP_NET_ADMIN, and it can only open a device that already
+/// exists and that its user owns.
+fn create_persistent_tap(name: &str, owner: libc::uid_t) -> Result<(), String> {
+    const TUNSETIFF: libc::c_ulong = 0x4004_54ca;
+    const TUNSETPERSIST: libc::c_ulong = 0x4004_54cb;
+    const TUNSETOWNER: libc::c_ulong = 0x4004_54cc;
+    const IFF_TAP: libc::c_short = 0x0002;
+    const IFF_NO_PI: libc::c_short = 0x1000;
+    #[repr(C)]
+    struct Ifreq {
+        name: [u8; 16],
+        flags: libc::c_short,
+        _pad: [u8; 22],
+    }
+    let f = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/net/tun")
+        .map_err(|e| format!("opening /dev/net/tun: {e}"))?;
+    let mut req = Ifreq {
+        name: [0; 16],
+        flags: IFF_TAP | IFF_NO_PI,
+        _pad: [0; 22],
+    };
+    req.name[..name.len()].copy_from_slice(name.as_bytes());
+    use std::os::fd::AsRawFd;
+    // SAFETY: req is a valid ifreq, and the fd is /dev/net/tun.
+    unsafe {
+        for (ioc, arg, what) in [
+            (
+                TUNSETIFF,
+                &req as *const Ifreq as libc::c_ulong,
+                "TUNSETIFF",
+            ),
+            (TUNSETOWNER, owner as libc::c_ulong, "TUNSETOWNER"),
+            (TUNSETPERSIST, 1, "TUNSETPERSIST"),
+        ] {
+            if libc::ioctl(f.as_raw_fd(), ioc, arg) < 0 {
+                return Err(format!(
+                    "{what} on {name}: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
     // SAFETY: geteuid has no failure mode.
     if unsafe { libc::geteuid() } != 0 {
         return Err(
             "setup net creates TAP devices (CAP_NET_ADMIN) -- run: sudo cella setup net".into(),
         );
     }
-    let owner = std::env::var("SUDO_USER").unwrap_or_else(|_| "root".to_string());
+    let owner: libc::uid_t = std::env::var("SUDO_UID")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        // SAFETY: geteuid has no failure mode.
+        .unwrap_or_else(|| unsafe { libc::geteuid() });
+    let ip_bin = find_program("ip");
     let ip = |args: &[&str]| -> Result<(), String> {
-        let out = std::process::Command::new("ip")
+        let out = std::process::Command::new(&ip_bin)
             .args(args)
             .output()
             .map_err(|e| format!("running ip: {e}"))?;
@@ -263,20 +333,21 @@ pub fn setup_net(taps: u32) -> Result<(), String> {
         }
         Ok(())
     };
-    for n in 0..taps {
+    for n in first..first + taps {
         let tap = format!("tap{n}");
         if std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
             println!("cella: {tap} already exists, leaving it alone");
             continue;
         }
         let (_, host) = tap_addresses(&tap);
-        ip(&["tuntap", "add", "mode", "tap", "name", &tap, "user", &owner])?;
+        create_persistent_tap(&tap, owner)?;
         ip(&["addr", "add", &format!("{host}/24"), "dev", &tap])?;
         ip(&["link", "set", &tap, "up"])?;
-        println!("cella: created {tap} owned by {owner}, host side {host}/24");
+        println!("cella: created {tap} owned by uid {owner}, host side {host}/24");
     }
     // NAT once: one table, one masquerade rule on the default egress.
-    let egress = std::process::Command::new("sh")
+    let sh_bin = find_program("sh");
+    let egress = std::process::Command::new(&sh_bin)
         .args([
             "-c",
             "ip route show default | awk '/default/ {print $5; exit}'",
@@ -290,11 +361,13 @@ pub fn setup_net(taps: u32) -> Result<(), String> {
         return Ok(());
     }
     let nft = |cmd: &str| {
-        let _ = std::process::Command::new("sh").args(["-c", cmd]).status();
+        let _ = std::process::Command::new(&sh_bin)
+            .args(["-c", cmd])
+            .status();
     };
     nft("nft list table inet cella_nat >/dev/null 2>&1 || nft add table inet cella_nat");
     nft("nft list chain inet cella_nat postrouting >/dev/null 2>&1 || nft add chain inet cella_nat postrouting '{ type nat hook postrouting priority 100; }'");
-    let have = std::process::Command::new("sh")
+    let have = std::process::Command::new(&sh_bin)
         .args([
             "-c",
             "nft list chain inet cella_nat postrouting 2>/dev/null | grep -c masquerade",
@@ -402,122 +475,6 @@ pub fn build(axis: &str, flavor: &str) -> Result<(), String> {
         _ => Err(format!(
             "unknown build target {axis:?} {flavor:?} -- axes: kernel, rootfs; see docs/LIFECYCLE.md"
         )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn with_temp_home<F: FnOnce()>(f: F) {
-        // The environment is process-global and the tests run in
-        // parallel threads: serialize every test that sets CELLA_HOME.
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!(
-            "cella-machine-test-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("CELLA_HOME", &dir);
-        f();
-        std::env::remove_var("CELLA_HOME");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    fn sample() -> Manifest {
-        Manifest {
-            name: "m1".into(),
-            kernel: "canonical".into(),
-            rootfs: "canonical".into(),
-            mem_mb: 256,
-            net: "none".into(),
-            root: "rw".into(),
-            diag: "off".into(),
-        }
-    }
-
-    #[test]
-    fn manifest_round_trips() {
-        let m = sample();
-        assert_eq!(Manifest::from_json(&m.to_json()).unwrap(), m);
-    }
-
-    #[test]
-    fn names_are_path_safe() {
-        assert!(valid_name("m1"));
-        assert!(valid_name("agent-7"));
-        assert!(!valid_name(""));
-        assert!(!valid_name("-x"));
-        assert!(!valid_name("a/b"));
-        assert!(!valid_name("A"));
-        assert!(!valid_name(".."));
-    }
-
-    #[test]
-    fn defaults_read_config_and_flags_win() {
-        with_temp_home(|| {
-            let d = defaults();
-            assert_eq!(
-                (d.kernel.as_str(), d.rootfs.as_str()),
-                ("canonical", "cella")
-            );
-            fs::write(
-                home().join("config.json"),
-                "{\n  \"rootfs\": \"canonical\",\n  \"mem_mb\": 128\n}\n",
-            )
-            .unwrap();
-            let d = defaults();
-            assert_eq!(d.rootfs, "canonical");
-            assert_eq!(d.mem_mb, 128);
-            assert_eq!(d.kernel, "canonical"); // absent field keeps the built-in
-        });
-    }
-
-    #[test]
-    fn a_tap_claim_is_exclusive() {
-        with_temp_home(|| {
-            for p in [kernel_path("canonical"), rootfs_path("canonical")] {
-                fs::create_dir_all(p.parent().unwrap()).unwrap();
-                fs::write(&p, b"fake").unwrap();
-            }
-            let mut a = sample();
-            a.net = "tap7".into();
-            create(&a).unwrap();
-            let mut b = sample();
-            b.name = "m2".into();
-            b.net = "tap7".into();
-            let err = create(&b).unwrap_err();
-            assert!(err.contains("already claimed"), "{err}");
-            destroy("m1").unwrap();
-            create(&b).unwrap(); // the destroy freed the claim
-            destroy("m2").unwrap();
-        });
-    }
-
-    #[test]
-    fn create_requires_goldens_and_destroy_removes() {
-        with_temp_home(|| {
-            let m = sample();
-            let err = create(&m).unwrap_err();
-            assert!(err.contains("cella build kernel canonical"), "{err}");
-
-            // Stage fake goldens, then the cycle works.
-            for p in [kernel_path("canonical"), rootfs_path("canonical")] {
-                fs::create_dir_all(p.parent().unwrap()).unwrap();
-                fs::write(&p, b"fake").unwrap();
-            }
-            create(&m).unwrap();
-            assert!(machine_dir("m1").join("disk.img").is_file());
-            assert_eq!(read_manifest("m1").unwrap(), m);
-            let err = create(&m).unwrap_err();
-            assert!(err.contains("already exists"), "{err}");
-            destroy("m1").unwrap();
-            assert!(!machine_dir("m1").exists());
-            assert!(destroy("m1").is_err());
-        });
     }
 }
 
@@ -688,7 +645,10 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         .open(dir.join("vmm.log"))
         .map_err(|e| format!("opening vmm.log: {e}"))?;
 
-    let mut cmd = std::process::Command::new("bwrap");
+    // Resolve the jail binary ourselves: the PATH of a PID-1 child
+    // inside a guest is not a given, and an absolute path makes the
+    // spawn error name the real fault.
+    let mut cmd = std::process::Command::new(find_program("bwrap"));
     cmd.args([
         "--unshare-user",
         "--unshare-pid",
@@ -711,10 +671,12 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         c.args(["--ro-bind", p, p]);
     };
     cmd.args(["--ro-bind", bin.to_str().unwrap(), "/cella"]);
-    ro(&mut cmd, "/lib");
-    ro(&mut cmd, "/usr/lib");
-    if Path::new("/lib64").is_dir() {
-        ro(&mut cmd, "/lib64");
+    // Library binds only where the directories exist: the busybox
+    // guest has none, and the in-guest cella is static.
+    for lib in ["/lib", "/usr/lib", "/lib64"] {
+        if Path::new(lib).is_dir() {
+            ro(&mut cmd, lib);
+        }
     }
     cmd.args(["--dev-bind", "/dev/kvm", "/dev/kvm"]);
     if m.net != "none" {
@@ -1255,4 +1217,120 @@ pub fn info(name: &str) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_temp_home<F: FnOnce()>(f: F) {
+        // The environment is process-global and the tests run in
+        // parallel threads: serialize every test that sets CELLA_HOME.
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "cella-machine-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("CELLA_HOME", &dir);
+        f();
+        std::env::remove_var("CELLA_HOME");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn sample() -> Manifest {
+        Manifest {
+            name: "m1".into(),
+            kernel: "canonical".into(),
+            rootfs: "canonical".into(),
+            mem_mb: 256,
+            net: "none".into(),
+            root: "rw".into(),
+            diag: "off".into(),
+        }
+    }
+
+    #[test]
+    fn manifest_round_trips() {
+        let m = sample();
+        assert_eq!(Manifest::from_json(&m.to_json()).unwrap(), m);
+    }
+
+    #[test]
+    fn names_are_path_safe() {
+        assert!(valid_name("m1"));
+        assert!(valid_name("agent-7"));
+        assert!(!valid_name(""));
+        assert!(!valid_name("-x"));
+        assert!(!valid_name("a/b"));
+        assert!(!valid_name("A"));
+        assert!(!valid_name(".."));
+    }
+
+    #[test]
+    fn defaults_read_config_and_flags_win() {
+        with_temp_home(|| {
+            let d = defaults();
+            assert_eq!(
+                (d.kernel.as_str(), d.rootfs.as_str()),
+                ("canonical", "cella")
+            );
+            fs::write(
+                home().join("config.json"),
+                "{\n  \"rootfs\": \"canonical\",\n  \"mem_mb\": 128\n}\n",
+            )
+            .unwrap();
+            let d = defaults();
+            assert_eq!(d.rootfs, "canonical");
+            assert_eq!(d.mem_mb, 128);
+            assert_eq!(d.kernel, "canonical"); // absent field keeps the built-in
+        });
+    }
+
+    #[test]
+    fn a_tap_claim_is_exclusive() {
+        with_temp_home(|| {
+            for p in [kernel_path("canonical"), rootfs_path("canonical")] {
+                fs::create_dir_all(p.parent().unwrap()).unwrap();
+                fs::write(&p, b"fake").unwrap();
+            }
+            let mut a = sample();
+            a.net = "tap7".into();
+            create(&a).unwrap();
+            let mut b = sample();
+            b.name = "m2".into();
+            b.net = "tap7".into();
+            let err = create(&b).unwrap_err();
+            assert!(err.contains("already claimed"), "{err}");
+            destroy("m1").unwrap();
+            create(&b).unwrap(); // the destroy freed the claim
+            destroy("m2").unwrap();
+        });
+    }
+
+    #[test]
+    fn create_requires_goldens_and_destroy_removes() {
+        with_temp_home(|| {
+            let m = sample();
+            let err = create(&m).unwrap_err();
+            assert!(err.contains("cella build kernel canonical"), "{err}");
+
+            // Stage fake goldens, then the cycle works.
+            for p in [kernel_path("canonical"), rootfs_path("canonical")] {
+                fs::create_dir_all(p.parent().unwrap()).unwrap();
+                fs::write(&p, b"fake").unwrap();
+            }
+            create(&m).unwrap();
+            assert!(machine_dir("m1").join("disk.img").is_file());
+            assert_eq!(read_manifest("m1").unwrap(), m);
+            let err = create(&m).unwrap_err();
+            assert!(err.contains("already exists"), "{err}");
+            destroy("m1").unwrap();
+            assert!(!machine_dir("m1").exists());
+            assert!(destroy("m1").is_err());
+        });
+    }
 }

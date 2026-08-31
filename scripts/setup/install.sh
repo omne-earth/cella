@@ -18,7 +18,7 @@ fi
 # curl: scripts/build/assets.sh (kernel/busybox source fetch)
 # iputils: scripts/test/net.sh (ping)
 # python3: make lines, scripts/build/assets.sh (kernel.org releases.json)
-# podman/toolbox: make .toolbox -- the kernel/rootfs build toolchain
+# podman/toolbox: the build verb provisions the cella-build toolbox
 # (gcc, bison, flex, e2fsprogs, ...) lives inside the cella-build
 # toolbox container provisioned from there, never on the host itself.
 PACKAGES=(

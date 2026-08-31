@@ -152,7 +152,7 @@ a static busybox (with `scripts/build/rootfs.sh` as `/sbin/init`) and
 a kernel (with `scripts/build/kernel-fragment.config` merged onto
 `x86_64_defconfig`) that are provably matched to each other and to
 cella's boot path. The compiling happens inside the `cella-build`
-toolbox (`make .toolbox`, chained into `make init`) so the host
+toolbox (created and provisioned by `cella build` itself) so the host
 itself never needs a build toolchain.
 
 For your own kernel instead, the essentials are the same as

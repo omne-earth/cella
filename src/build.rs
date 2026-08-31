@@ -39,8 +39,72 @@ fn run(what: &str, program: &str, args: &[&str], cwd: Option<&Path>) -> Result<(
     Ok(())
 }
 
+/// The toolbox packages: the kernel and busybox toolchain, mkfs, the
+/// static glibc, and rust for the crt-static in-guest binaries.
+const TOOLBOX_PACKAGES: &[&str] = &[
+    "gcc",
+    "make",
+    "bc",
+    "bison",
+    "flex",
+    "elfutils-libelf-devel",
+    "openssl-devel",
+    "perl-interpreter",
+    "perl-generators",
+    "xz",
+    "bzip2",
+    "e2fsprogs",
+    "glibc-static",
+    "rust",
+    "cargo",
+    // The static bubblewrap for the in-guest jail.
+    "meson",
+    "ninja-build",
+    "libcap-devel",
+    "libcap-static",
+];
+
+/// Provision the cella-build toolbox when it is absent. The build verb
+/// owns its own prerequisites: after install, no path depends on the
+/// Makefile. Idempotent, and checked once per process.
+fn ensure_toolbox() -> Result<(), String> {
+    static DONE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    DONE.get_or_init(|| {
+        let list = Command::new("toolbox")
+            .args(["list", "-c"])
+            .output()
+            .map_err(|e| format!("running toolbox: {e} -- install the toolbox package"))?;
+        let have = String::from_utf8_lossy(&list.stdout)
+            .lines()
+            .any(|l| l.split_whitespace().nth(1) == Some("cella-build"));
+        if !have {
+            println!("cella: creating the cella-build toolbox");
+            run(
+                "create the toolbox",
+                "toolbox",
+                &["create", "-y", "cella-build"],
+                None,
+            )?;
+        }
+        println!("cella: provisioning the toolbox toolchain (idempotent)");
+        let mut args: Vec<&str> = vec!["run", "-c", "cella-build", "sudo", "dnf", "install", "-y"];
+        args.extend_from_slice(TOOLBOX_PACKAGES);
+        let status = Command::new("toolbox")
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .map_err(|e| format!("provisioning the toolbox: {e}"))?;
+        if !status.success() {
+            return Err("provisioning the toolbox failed".to_string());
+        }
+        Ok(())
+    })
+    .clone()
+}
+
 /// Run one command inside the cella-build toolbox.
 fn run_in_toolbox(what: &str, cwd: &Path, args: &[&str]) -> Result<(), String> {
+    ensure_toolbox()?;
     let mut full: Vec<&str> = vec!["run", "-c", "cella-build"];
     full.extend_from_slice(args);
     run(what, "toolbox", &full, Some(cwd))
@@ -184,6 +248,7 @@ pub const BUSYBOX_VERSION: &str = "1.37.0";
 /// Run a toolbox command with silenced stdout and a closed stdin: the
 /// kconfig steps prompt on a terminal and print pages otherwise.
 fn run_in_toolbox_quiet(what: &str, cwd: &Path, args: &[&str]) -> Result<(), String> {
+    ensure_toolbox()?;
     let mut full: Vec<&str> = vec!["run", "-c", "cella-build"];
     full.extend_from_slice(args);
     let status = Command::new("toolbox")
@@ -456,6 +521,8 @@ pub fn kernel_nested(golden: &Path) -> Result<(), String> {
         &[
             "CONFIG_KVM",
             "CONFIG_TUN",
+            "CONFIG_USER_NS",
+            "CONFIG_PID_NS",
             "CONFIG_SECCOMP_FILTER",
             "CONFIG_DEVTMPFS_MOUNT",
         ],
@@ -477,6 +544,57 @@ pub fn kernel_nested(golden: &Path) -> Result<(), String> {
     fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
     println!("cella: golden kernel nested -> {}", golden.display());
     Ok(())
+}
+
+/// The pinned bubblewrap for the in-guest jail. The version moves
+/// only deliberately, like the kernel pin.
+pub const BWRAP_VERSION: &str = "0.11.0";
+
+/// A static bubblewrap, built in the toolbox: the nested image runs
+/// the same jail inside the guest, and the busybox rootfs has no
+/// shared libraries.
+fn bwrap_static() -> Result<PathBuf, String> {
+    let root = repo_root();
+    let bbuild = root.join("target/bwrap-build");
+    let src = bbuild.join(format!("bubblewrap-{BWRAP_VERSION}"));
+    let out = src.join("build/bwrap");
+    if out.is_file() {
+        return Ok(out);
+    }
+    let url = format!(
+        "https://github.com/containers/bubblewrap/releases/download/v{BWRAP_VERSION}/bubblewrap-{BWRAP_VERSION}.tar.xz"
+    );
+    let tarball = bbuild.join(format!("bubblewrap-{BWRAP_VERSION}.tar.xz"));
+    fetch_and_extract("bwrap", &url, &tarball, &src, &bbuild)?;
+    println!("cella: bwrap: configuring (static, no selinux, no man)");
+    run_in_toolbox_quiet(
+        "meson setup",
+        &src,
+        &[
+            "env",
+            "LDFLAGS=-static",
+            "meson",
+            "setup",
+            "build",
+            "-Dprefer_static=true",
+            "-Dselinux=disabled",
+            "-Dman=disabled",
+            "-Dtests=false",
+            "-Dbash_completion=disabled",
+            "-Dzsh_completion=disabled",
+        ],
+    )?;
+    println!("cella: bwrap: building");
+    run_in_toolbox_quiet("ninja", &src, &["ninja", "-C", "build"])?;
+    let ldd = Command::new("ldd").arg(&out).output();
+    if let Ok(o) = ldd {
+        let text =
+            String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
+        if !text.contains("not a dynamic executable") && !text.contains("statically linked") {
+            return Err("bwrap did not link statically".to_string());
+        }
+    }
+    Ok(out)
 }
 
 /// The static binaries for the in-guest layers: cella and the clock
@@ -533,6 +651,7 @@ fn rootfs_nested_family(
     golden: &Path,
     init_name: &str,
     with_probe: bool,
+    with_jail: bool,
     tree_name: &str,
 ) -> Result<(), String> {
     let root = repo_root();
@@ -588,6 +707,10 @@ fn rootfs_nested_family(
     if with_probe {
         copies.push((probe, nroot.join("bin/freeze-thaw-clock-probe"), 0o755));
     }
+    if with_jail {
+        // The in-guest verbs run the same jail as the host.
+        copies.push((bwrap_static()?, nroot.join("bin/bwrap"), 0o755));
+    }
     for (from, to, mode) in copies {
         fs::copy(&from, &to).map_err(|e| format!("copying {}: {e}", from.display()))?;
         let mut p = fs::metadata(&to).map_err(|e| e.to_string())?.permissions();
@@ -620,9 +743,9 @@ fn rootfs_nested_family(
 }
 
 pub fn rootfs_nested(golden: &Path) -> Result<(), String> {
-    rootfs_nested_family(golden, "rootfs-nested.sh", false, "root-nested")
+    rootfs_nested_family(golden, "rootfs-nested.sh", false, true, "root-nested")
 }
 
 pub fn rootfs_inception(golden: &Path) -> Result<(), String> {
-    rootfs_nested_family(golden, "rootfs-inception.sh", true, "root-inception")
+    rootfs_nested_family(golden, "rootfs-inception.sh", true, false, "root-inception")
 }
