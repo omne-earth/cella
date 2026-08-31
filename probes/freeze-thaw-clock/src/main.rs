@@ -55,7 +55,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const BOOT_TIMEOUT: Duration = Duration::from_secs(20);
+// 12 heartbeats at ~1 s each, plus the boot, plus slack for a deep
+// nesting level.
+const BOOT_TIMEOUT: Duration = Duration::from_secs(40);
 const THAW_TIMEOUT: Duration = Duration::from_secs(20);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -273,7 +275,15 @@ fn main() {
     let bin = env_path("CELLA_BIN", root.join("target/release/cella"));
     let kernel = env_path("CELLA_TEST_KERNEL", root.join("dist/bzImage"));
     let disk = env_path("CELLA_TEST_DISK", root.join("dist/rootfs.ext4"));
-    let tap = std::env::var("CELLA_TEST_TAP").unwrap_or_else(|_| "tap0".to_string());
+    // CELLA_TEST_TAP=none runs the guest without a network device. The
+    // probe then names one virtio_mmio device on the command line, not
+    // two. probe-inception uses this mode: inside a guest no TAP
+    // exists, and the clock measurement needs no network.
+    let tap = match std::env::var("CELLA_TEST_TAP") {
+        Ok(v) if v == "none" => None,
+        Ok(v) => Some(v),
+        Err(_) => Some("tap0".to_string()),
+    };
 
     if !bin.is_file() {
         fail(&format!("{} not built -- run: make build", bin.display()));
@@ -295,9 +305,11 @@ fn main() {
         println!("SKIP: no read and write access to /dev/kvm on this machine");
         std::process::exit(0);
     }
-    if !std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
-        println!("SKIP: {tap} does not exist -- run: make setup-tap");
-        std::process::exit(0);
+    if let Some(tap) = &tap {
+        if !std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
+            println!("SKIP: {tap} does not exist -- run: make setup-tap");
+            std::process::exit(0);
+        }
     }
 
     let tmp = std::env::temp_dir().join(format!(
@@ -325,10 +337,12 @@ fn main() {
         _ => default_time_args(&bin),
     };
     let base = default_base_args(&bin);
-    let cmdline = format!(
-        "{base} {time_args} root=/dev/vda rw \
-         virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 {extra}"
-    );
+    let devices = if tap.is_some() {
+        "virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
+    } else {
+        "virtio_mmio.device=4K@0xd0000000:5"
+    };
+    let cmdline = format!("{base} {time_args} root=/dev/vda rw {devices} {extra}");
     println!(
         "time arguments: {}",
         if time_args.trim().is_empty() {
@@ -352,8 +366,7 @@ fn main() {
         .arg(&kernel)
         .arg("--disk")
         .arg(&disk_copy)
-        .arg("--tap")
-        .arg(&tap)
+        .args(tap.iter().flat_map(|t| ["--tap".to_string(), t.clone()]))
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")
@@ -369,11 +382,13 @@ fn main() {
     let pid = child.id() as i32;
 
     let deadline = Instant::now() + BOOT_TIMEOUT;
-    // Wait for 6 heartbeats before the freeze. The first ones pass any
+    // Wait for 12 heartbeats before the freeze. The first ones pass any
     // jitter from the boot. The rest give the normal interval of the
     // loop, which is the baseline that the interval across the freeze is
-    // compared against. Two samples are not enough for that baseline.
-    let guest_before = match wait_for_heartbeats(&boot_log, &mut child, 6, deadline) {
+    // compared against. The prediction interval of the gate comes from
+    // the sample standard deviation of these intervals, thus more
+    // samples give a tighter and a more stable gate.
+    let guest_before = match wait_for_heartbeats(&boot_log, &mut child, 12, deadline) {
         Some(v) => v,
         None => {
             let _ = child.kill();
@@ -447,8 +462,7 @@ fn main() {
         .arg(&state_dir)
         .arg("--disk")
         .arg(&disk_copy)
-        .arg("--tap")
-        .arg(&tap)
+        .args(tap.iter().flat_map(|t| ["--tap".to_string(), t.clone()]))
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")

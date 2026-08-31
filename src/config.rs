@@ -46,14 +46,16 @@ pub const DEFAULT_TIME_ARGS: &str = "tsc=reliable clocksource=kvm-clock trace_cl
 /// The complete default command line, without the arguments for the root
 /// filesystem and the virtio devices. A caller that gives `--cmdline`
 /// replaces this value.
-/// Fill the stage-2 page tables of a thawed VM before the clock restore
-/// (KVM_PRE_FAULT_MEMORY, Linux 6.11+). Without the prefill, the first
-/// heartbeat cycle of the guest pays one stage-2 fault for each page
-/// that it touches, and the clock of the guest counts that time
-/// (measured on nested KVM: ~25 ms; ~4 ms with the prefill). The
-/// cost of the prefill falls outside the clock window of the guest.
-/// Set CELLA_THAW_PREFAULT=off to measure the cold thaw.
-pub const DEFAULT_THAW_PREFAULT: bool = true;
+/// How a thaw warms the stage-2 mappings before the clock restore.
+/// "deep": KVM_PRE_FAULT_MEMORY for the direct host, then the warming
+/// stub of src/warm.rs, which reaches every layer below through real
+/// guest accesses. "ept": the ioctl only. "off": the cold thaw, for a
+/// measurement. Measured without warming: ~25 ms of guest-visible
+/// lateness on nested KVM; with "ept": ~4 ms remains for each nesting
+/// level below the direct host; "deep" exists to remove that
+/// remainder. The cost of the warming falls outside the clock window
+/// of the guest. Override with CELLA_THAW_PREFAULT.
+pub const DEFAULT_THAW_PREFAULT: &str = "deep";
 
 pub fn default_cmdline() -> String {
     format!("{DEFAULT_BASE_ARGS} {DEFAULT_TIME_ARGS}")

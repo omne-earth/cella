@@ -1,20 +1,22 @@
 # cella
 
-A minimal x86_64 KVM microVM in Rust: virtio-blk + virtio-net + serial,
-no PCI, no ACPI, single vCPU, with a cryogenic freeze/thaw that survives
-a host reboot. This is the concrete artifact from a design conversation
-about minimizing VMM TCB; the sections below map back to that reasoning
-so the "why" isn't lost alongside the code.
+*a cryogenic chamber for agents*
 
-**Status: builds and passes its own test suite (`make test`), but the
-boot path is not KVM-verified by us.** It was built in a sandbox with no
-`/dev/kvm` available, so the GDT/page-table/bzImage-loading code that
-actually boots a kernel has never run against real hardware. Everything
-that *can* be verified without `/dev/kvm` -- the virtio-mmio protocol,
-virtio-blk's descriptor-chain handling, the freeze/thaw sidecar format,
-and the seccomp filter -- has real, passing, `cargo test`-driven tests
-against the actual compiled code (see `TESTING.md`). Treat the boot path
-as a carefully-reasoned draft; see "What to check first" below.
+A minimal x86_64 KVM microVM in Rust: virtio-blk + virtio-net + serial,
+no PCI, no ACPI, single vCPU. It freezes a running guest to two files
+and thaws it later -- across a host reboot, with the guest unable to
+tell from the inside: its monotonic clock, wall clock, TSC, timers,
+and RNG state continue from the instant of the freeze, verified to
+microseconds by the probes in `probes/`. It also hosts itself: a cella
+guest can run cella, and the same time guarantees hold one nesting
+level down (`make smoke-nested-boot`, `make probe-inception`).
+
+**Status: verified on real KVM, on bare metal and on a nested-KVM
+host.** Every gate is derived from measurement, none uses a tuned
+constant, and the full suite (`make test-all`) passes on both machine
+classes with the pinned guest kernel (7.2.2). The known gap: virtio
+device state is not saved across a freeze -- see
+`docs/FREEZE-THAW.md`, "Next steps: virtio state".
 
 ## What's in here, and what it deliberately isn't
 
@@ -52,13 +54,15 @@ as a carefully-reasoned draft; see "What to check first" below.
 
 ```
 src/
-  lib.rs                 crate root: pub mod boot/devices/freeze/memory/seccomp/vcpu
+  lib.rs                 crate root
   main.rs                 thin binary: CLI, orchestration, the run loop, freeze trigger
-  memory.rs                guest RAM: a MAP_SHARED file (also the freeze image)
-  vcpu.rs                   vCPU creation, KVM_RUN dispatch, register save/restore
-  freeze.rs                  sidecar file format, crash-consistent write, thaw
-  seccomp.rs                  hand-rolled BPF allowlist + a self-test hook
-  boot/x86_64.rs                GDT, page tables, bzImage load, long-mode entry
+  config.rs                the guest defaults, in one place (cmdline, thaw warming)
+  memory.rs                 guest RAM: a MAP_SHARED file (also the freeze image)
+  vcpu.rs                    vCPU creation, KVM_RUN dispatch, register save/restore
+  freeze.rs                   sidecar file format, crash-consistent write, thaw
+  warm.rs                      stage-2 warming stub, run at thaw before the clock restore
+  seccomp.rs                    hand-rolled BPF allowlist + a self-test hook
+  boot/x86_64.rs                 GDT, page tables, bzImage load, long-mode entry
   devices/serial.rs              16550 (vm-superio) wired to IRQ4
   devices/virtio/
     mmio.rs                       virtio-mmio v2 register file (IrqLine trait: no
@@ -69,6 +73,13 @@ src/
 tests/
   virtio_block.rs         real descriptor-chain-driven virtio-blk tests
   virtio_mmio.rs            real virtio-mmio v2 protocol tests
+probes/
+  freeze-thaw-clock/      does a thaw leak real time into the guest's clocks? (the main gate)
+  wallclock/                does the guest wall-clock seed correctly at boot?
+  sregs/                      KVM_SET_SREGS ordering check, no guest needed
+docs/
+  FREEZE-THAW.md          time and state across freeze/thaw: design, gates, measurements
+  NESTED-BOOT.md            cella hosts cella: the layers, the fix, the depth tables
 scripts/
   jail.sh                  rootless bwrap wrapper, no jailer binary
   setup/
@@ -76,13 +87,18 @@ scripts/
     tap.sh                       one-time (per boot) TAP device creation, needs sudo once
   build/
     assets.sh                 build a busybox rootfs + a bzImage kernel from source
-    kernel-fragment.config      the driver set assets.sh needs beyond kernel defconfig
-    busybox-fragment.config      static-link override for assets.sh's busybox build
-    rootfs.sh                     /sbin/init installed into the built rootfs
-    toolbox.sh                     creates/provisions the cella-build toolbox
+    assets-nested.sh           the nested artifacts: bzImage-nested + the nested/inception rootfs
+    static.sh                   static cella + probe binaries, for inside a guest
+    kernel-fragment.config       the driver set beyond kernel defconfig
+    kernel-fragment-nested.config  + a KVM host stack, for the nested kernel only
+    kernel-config-check.sh          verify the resolved config before compiling it
+    busybox-fragment.config          static-link override for the busybox build
+    rootfs.sh / rootfs-nested.sh / rootfs-inception.sh   the /sbin/init of each rootfs
+    toolbox.sh                          creates/provisions the cella-build toolbox
   test/
     boot.sh / thaw.sh / net.sh     per-feature system tests against real KVM
-    jail.sh / seccomp.sh            per-feature system tests, no KVM needed
+    nested-boot.sh / inception.sh   cella-inside-cella tests (three network variants; the deep clock probe)
+    jail.sh / seccomp.sh             per-feature system tests, no KVM needed
   utils/
     count_lines.py               source-vs-tests line counting for `make lines`
 selinux/
@@ -94,8 +110,8 @@ TESTING.md                 what each test target verifies, and how to reproduce
 Line counts (`make lines`; see TESTING.md for the exact methodology):
 
 ```
-SOURCE ONLY (src/, excluding inline #[cfg(test)])         2063
-SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)          2882
+SOURCE ONLY (src/, excluding inline #[cfg(test)])         2975
+SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)          3836
 ```
 
 For scale: a full Firecracker build is about 57k lines of non-test Rust;
@@ -164,6 +180,21 @@ mkfs.ext4 rootfs.img
 
 ```sh
 make init          # once per host: deps, toolbox, tap0, dist
+make demo          # the chamber, narrated: a shell freezes mid-conversation and wakes intact
+make boot          # a detached jailed guest with a shell, state in ./vm1 (VM_DIR=... for another)
+make enter         # attach to its serial console (detach: Ctrl-b d)
+make freeze        # freeze it (SIGUSR1)
+make thaw          # resume it, exactly where it stopped -- enter again: same shell, same instant
+```
+
+The guest runs detached in a tmux session whose pane is the serial
+console; the console transcript lands in `.logs/`. `boot` copies the
+interactive image (`rootfs-cella`, the latest cella mvp image) into
+the state directory on the first run: a guest owns its disk. NET=none
+boots without the TAP, for a second concurrent guest. The equivalent
+by hand:
+
+```sh
 make dist          # or use your own kernel/disk
 
 scripts/jail.sh \
@@ -185,8 +216,8 @@ kill -USR1 $(pgrep -f 'target/release/cella')
 ```
 
 Run the exact same `jail.sh` command again against the same
-`--state-dir`: it detects the frozen `state` file and thaws instead of
-booting. `--kernel`/`--cmdline`/`--mem-mb` are ignored on thaw (memory
+`--state-dir` (or `make thaw`): it detects the frozen `state` file and
+thaws instead of booting. `--kernel`/`--cmdline`/`--mem-mb` are ignored on thaw (memory
 size comes from the frozen state itself, so it can't disagree with the
 RAM file being reopened).
 
@@ -212,9 +243,16 @@ Two properties fall out of this on purpose:
   On thaw we restore the kvmclock and each vCPU's TSC to their frozen
   values (not the host's current wall time), so both the guest's
   monotonic clock *and* its wall clock resume exactly where they left
-  off: frozen at T, thawed, still T -- `make probe-freeze-thaw-clock`
-  measures exactly this, and reports ~0 guest-perceived seconds across a
-  6s real freeze. The TSC restore is a direct `wrmsr`
+  off: frozen at T, thawed, still T. `make probe-freeze-thaw-clock`
+  gates exactly this: the heartbeat interval of the guest that contains
+  the freeze must equal a normal interval within a prediction interval
+  computed from the run's own baseline (sub-millisecond on bare metal).
+  Before the clock restore, the thaw warms the stage-2 mappings --
+  first `KVM_PRE_FAULT_MEMORY` for the direct host, then the stub of
+  `warm.rs` for every hypervisor layer below -- so the wake-up cost
+  lands in host time, not guest time. The full account, including the
+  nested measurements, is in `docs/FREEZE-THAW.md` and
+  `docs/NESTED-BOOT.md`. The TSC restore is a direct `wrmsr`
   to `MSR_IA32_TSC` via `KVM_SET_MSRS`, which is *only* correct because
   there's exactly one vCPU: KVM's TSC-synchronization heuristics exist
   to keep multiple vCPUs' counters aligned with each other, and that
@@ -257,36 +295,15 @@ state directory first and thaw the copy.
   `tun_tap_device_t`. Per-VM MCS categories (sVirt-style) for running
   more than one image concurrently are not sketched.
 
-## What to check first if you try to actually boot this
+## Verification
 
-`make smoke-boot` (see `TESTING.md`) is the actual repro script -- point it at
-`/dev/kvm` and it tells you exactly where things stand. In rough order
-of "most likely to be wrong, given no hardware testing":
-
-1. **The GDT descriptor packing in `boot/x86_64.rs`** (`gdt_entry` /
-   `kvm_segment_from_gdt`). Segment descriptor bit-twiddling is exactly
-   the kind of code that's easy to get subtly wrong and where the wrong
-   answer is a triple fault with no useful diagnostic. Firecracker's
-   `arch/x86_64/gdt.rs` is the reference to diff against. `make
-   unit-test` checks the bit-packing logic in isolation (round-trips,
-   known-good access bytes) but can't check it against what real
-   hardware actually expects at boot.
-2. **The e820 map and `setup_header` fields in `load_kernel`.** Worth
-   dumping and comparing against what Firecracker or cloud-hypervisor
-   actually write for the same kernel.
-3. **Whether `set_tss_address`/`set_identity_map_address` need to be
-   called before vs. after `create_irq_chip`** -- current KVM is lenient
-   here but this has moved around across kernel versions.
-4. **Lower risk than the above:** the virtio-mmio register file
-   (`mmio.rs`) and virtio-blk's descriptor-chain handling (`block.rs`)
-   have real passing tests (`make integration-test`) that exercise the
-   actual protocol logic against real guest memory and real descriptor
-   chains -- not a guarantee they match every guest driver's exact
-   expectations, but a much stronger footing than the boot path has.
-5. Freeze/thaw and seccomp are lower-risk still: both are fully unit- and
-   system-tested without needing a real guest at all (`make smoke-thaw`,
-   `make test-seccomp`) -- the register-restore ioctl sequence in `vcpu.rs`
-   is the one piece of freeze/thaw that only real KVM exercises.
+Everything above runs against real KVM on two machine classes -- bare
+metal, and a host that is itself a KVM guest -- and the results live
+in the documents below. The boot path, the freeze/thaw ioctl
+sequences, and the nested hosting are exercised by `make smoke` on
+every change; the clock gates are statistical, computed from each
+run's own baseline, and hold on both machines. `TESTING.md` maps each
+target to what it proves.
 
 ## Explicitly out of scope
 
@@ -300,6 +317,19 @@ Carried over from the conversation, not forgotten:
 - **GPU/PCIe passthrough, snapshots-as-a-product-feature, live migration.**
 - **Encrypted RAM / SEV/TDX.** Discussed and explicitly declined for this
   design -- see "The freeze/thaw design" above.
+
+## Documents
+
+- **`docs/FREEZE-THAW.md`** -- time and state across freeze and thaw:
+  the cryogenic principle, the freeze and thaw sequences and their
+  order rules, the derived gates, the measurements on both machines,
+  and the virtio-state gap that is the next work item.
+- **`docs/NESTED-BOOT.md`** -- cella hosts cella: the layer model, the
+  nested artifacts, the three network variants, the clock probe one
+  nesting level down, the depth tables, and "The fix" -- the five
+  changes that made inception seamless.
+- **`TESTING.md`** -- what each make target verifies, and how to add a
+  new one.
 
 ---
 

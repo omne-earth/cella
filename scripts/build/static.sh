@@ -17,7 +17,12 @@ fi
 
 RUSTFLAGS="-C target-feature=+crt-static" \
     cargo build --release --target x86_64-unknown-linux-gnu
-BIN=target/x86_64-unknown-linux-gnu/release/cella
-file "$BIN" | grep -qE "statically linked|static-pie" \
-    || { echo "cella: FAIL: $BIN is not static" >&2; exit 1; }
-echo "cella: static binary -> $BIN"
+RUSTFLAGS="-C target-feature=+crt-static" \
+    cargo build --release --target x86_64-unknown-linux-gnu \
+    --manifest-path probes/freeze-thaw-clock/Cargo.toml
+for BIN in target/x86_64-unknown-linux-gnu/release/cella \
+    probes/freeze-thaw-clock/target/x86_64-unknown-linux-gnu/release/freeze-thaw-clock-probe; do
+    file "$BIN" | grep -qE "statically linked|static-pie" \
+        || { echo "cella: FAIL: $BIN is not static" >&2; exit 1; }
+    echo "cella: static binary -> $BIN"
+done

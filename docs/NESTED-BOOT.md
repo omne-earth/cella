@@ -118,12 +118,147 @@ make smoke-nested-boot-hybrid
 make smoke-nested-boot-www
 ```
 
+## The clock probe one layer deep (probe-inception)
+
+`make probe-inception` boots the outer guest with
+rootfs-inception.ext4. The init runs the static freeze and thaw clock
+probe against an inner cella, and the verdict arrives through two
+serial layers. The probe found a real fault on its first run: the
+seccomp filter of cella lacked clock_gettime, because the vDSO serves
+that call on a host and refuses it inside a guest without
+PVCLOCK_TSC_STABLE_BIT.
+
+Measured difference of the thawed guest against its baseline mean, at
+every depth (2026-08-30, guest kernel 7.2.2). "Before" is the thaw
+with the ioctl prefill only; "after" adds the stage-2 warming stub
+(src/warm.rs), which reaches every layer below through real guest
+accesses. Depth counts the hypervisor layers between the metal and
+the thawed guest:
+
+Depth counts the hypervisors between the metal and the thawed guest.
+A direct thaw and an inception differ by one: the KVM of the outer
+guest. The two machines differ by one as well: the nested KVM machine
+is itself a guest of its cloud host.
+
+Bare metal:
+
+| Depth | Experiment  | Before   | After    | Verdict |
+|-------|-------------|----------|----------|---------|
+| 1     | direct thaw | +0.33 ms | -1.17 ms | PASS    |
+| 2     | inception   | +4.4 ms  | +0.04 ms | PASS    |
+
+Nested KVM:
+
+NOTE: this table starts at depth two. The machine is itself a guest
+of its cloud host, thus one hypervisor already sits between the metal
+and everything it runs. Its direct thaw therefore measures the same
+depth as the inception of the bare-metal machine.
+
+| Depth | Experiment  | Before        | After    | Verdict |
+|-------|-------------|---------------|----------|---------|
+| 2     | direct thaw | +2.5..4.3 ms  | +0.15 ms | PASS    |
+| 3     | inception   | +70.1 ms      | -0.8 ms  | PASS    |
+
+The two depth-two rows come from different machines and different
+rigs, and they agree before the warming (+4.4 against +2.5..4.3 ms)
+and after it (+0.04 against +0.15 ms). That agreement is the
+cross-validation of the whole measurement.
+
+The trend before the warming: near zero at depth one, ~4 ms at depth
+two, and a multiplicative jump at depth three. After the warming and
+with memory headroom: zero within the interval at every depth, on
+both machines, without a kernel change at any layer.
+
+Depth three needed one more fix: memory headroom. With 384 MB the
+outer guest starves, its own reclaim evicts the warmed mappings
+between the warming and the first heartbeat, and +30 ms remained.
+With headroom the gate passes (-6.5 ms to +11 ms across runs at 512,
+768, and 1024 MB, inside the interval; the baseline jitter at this
+depth widens the interval to ~+/-20 ms). Warming builds the mappings; headroom keeps them.
+Every depth now passes on both machines, without a kernel change at
+any layer.
+
+The inner prefill works one layer down (KVM_PRE_FAULT_MEMORY through
+the guest kernel, ~3 ms). The remaining +4.4 ms on bare metal has the
+same size as the nested remainder of the direct thaw measurement (see
+docs/FREEZE-THAW.md): the mechanism moved down one layer. For the
+inner guest, the outer hypervisor is the KVM of the bare-metal host,
+and it rebuilds its combined mapping for the inner VM on the first
+access. No VMM at any layer can fill that mapping today: the host
+kernel does not propagate a pre-fault through the nested shadow. The
+cost repeats per layer, ~4 ms per level on this hardware.
+
+## The fix
+
+The inception goal was seamless time at every depth. Five changes
+reached it, in the order that the investigation found them. The
+tables above measure each one.
+
+### 1. The ioctl prefill (KVM_PRE_FAULT_MEMORY)
+
+The thaw makes a new KVM VM with empty stage-2 tables, and the first
+heartbeat cycle of the guest paid one fault per touched page: ~25 ms
+of guest-visible lateness. The prefill fills the tables of the direct
+host before the clock restore, and the cost falls outside the clock
+window of the guest. This removed ~21 ms. It reaches one layer only:
+the ioctl cannot touch the mappings of any hypervisor below the
+direct host.
+
+### 2. clock_gettime in the seccomp filter
+
+Not a clock fix: an enabler. On a host the vDSO serves clock_gettime,
+and the syscall never reaches the filter of cella. Inside a guest,
+kvm-clock without PVCLOCK_TSC_STABLE_BIT makes the vDSO refuse, glibc
+falls back to the real syscall, and the inner cella died with SIGSYS
+in do_freeze. probe-inception found this on its first run. Every
+deeper measurement depended on this entry.
+
+### 3. The warming stub (src/warm.rs)
+
+The remainder after the prefill (~4 ms per nesting level) came from
+the layers below the direct host: each one builds its combined
+mapping on the first guest access, and no ioctl at any layer reaches
+them. A real guest access does: the architecture forces every layer
+to resolve the translation. The thaw therefore runs a throwaway stub
+on the fresh vCPU, before the restore of the state and of the clock:
+one byte read and written back per page (the read path and the write
+path both warm), code and page tables in a scratch memslot, exit
+through an OUT instruction (HLT blocks inside KVM with the in-kernel
+irqchip). This works under hypervisors that we do not own, and it
+composes recursively: each layer of a cella stack warms its own view,
+and the touches cascade to the metal.
+
+### 4. Keep the scratch memslot
+
+A deletion of a memslot makes KVM zap all roots, and that discards
+the warming that step 3 just performed. The scratch slot therefore
+stays in place. The guest never addresses its range.
+
+### 5. Memory headroom
+
+Depth three still showed +30 ms after the warming. The cause was not
+a hypervisor: the outer guest had 384 MB, its own reclaim ran during
+the inner boot, and the reclaim evicted the warmed mappings between
+the warming and the first heartbeat. The measured boundary: 384 MB
+fails; 512, 768, and 1024 MB pass. The default is 768 MB, one step
+above the measured minimum. Warming builds the mappings; headroom
+keeps them.
+
+### Paths not taken
+
+- **A kernel patch** (propagate the prefill through the nested
+  shadow) was the first plan. The warming stub reached the same
+  mappings from userspace, thus no kernel changed at any layer. The
+  patch remains a possible upstream contribution: it would remove the
+  host-time cost of the warming for every user of the kernel.
+- **A module flag** (kvm_intel.eptad) was a diagnostic candidate for
+  the depth-three remainder. The nested development machine runs AMD,
+  the flag does not exist there, and the headroom experiment resolved
+  the remainder first.
+
 ## Next steps
 
-- Run the clock probes one layer deeper: does time stay cryogenic for
-  an inner guest, through cella?
 - Freeze the outer guest while the inner guest runs, and thaw it: the
   cryogenic principle applied to a hypervisor.
-- Measure the stage-2 cost that cella, as the outer layer, adds to an
-  inner thaw. The thaw investigation could not see into the outer
-  hypervisor; here the outer hypervisor is ours.
+- Offer the kernel-side prefill propagation upstream, so that the
+  warming cost disappears for every user of the kernel.

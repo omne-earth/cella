@@ -188,26 +188,24 @@ verdict. `make probe-thaw-gate` runs the probe with a 30 s observation
 window, because `make smoke-thaw` runs it with a window of 0 s, and a
 window of 0 s can miss a late complaint.
 
-## Results (2026-08-30)
+## Results (2026-08-30, guest kernel 7.2.2)
 
-| Machine    | Prefill | Difference against the baseline mean | Verdict |
-|------------|---------|--------------------------------------|---------|
-| nested KVM | off     | +23 ms to +28 ms                     | FAIL    |
-| nested KVM | on      | +2.5 ms to +4.3 ms                   | FAIL    |
-| bare metal | on      | -0.128 ms                            | PASS    |
+The history of the measurement, on the nested KVM machine (the harder
+case: one hypervisor already sits between it and the metal):
 
-Re-validation with the guest kernel 7.2.2 (2026-08-30, the pin moved
-from 6.18.47): the same verdicts hold on both machines. On bare metal
-the 30 s observation run gives +0.33 ms, inside the +/-1.11 ms
-prediction interval, with no kernel complaints.
+| Thaw mode                | Difference against the baseline mean | Verdict |
+|--------------------------|--------------------------------------|---------|
+| cold (off)               | +23 ms to +28 ms                     | FAIL    |
+| ioctl prefill (ept)      | +2.5 ms to +4.3 ms                   | FAIL    |
+| prefill + warming (deep) | +0.15 ms                             | PASS    |
 
-The excess is a constant cost of each thaw. It does not change with
-the length of the freeze (0 s, 6 s, and 20 s give the same value). The
-nested KVM remainder comes from the outer hypervisor: a thaw makes a
-new VM, and the outer hypervisor rebuilds its shadow of the stage-2
-tables on the first guest access. That work is below the reach of the
-VMM. It does not exist on bare metal. Bare metal is the reference for
-this gate.
+Bare metal passes in every mode from "ept" on: -0.128 ms to +0.33 ms
+across runs, inside the interval, with no kernel complaints over a
+30 s watch. The excess of the cold thaw is a constant cost of each
+thaw: it does not change with the length of the freeze (0 s, 6 s, and
+20 s give the same value). "deep" is the default
+(config::DEFAULT_THAW_PREFAULT); see "The fix" in
+docs/NESTED-BOOT.md for the full account across nesting depths.
 
 ## Nested VMM
 
@@ -219,15 +217,20 @@ for L2, a shadow that L0 builds from the stage-2 tables of L1 and from
 its own tables. L0 builds that shadow on the first access of L2 to
 each page. The prefill cannot reach it: the L1 kernel performs the
 prefill as normal memory writes, and L0 sees those writes as L1
-activity, not as L2 accesses. The shadow of L0 stays cold.
+activity, not as L2 accesses. The shadow of L0 stays cold. One thing
+does reach it: a real access by the guest. The warming stub of
+src/warm.rs performs those accesses before the clock restore, and
+that is the fix (see docs/NESTED-BOOT.md, "The fix").
 
 In the first heartbeat cycle after the thaw, each page that the guest
 touches therefore exits to L0 one time for the shadow fill. The exits
 occur while the guest runs. The kvmclock tracks host real time while
 the guest runs, thus the clock of the guest counts the stall: the
-+2.5 ms to +4.3 ms remainder. The value is constant for each thaw
-(the working set is the same), it does not change with the length of
-the freeze, and no L1 ioctl can fill the structures of L0 in advance.
++2.5 ms to +4.3 ms remainder of the prefill-only thaw. The value is
+constant for each thaw (the working set is the same), and it does not
+change with the length of the freeze. No L1 ioctl fills the
+structures of L0 in advance; the warming stub fills them through the
+one channel every layer obeys, a guest access.
 
 ```mermaid
 flowchart TD
@@ -235,13 +238,14 @@ flowchart TD
     Q1 -->|"yes (prefill)"| Q2{"shadow entry in L0?"}
     Q1 -->|no| F1["fault to L1<br/>(the prefill removes this, ~21 ms)"]
     Q2 -->|yes| RUN["guest continues"]
-    Q2 -->|no| F0["exit to L0, shadow fill<br/>(+2.5 ms to +4.3 ms per thaw,<br/>below the reach of the VMM)"]
+    Q2 -->|no| F0["exit to L0, shadow fill<br/>(+2.5 ms to +4.3 ms per thaw;<br/>the warming stub moves this cost<br/>outside the clock window)"]
     F0 --> RUN
 ```
 
 On bare metal, no L0 exists. The prefilled stage-2 tables are the only
 translation layer, and the measurement confirms it: -0.128 ms, zero
-within the noise. Bare metal is therefore the reference for this gate.
+within the noise. With the warming stub the same zero holds on the
+nested machine, and one nesting level deeper on both machines.
 
 ## Next steps: virtio state
 
@@ -254,6 +258,16 @@ configured and live: status DRIVER_OK, queue addresses programmed,
 ring indices advanced. But the thaw constructs new MmioTransport
 objects, and their state is the reset state: status 0, no queue ready,
 and a next-available index of 0. The two sides disagree.
+
+The gap is no longer theoretical: the interactive demo detected it in
+the field (2026-08-30, bare metal). After a thaw, the shell of the
+guest appended to its history file, the write entered the ext4
+journal, and the journal commit waited on a virtio-blk request that
+the reset transport never processed. The in-guest diagnostics showed
+the shell in the D state in do_get_write_access, and jbd2 in
+jbd2_journal_commit_transaction, while the serial interrupts kept
+arriving. `make demo` therefore runs its guest with ROOT=ro until
+this work lands: a read-only root writes nothing to the disk.
 
 The smoke tests and the clock probes do not detect this, because the
 heartbeat needs no virtio. The guest reads /proc and writes to the
@@ -307,6 +321,7 @@ flowchart LR
 make smoke-thaw                                   # full workflow + both probes
 make probe-freeze-thaw-clock                      # the crossing measurement
 CELLA_THAW_PREFAULT=off make probe-freeze-thaw-clock   # the cold thaw
+CELLA_THAW_PREFAULT=ept make probe-freeze-thaw-clock   # ioctl prefill, no warming
 make probe-prefault-ept                           # explicit prefill variant
 make probe-thaw-gate                              # 30 s complaint watch after the thaw
 ```

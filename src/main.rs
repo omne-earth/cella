@@ -10,7 +10,7 @@
 //! plumbing that ties memory.rs / boot/x86_64.rs / vcpu.rs / devices/ /
 //! freeze.rs / seccomp.rs together.
 
-use cella::{boot, config, devices, freeze, memory, seccomp, vcpu};
+use cella::{boot, config, devices, freeze, memory, seccomp, vcpu, warm};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -205,7 +205,7 @@ fn main() {
     }
 
     let cpuid = vcpu::supported_cpuid(&kvm).unwrap_or_else(|e| fatal(&format!("cpuid: {e:?}")));
-    let vcpu_fd =
+    let mut vcpu_fd =
         vcpu::create_vcpu(&vm, &cpuid).unwrap_or_else(|e| fatal(&format!("create vcpu: {e:?}")));
 
     let vm = Arc::new(vm);
@@ -242,18 +242,28 @@ fn main() {
     };
 
     let mut serial = SerialDevice::new(vm.clone());
+    // Serial input needs the SIGIO handler even without a TAP.
+    install_sigio_handler();
+    setup_stdin_async();
 
     if frozen {
-        // Fill the stage-2 page tables before the restore of the clock,
+        // Warm the stage-2 mappings before the restore of the clock,
         // so that the cost stays out of the clock window of the guest.
-        // See config::DEFAULT_THAW_PREFAULT for the measurements.
-        let prefault = match std::env::var("CELLA_THAW_PREFAULT").ok().as_deref() {
-            Some("off") => false,
-            Some(_) => true,
-            None => config::DEFAULT_THAW_PREFAULT,
-        };
-        if prefault {
-            prefault_ept(&vcpu_fd, mem_size_bytes);
+        // "ept" fills the tables of the direct host with an ioctl.
+        // "deep" also runs the warming stub, and that reaches every
+        // layer below (see src/warm.rs and the measurements in
+        // config::DEFAULT_THAW_PREFAULT).
+        let mode = std::env::var("CELLA_THAW_PREFAULT")
+            .unwrap_or_else(|_| config::DEFAULT_THAW_PREFAULT.to_string());
+        match mode.as_str() {
+            "off" => {}
+            "ept" => {
+                prefault_ept(&vcpu_fd, mem_size_bytes);
+            }
+            _ => {
+                prefault_ept(&vcpu_fd, mem_size_bytes);
+                warm::warm_stage2(&vm, &mut vcpu_fd, mem_size_bytes);
+            }
         }
         let frozen_state =
             freeze::read_state(&args.state_dir).unwrap_or_else(|e| fatal(&format!("{e:?}")));
@@ -286,6 +296,7 @@ fn main() {
         // back the IOAPIC routing and the PIT programming that the guest
         // set before the freeze. Without this call, a halted guest waits
         // for a timer interrupt that does not occur.
+        serial = SerialDevice::restore(vm.clone(), frozen_state.serial);
         vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
             .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
@@ -363,7 +374,14 @@ fn run_loop(
 ) {
     loop {
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
-            do_freeze(&vcpu_fd, vm, mem, state_dir, mem_size_bytes);
+            do_freeze(
+                &vcpu_fd,
+                vm,
+                mem,
+                state_dir,
+                mem_size_bytes,
+                serial.registers(),
+            );
             std::process::exit(0);
         }
 
@@ -399,6 +417,43 @@ fn run_loop(
         if let Some((idx, net_fd)) = net_poll {
             poll_net_rx(mmio_devices, idx, net_fd, mem);
         }
+        // Drain host stdin into the serial RX FIFO on every pass. Stdin
+        // carries O_ASYNC (see setup_stdin_async), thus a keystroke
+        // raises SIGIO, KVM_RUN returns with EINTR, and the byte lands
+        // here even when the guest is idle in HLT.
+        poll_stdin_rx(serial);
+    }
+}
+
+/// Read pending host stdin bytes into the serial device. Non-blocking:
+/// stdin carries O_NONBLOCK, and a pass with no input costs one poll.
+fn poll_stdin_rx(serial: &mut SerialDevice) {
+    let mut pfd = libc::pollfd {
+        fd: 0,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: pfd is a valid pollfd for the duration of this call.
+    let ready = unsafe { libc::poll(&mut pfd, 1, 0) };
+    if ready > 0 && (pfd.revents & libc::POLLIN) != 0 {
+        let mut buf = [0u8; 64];
+        // SAFETY: buf is a valid writable buffer of the given length.
+        let n = unsafe { libc::read(0, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n > 0 {
+            serial.enqueue(&buf[..n as usize]);
+        }
+    }
+}
+
+/// Give stdin O_ASYNC and O_NONBLOCK, so that a keystroke interrupts
+/// KVM_RUN the same way a TAP frame does (see tap.rs), and so that the
+/// run-loop read never blocks. Runs before the seccomp filter.
+fn setup_stdin_async() {
+    // SAFETY: fcntl on fd 0 with valid commands.
+    unsafe {
+        libc::fcntl(0, libc::F_SETOWN, libc::getpid());
+        let flags = libc::fcntl(0, libc::F_GETFL);
+        libc::fcntl(0, libc::F_SETFL, flags | libc::O_ASYNC | libc::O_NONBLOCK);
     }
 }
 
@@ -426,6 +481,7 @@ fn do_freeze(
     mem: &vm_memory::GuestMemoryMmap,
     state_dir: &std::path::Path,
     mem_size_bytes: u64,
+    serial_regs: [u8; 9],
 ) {
     eprintln!("cella: freezing to {:?}", state_dir);
     // The guest stopped when KVM_RUN returned. Measure the delay from
@@ -471,6 +527,7 @@ fn do_freeze(
         &vcpu_state,
         &clock,
         &irqchip,
+        &serial_regs,
     )
     .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
 
@@ -598,6 +655,11 @@ fn dump_state(dir: &PathBuf) -> ! {
         .find(|(i, _)| *i == 0x4b56_4d01)
         .map(|(_, d)| *d)
         .unwrap_or(0);
+    println!();
+    println!(
+        "serial:      IER={:#04x} IIR={:#04x} LCR={:#04x} LSR={:#04x} MCR={:#04x} MSR={:#04x}",
+        st.serial[2], st.serial[3], st.serial[4], st.serial[5], st.serial[6], st.serial[7]
+    );
     println!();
     println!("pvclock page (from MSR_KVM_SYSTEM_TIME_NEW):");
     if system_time_msr & 1 == 0 {

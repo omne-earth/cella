@@ -10,3 +10,4 @@ pub mod freeze;
 pub mod memory;
 pub mod seccomp;
 pub mod vcpu;
+pub mod warm;

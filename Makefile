@@ -21,9 +21,9 @@ export KERNEL_VERSION BUSYBOX_VERSION
 .PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist dist-nested setup-tap \
-        smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
+        boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
-        probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate \
+        probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
 
 help: ## Show this help
@@ -36,6 +36,9 @@ help: ## Show this help
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
+	echo "Run: a real jailed guest, interactively:"
+	grep -hE '^(boot|enter|freeze|thaw|remove|demo):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
 	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
@@ -46,7 +49,7 @@ help: ## Show this help
 	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Probes: diagnostics, run by hand (smoke-thaw runs the freeze/thaw one):"
-	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept|probe-thaw-gate):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept|probe-thaw-gate|probe-inception):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 
 # --- Build ------------------------------------------------------------
 
@@ -58,9 +61,17 @@ debug: ## Debug build (target/debug/cella), faster to compile
 	$(LOG)
 	$(CARGO) build
 
-build-static: .toolbox ## Static cella for the nested rootfs, built inside the toolbox
+# Sentinel with real input dependencies: the static binaries rebuild
+# when a source file changes, and a stale binary can no longer ride
+# into a rootfs image unnoticed.
+.static: $(shell find src -name '*.rs') Cargo.toml Cargo.lock \
+         probes/freeze-thaw-clock/src/main.rs probes/freeze-thaw-clock/Cargo.toml \
+         $(SCRIPTS)/build/static.sh | .toolbox
 	$(LOG)
 	$(SCRIPTS)/build/static.sh
+	touch .static
+
+build-static: .static ## Static cella + probe for the nested rootfs, built inside the toolbox (mtime-tracked via .static)
 
 check: ## cargo check, no codegen
 	$(LOG)
@@ -117,6 +128,100 @@ test: check lint unit-test integration-test test-jail test-seccomp ## Everything
 	echo ""
 	echo "=== make test: all no-KVM checks passed ==="
 
+# --- Run: a jailed guest in the foreground ---------------------------
+
+# The guest address on the TAP subnet, for the in-kernel ip= config.
+CELLA_GUEST_IP ?= 192.168.200.2
+# The state directory of the guest. One directory is one guest.
+VM_DIR ?= vm1
+# NET=none boots without the TAP. A persistent TAP admits one guest at
+# a time, thus a second concurrent guest must run without the network.
+NET ?= tap
+# DIAG=1 adds cella_diag to the kernel command line: the interactive
+# image then prints its heartbeat and its diagnostic listings on the
+# console. The demo needs them; an interactive session does not.
+DIAG ?= 0
+# ROOT=ro mounts the root filesystem read-only. A guest that must
+# survive a freeze and a thaw needs this today: the freeze does not
+# save the virtio device state, and the first post-thaw disk write
+# hangs (see docs/FREEZE-THAW.md, "Next steps: virtio state").
+ROOT ?= rw
+
+$(DIST)/rootfs-cella.ext4: $(SCRIPTS)/build/rootfs-cella.sh $(SCRIPTS)/build/assets-cella.sh $(DIST)/rootfs.ext4 | .toolbox
+	$(LOG)
+	rm -f $@
+	$(SCRIPTS)/build/assets-cella.sh
+
+boot: build dist $(DIST)/rootfs-cella.ext4 ## Boot a detached jailed guest at $(VM_DIR) -- or thaw it. Attach: make enter. Console log: .logs/
+	$(LOG)
+	@if ! command -v tmux >/dev/null; then echo "cella: tmux not found -- run: make init"; exit 1; fi
+	if tmux has-session -t "cella-$(VM_DIR)" 2>/dev/null; then \
+		echo "cella: a guest already runs at $(VM_DIR) -- attach with: make enter"; exit 1; fi
+	mkdir -p $(VM_DIR)
+	# A guest owns its disk. The first boot copies the interactive
+	# image (rootfs-cella, the latest cella mvp image) into the state
+	# directory; the jail binds dist/ read-only.
+	[ -f $(VM_DIR)/disk.img ] || cp dist/rootfs-cella.ext4 $(VM_DIR)/disk.img
+	HOST_IP="$(CELLA_TAP_CIDR)"; HOST_IP="$${HOST_IP%%/*}"
+	if [ "$(NET)" = none ]; then
+		TAPARGS=""
+		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda $(ROOT) virtio_mmio.device=4K@0xd0000000:5"
+	else
+		TAPARGS="--tap $(CELLA_TAP)"
+		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda $(ROOT) virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=$(CELLA_GUEST_IP)::$$HOST_IP:255.255.255.0::eth0:off"
+	fi
+	[ "$(DIAG)" = 1 ] && CMD="$$CMD cella_diag" || true
+	# Detached: the guest runs in a tmux session, and the pane is the
+	# serial console. pipe-pane mirrors the console into .logs/.
+	# The pane carries the guest serial console only. The stderr of the
+	# VMM (timing, restore, warm lines) goes to its own log: a reader of
+	# the console -- a person, or an agent whose world is this pane --
+	# must not see the instrumentation of the operator.
+	tmux new-session -d -s "cella-$(VM_DIR)" \
+		"$(SCRIPTS)/jail.sh --state-dir $(VM_DIR) --kernel dist/bzImage --disk $(VM_DIR)/disk.img $$TAPARGS --mem-mb 256 --cmdline '$$CMD' 2>> $(LOGDIR)/vmm-$(VM_DIR)-$$(date +%Y%m%d-%H%M%S).log"
+	tmux pipe-pane -t "cella-$(VM_DIR)" -o "cat >> $(LOGDIR)/console-$(VM_DIR)-$$(date +%Y%m%d-%H%M%S).log"
+	# Do not report a running guest before the guest survives its start:
+	# a stale sidecar or a busy TAP kills it within the first second.
+	sleep 1
+	if ! tmux has-session -t "cella-$(VM_DIR)" 2>/dev/null; then
+		echo "cella: the guest exited at start -- last console lines:"
+		tail -n 5 $$(ls -t $(LOGDIR)/console-$(VM_DIR)-* | head -1)
+		exit 1
+	fi
+	echo "cella: guest running detached at $(VM_DIR)"
+	echo "cella: attach:  make enter    (detach again: Ctrl-b d)"
+	echo "cella: freeze:  make freeze   thaw: make thaw"
+
+enter: ## Attach to the console of the running guest at $(VM_DIR) (detach: Ctrl-b d)
+	@tmux has-session -t "cella-$(VM_DIR)" 2>/dev/null \
+		|| { echo "cella: no running guest at $(VM_DIR) -- run: make boot (or: make thaw)"; exit 1; }
+	@tmux attach -t "cella-$(VM_DIR)"
+
+thaw: ## Thaw the frozen guest at $(VM_DIR), detached (fails when no frozen state exists; boot also thaws)
+	$(LOG)
+	[ -f $(VM_DIR)/state ] || { echo "cella: no frozen state in $(VM_DIR) -- run: make boot, then: make freeze"; exit 1; }
+	$(MAKE) boot
+
+remove: ## Discard the guest at $(VM_DIR): end its session and delete its state directory
+	$(LOG)
+	tmux kill-session -t "cella-$(VM_DIR)" 2>/dev/null \
+		&& echo "cella: ended the session of $(VM_DIR)" \
+		|| echo "cella: no running guest at $(VM_DIR)"
+	rm -rf $(VM_DIR)
+	echo "cella: removed $(VM_DIR)"
+
+freeze: ## Freeze the running guest (SIGUSR1); thaw it with: make thaw
+	$(LOG)
+	# -x matches the process name exactly. A -f pattern would match the
+	# recipe shell itself, whose command line contains the same text.
+	pkill -USR1 -x cella \
+		&& echo "cella: freeze signal sent -- the process exits once the state file is written" \
+		|| { echo "cella: no running cella process"; exit 1; }
+
+demo: build dist $(DIST)/rootfs-cella.ext4 ## End-to-end demonstration: boot a shell, store a value, freeze, thaw, read the value back. Tears down after.
+	$(LOG)
+	$(SCRIPTS)/test/demo.sh
+
 # --- Smoke tests: required real KVM ---------------
 
 smoke-boot: build dist ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
@@ -160,18 +265,20 @@ smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/tes
 	$(LOG)
 	$(SCRIPTS)/test/net.sh
 
-smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot ## All smoke-* targets (skips gracefully without KVM)
+smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot probe-inception ## All smoke-* targets + the deep clock probe (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
 
 smoke-clean: ## Kill any stray cella process left running by an interrupted smoke test
 	$(LOG)
-	pkill -f 'target/(release|debug)/cella' && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
+	# -x matches the process name exactly. A -f pattern kills any
+	# invoker whose own command line mentions the binary path.
+	pkill -x cella && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
 
 # --- Setup --------------------------------------------------------------
 
-.toolbox: ## Sentinel: creates + provisions the cella-build toolbox (kernel build toolchain lives there, not on the host)
+.toolbox: $(SCRIPTS)/build/toolbox.sh ## Sentinel: creates + provisions the cella-build toolbox (kernel build toolchain lives there, not on the host)
 	$(LOG)
 	$(SCRIPTS)/build/toolbox.sh
 	touch .toolbox
@@ -183,17 +290,38 @@ init: ## One-time host setup (Fedora): installs runtime deps, provisions the bui
 	$(MAKE) setup-tap
 	$(MAKE) dist
 
-$(DIST)/bzImage $(DIST)/rootfs.ext4: | .toolbox
+# Each artifact names its real inputs. A change to a fragment or an
+# init script makes the artifact stale, and the recipe removes the one
+# stale file before the build script runs: the script rebuilds what is
+# missing and skips the rest.
+$(DIST)/bzImage: $(SCRIPTS)/build/kernel-fragment.config $(SCRIPTS)/build/kernel-config-check.sh $(SCRIPTS)/build/assets.sh | .toolbox
 	$(LOG)
+	rm -f $@
+	$(SCRIPTS)/build/assets.sh
+
+$(DIST)/rootfs.ext4: $(SCRIPTS)/build/rootfs.sh $(SCRIPTS)/build/busybox-fragment.config $(SCRIPTS)/build/assets.sh | .toolbox
+	$(LOG)
+	rm -f $@
 	$(SCRIPTS)/build/assets.sh
 
 dist: $(DIST)/bzImage $(DIST)/rootfs.ext4 ## Build a minimal rootfs + bzImage kernel from source (compiled inside the toolbox), skipped if already built
 
-$(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4: | .toolbox
+$(DIST)/bzImage-nested: $(SCRIPTS)/build/kernel-fragment.config $(SCRIPTS)/build/kernel-fragment-nested.config $(SCRIPTS)/build/assets-nested.sh | .toolbox
 	$(LOG)
+	rm -f $@
 	$(SCRIPTS)/build/assets-nested.sh
 
-dist-nested: dist build-static $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 ## Nested test assets: bzImage-nested (KVM host stack) + rootfs-nested.ext4 (static cella + canonical inner assets)
+$(DIST)/rootfs-nested.ext4: .static $(SCRIPTS)/build/rootfs-nested.sh $(SCRIPTS)/build/assets-nested.sh $(DIST)/bzImage $(DIST)/rootfs.ext4 | .toolbox
+	$(LOG)
+	rm -f $@
+	$(SCRIPTS)/build/assets-nested.sh
+
+$(DIST)/rootfs-inception.ext4: .static $(SCRIPTS)/build/rootfs-nested.sh $(SCRIPTS)/build/rootfs-inception.sh $(SCRIPTS)/build/assets-nested.sh $(DIST)/bzImage $(DIST)/rootfs.ext4 | .toolbox
+	$(LOG)
+	rm -f $@
+	$(SCRIPTS)/build/assets-nested.sh
+
+dist-nested: dist $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 $(DIST)/rootfs-inception.ext4 ## Nested test assets: bzImage-nested (KVM host stack), rootfs-nested.ext4 (static cella + canonical inner assets), rootfs-inception.ext4 (+ the static probe)
 
 kernel-config-check: ## Resolve kernel-fragment.config against defconfig and report any line kconfig silently overruled (seconds, no compile)
 	$(LOG)
@@ -355,15 +483,22 @@ probe-freeze-thaw-clock: build dist ## Does freeze/thaw leak real elapsed time i
 #     bare metal:  -0.128 ms           -> PASS, inside the interval
 #   The nested KVM remainder comes from the outer hypervisor: a thaw
 #   makes a new VM, and the outer hypervisor rebuilds its shadow of the
-#   stage-2 tables on the first guest access. That work is below the
-#   reach of the VMM. It does not exist on bare metal, thus the probe
-#   passes there. Bare metal is the reference for this gate.
+#   stage-2 tables on the first guest access. No ioctl reaches that
+#   shadow; a real guest access does. The warming stub (src/warm.rs,
+#   thaw mode "deep", the default) performs those accesses before the
+#   clock restore, and the gate then passes on both machines. See
+#   docs/NESTED-BOOT.md, "The fix".
 # - The probe measures wake-up lateness after the thaw, not a clock step.
 #   A clock step smaller than the remaining sleep does not show in the
 #   crossing interval, because the wake-up is scheduled in the same clock.
 probe-prefault-ept: build dist ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
 	$(LOG)
 	CELLA_THAW_PREFAULT=ept $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
+
+# Deliberately not dist-nested: see smoke-nested-boot.
+probe-inception: build ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
+	$(LOG)
+	$(SCRIPTS)/test/inception.sh
 
 probe-thaw-gate: build dist ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
 	$(LOG)
