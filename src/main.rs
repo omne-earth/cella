@@ -10,7 +10,7 @@
 //! plumbing that ties memory.rs / boot/x86_64.rs / vcpu.rs / devices/ /
 //! freeze.rs / seccomp.rs together.
 
-use cella::{boot, config, devices, freeze, memory, seccomp, vcpu, warm};
+use cella::{boot, config, devices, freeze, machine, memory, seccomp, vcpu, warm};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -119,7 +119,83 @@ fn usage_error(msg: &str) -> ! {
     std::process::exit(2);
 }
 
+/// The lifecycle verbs (see docs/LIFECYCLE.md). The first argument
+/// selects a verb; anything else falls through to the legacy flag
+/// interface, which the probes and the test scripts use.
+fn run_verb(verb: &str, args: &[String]) -> ! {
+    let ok = match verb {
+        "build" => match args {
+            [axis, flavor] => machine::build(axis, flavor),
+            _ => Err("usage: cella build <kernel|rootfs> <flavor>".to_string()),
+        },
+        "create" => {
+            // cella create <name> [--kernel F] [--rootfs F] [--mem-mb N]
+            //   [--net TAP|none] [--root rw|ro]
+            let mut it = args.iter();
+            let Some(name) = it.next() else {
+                fatal("usage: cella create <name> [--kernel F] [--rootfs F] [--mem-mb N] [--net TAP|none] [--root rw|ro]")
+            };
+            let mut m = machine::Manifest {
+                name: name.clone(),
+                kernel: "canonical".into(),
+                rootfs: "cella".into(),
+                mem_mb: 256,
+                net: "none".into(),
+                root: "rw".into(),
+            };
+            let mut res = Ok(());
+            while let Some(a) = it.next() {
+                let mut val = |what: &str| {
+                    it.next()
+                        .cloned()
+                        .unwrap_or_else(|| fatal(&format!("missing value for {what}")))
+                };
+                match a.as_str() {
+                    "--kernel" => m.kernel = val("--kernel"),
+                    "--rootfs" => m.rootfs = val("--rootfs"),
+                    "--mem-mb" => {
+                        m.mem_mb = val("--mem-mb")
+                            .parse()
+                            .unwrap_or_else(|_| fatal("--mem-mb must be a number"))
+                    }
+                    "--net" => m.net = val("--net"),
+                    "--root" => m.root = val("--root"),
+                    other => {
+                        res = Err(format!("unknown create option {other:?}"));
+                        break;
+                    }
+                }
+            }
+            res.and_then(|()| machine::create(&m)).map(|()| {
+                println!(
+                    "cella: created machine {:?} at {}",
+                    m.name,
+                    machine::machine_dir(&m.name).display()
+                );
+            })
+        }
+        "destroy" => match args {
+            [name] => machine::destroy(name).map(|()| {
+                println!("cella: destroyed machine {name:?}");
+            }),
+            _ => Err("usage: cella destroy <name>".to_string()),
+        },
+        _ => unreachable!(),
+    };
+    match ok {
+        Ok(()) => std::process::exit(0),
+        Err(e) => fatal(&e),
+    }
+}
+
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(first) = argv.first() {
+        if matches!(first.as_str(), "build" | "create" | "destroy") {
+            run_verb(first.clone().as_str(), &argv[1..]);
+        }
+    }
+
     // Hidden self-test hook for `make test-seccomp`: install the real
     // filter and deliberately trip it. See seccomp::selftest_provoke_kill
     // for what the harness expects to observe.
