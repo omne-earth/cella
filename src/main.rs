@@ -242,6 +242,9 @@ fn main() {
     };
 
     let mut serial = SerialDevice::new(vm.clone());
+    // Serial input needs the SIGIO handler even without a TAP.
+    install_sigio_handler();
+    setup_stdin_async();
 
     if frozen {
         // Warm the stage-2 mappings before the restore of the clock,
@@ -293,6 +296,7 @@ fn main() {
         // back the IOAPIC routing and the PIT programming that the guest
         // set before the freeze. Without this call, a halted guest waits
         // for a timer interrupt that does not occur.
+        serial = SerialDevice::restore(vm.clone(), frozen_state.serial);
         vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
             .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
@@ -370,7 +374,14 @@ fn run_loop(
 ) {
     loop {
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
-            do_freeze(&vcpu_fd, vm, mem, state_dir, mem_size_bytes);
+            do_freeze(
+                &vcpu_fd,
+                vm,
+                mem,
+                state_dir,
+                mem_size_bytes,
+                serial.registers(),
+            );
             std::process::exit(0);
         }
 
@@ -406,6 +417,43 @@ fn run_loop(
         if let Some((idx, net_fd)) = net_poll {
             poll_net_rx(mmio_devices, idx, net_fd, mem);
         }
+        // Drain host stdin into the serial RX FIFO on every pass. Stdin
+        // carries O_ASYNC (see setup_stdin_async), thus a keystroke
+        // raises SIGIO, KVM_RUN returns with EINTR, and the byte lands
+        // here even when the guest is idle in HLT.
+        poll_stdin_rx(serial);
+    }
+}
+
+/// Read pending host stdin bytes into the serial device. Non-blocking:
+/// stdin carries O_NONBLOCK, and a pass with no input costs one poll.
+fn poll_stdin_rx(serial: &mut SerialDevice) {
+    let mut pfd = libc::pollfd {
+        fd: 0,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: pfd is a valid pollfd for the duration of this call.
+    let ready = unsafe { libc::poll(&mut pfd, 1, 0) };
+    if ready > 0 && (pfd.revents & libc::POLLIN) != 0 {
+        let mut buf = [0u8; 64];
+        // SAFETY: buf is a valid writable buffer of the given length.
+        let n = unsafe { libc::read(0, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n > 0 {
+            serial.enqueue(&buf[..n as usize]);
+        }
+    }
+}
+
+/// Give stdin O_ASYNC and O_NONBLOCK, so that a keystroke interrupts
+/// KVM_RUN the same way a TAP frame does (see tap.rs), and so that the
+/// run-loop read never blocks. Runs before the seccomp filter.
+fn setup_stdin_async() {
+    // SAFETY: fcntl on fd 0 with valid commands.
+    unsafe {
+        libc::fcntl(0, libc::F_SETOWN, libc::getpid());
+        let flags = libc::fcntl(0, libc::F_GETFL);
+        libc::fcntl(0, libc::F_SETFL, flags | libc::O_ASYNC | libc::O_NONBLOCK);
     }
 }
 
@@ -433,6 +481,7 @@ fn do_freeze(
     mem: &vm_memory::GuestMemoryMmap,
     state_dir: &std::path::Path,
     mem_size_bytes: u64,
+    serial_regs: [u8; 9],
 ) {
     eprintln!("cella: freezing to {:?}", state_dir);
     // The guest stopped when KVM_RUN returned. Measure the delay from
@@ -478,6 +527,7 @@ fn do_freeze(
         &vcpu_state,
         &clock,
         &irqchip,
+        &serial_regs,
     )
     .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
 

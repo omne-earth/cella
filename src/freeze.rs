@@ -26,13 +26,14 @@ const MAGIC: &[u8; 8] = b"MVMMFRZ1";
 // The version of the sidecar format. Version 2 added
 // MSR_IA32_TSC_DEADLINE to SAVED_MSRS. Version 3 added the irqchip and
 // PIT state. Version 4 added the xsave and xcrs blocks. Version 5
-// added MSR_IA32_XSS to SAVED_MSRS. Each of these
+// added MSR_IA32_XSS to SAVED_MSRS. Version 6 added the serial
+// device registers. Each of these
 // changes moves all data that comes after it in the file. Therefore a
 // binary must not read a sidecar that has a different version.
 // read_state compares the version and refuses the file if it does not
 // agree. No sidecar files exist at an older version, but this check is
 // what makes that assumption safe.
-const FORMAT_VERSION: u32 = 5;
+const FORMAT_VERSION: u32 = 6;
 
 pub struct HostCheck {
     pub tsc_khz: u32,
@@ -40,6 +41,10 @@ pub struct HostCheck {
 
 pub struct FrozenState {
     pub mem_size: u64,
+    /// The nine 16550 registers (see devices::serial). The RX FIFO is
+    /// not saved: a byte that arrives in the freeze instant is lost,
+    /// and a terminal retype replaces it.
+    pub serial: [u8; 9],
     pub tsc_khz: u32,
     pub vcpu: VcpuState,
     pub clock: kvm_clock_data,
@@ -96,6 +101,7 @@ pub fn write_state(
     vcpu: &VcpuState,
     clock: &kvm_clock_data,
     irqchip: &IrqChipState,
+    serial: &[u8; 9],
 ) -> Result<(), Error> {
     fs::create_dir_all(dir)?;
     let tmp = state_tmp_path(dir);
@@ -132,6 +138,7 @@ pub fn write_state(
         f.write_all(as_bytes(&irqchip.ioapic))?;
         f.write_all(as_bytes(&irqchip.pit))?;
     }
+    f.write_all(serial)?;
     f.sync_all()?;
     drop(f);
 
@@ -212,8 +219,11 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
         }
     };
 
+    let serial: [u8; 9] = take(9)?.try_into().unwrap();
+
     Ok(FrozenState {
         mem_size,
+        serial,
         tsc_khz,
         vcpu: VcpuState {
             regs,
@@ -344,6 +354,7 @@ mod tests {
             &vcpu,
             &clock,
             &sample_irqchip(),
+            &[7u8; 9],
         )
         .unwrap();
         assert!(is_frozen(&dir));
@@ -383,6 +394,7 @@ mod tests {
             &vcpu,
             &clock,
             &sample_irqchip(),
+            &[7u8; 9],
         )
         .unwrap();
 
@@ -423,6 +435,7 @@ mod tests {
             &vcpu,
             &clock,
             &sample_irqchip(),
+            &[7u8; 9],
         )
         .unwrap();
 
@@ -455,6 +468,7 @@ mod tests {
     #[test]
     fn hardware_check_refuses_mismatched_tsc() {
         let frozen = FrozenState {
+            serial: [7u8; 9],
             mem_size: 1,
             tsc_khz: 2_500_000,
             vcpu: sample_vcpu_state(),
