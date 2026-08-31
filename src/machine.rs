@@ -98,8 +98,8 @@ pub fn defaults() -> Manifest {
         // knobs are discoverable by reading it. A seeded file changes
         // nothing: its values are the built-ins.
         let seed = format!(
-            "{{\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\"\n}}\n",
-            m.kernel, m.rootfs, m.mem_mb, m.net, m.root
+            "{{\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\",\n  \"diag\": \"{}\"\n}}\n",
+            m.kernel, m.rootfs, m.mem_mb, m.net, m.root, m.diag
         );
         if fs::create_dir_all(home()).is_ok() {
             let _ = write_atomic(&path, seed.as_bytes());
@@ -312,6 +312,15 @@ pub fn build(axis: &str, flavor: &str) -> Result<(), String> {
     }
     if (axis, flavor) == ("rootfs", "cella") {
         return crate::build::rootfs_cella(&rootfs_path(flavor), &rootfs_path("canonical"));
+    }
+    if (axis, flavor) == ("kernel", "nested") {
+        return crate::build::kernel_nested(&kernel_path(flavor));
+    }
+    if (axis, flavor) == ("rootfs", "nested") {
+        return crate::build::rootfs_nested(&rootfs_path(flavor));
+    }
+    if (axis, flavor) == ("rootfs", "inception") {
+        return crate::build::rootfs_inception(&rootfs_path(flavor));
     }
     let (dest, src) = match (axis, flavor) {
         ("kernel", "canonical") => (kernel_path(flavor), "dist/bzImage"),

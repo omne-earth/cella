@@ -274,7 +274,9 @@ pub fn rootfs_canonical(golden: &Path) -> Result<(), String> {
     println!("cella: rootfs: assembling");
     let rootdir = rbuild.join("root");
     let _ = fs::remove_dir_all(&rootdir);
-    for d in ["bin", "sbin", "proc", "sys", "dev"] {
+    // tmp is a mountpoint: the variant inits mount a tmpfs on it, and
+    // a read-only root cannot create it at run time.
+    for d in ["bin", "sbin", "proc", "sys", "dev", "tmp"] {
         fs::create_dir_all(rootdir.join(d)).map_err(|e| e.to_string())?;
     }
     fs::copy(src.join("busybox"), rootdir.join("bin/busybox")).map_err(|e| e.to_string())?;
@@ -418,4 +420,234 @@ pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String
     }
     println!("cella: golden rootfs cella -> {}", golden.display());
     Ok(())
+}
+
+/// The nested kernel: the canonical fragment plus the KVM host
+/// stack, from the same pinned source, in a copied clean tree. The
+/// canonical tree stays as the canonical cache.
+pub fn kernel_nested(golden: &Path) -> Result<(), String> {
+    let root = repo_root();
+    let frag = root.join("scripts/build/kernel-fragment.config");
+    let nfrag = root.join("scripts/build/kernel-fragment-nested.config");
+    for f in [&frag, &nfrag] {
+        if !f.is_file() {
+            return Err(format!("{} missing", f.display()));
+        }
+    }
+    let kbuild = root.join("target/kernel-build");
+    let src = kbuild.join(format!("linux-{KERNEL_VERSION}"));
+    if !src.is_dir() {
+        // The canonical build fetches the source; reuse its cache.
+        kernel_canonical(&crate::machine::kernel_path("canonical"))?;
+    }
+    let nsrc = kbuild.join(format!("linux-{KERNEL_VERSION}-nested"));
+    if !nsrc.is_dir() {
+        println!("cella: kernel nested: copying the source for a clean tree");
+        run(
+            "copy the source",
+            "cp",
+            &["-a", src.to_str().unwrap(), nsrc.to_str().unwrap()],
+            None,
+        )?;
+        run_in_toolbox_quiet("mrproper", &nsrc, &["make", "mrproper"])?;
+    }
+    println!("cella: kernel nested: configuring (defconfig + both fragments)");
+    run_in_toolbox_quiet("defconfig", &nsrc, &["make", "x86_64_defconfig"])?;
+    run_in_toolbox_quiet(
+        "merge",
+        &nsrc,
+        &[
+            "scripts/kconfig/merge_config.sh",
+            "-m",
+            ".config",
+            frag.to_str().unwrap(),
+            nfrag.to_str().unwrap(),
+        ],
+    )?;
+    run_in_toolbox_quiet("olddefconfig", &nsrc, &["make", "olddefconfig"])?;
+    assert_config(
+        &nsrc.join(".config"),
+        &[
+            "CONFIG_KVM",
+            "CONFIG_TUN",
+            "CONFIG_SECCOMP_FILTER",
+            "CONFIG_DEVTMPFS_MOUNT",
+        ],
+    )?;
+    let cfg = fs::read_to_string(nsrc.join(".config")).map_err(|e| e.to_string())?;
+    if !cfg.contains("CONFIG_KVM_INTEL=y") && !cfg.contains("CONFIG_KVM_AMD=y") {
+        return Err("no vendor KVM module survived in the nested kernel config".to_string());
+    }
+    println!("cella: kernel nested: building bzImage");
+    let jobs = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .to_string();
+    run_in_toolbox_quiet("build", &nsrc, &["make", "-j", &jobs, "bzImage"])?;
+    let built = nsrc.join("arch/x86/boot/bzImage");
+    fs::create_dir_all(golden.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = golden.with_extension("tmp");
+    fs::copy(&built, &tmp).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
+    let dist = root.join("dist/bzImage-nested");
+    if dist.parent().unwrap().is_dir() {
+        let _ = fs::copy(&built, &dist);
+    }
+    println!("cella: golden kernel nested -> {}", golden.display());
+    Ok(())
+}
+
+/// The static binaries for the in-guest layers: cella and the clock
+/// probe, crt-static against glibc-static in the toolbox.
+fn build_static_binaries() -> Result<(PathBuf, PathBuf), String> {
+    let root = repo_root();
+    println!("cella: building the static cella and the static probe");
+    let rustflags = "RUSTFLAGS=-C target-feature=+crt-static";
+    run_in_toolbox_quiet(
+        "static cella",
+        &root,
+        &[
+            "env",
+            rustflags,
+            "cargo",
+            "build",
+            "--release",
+            "--target",
+            "x86_64-unknown-linux-gnu",
+        ],
+    )?;
+    run_in_toolbox_quiet(
+        "static probe",
+        &root,
+        &[
+            "env",
+            rustflags,
+            "cargo",
+            "build",
+            "--release",
+            "--target",
+            "x86_64-unknown-linux-gnu",
+            "--manifest-path",
+            "probes/freeze-thaw-clock/Cargo.toml",
+        ],
+    )?;
+    let bin = root.join("target/x86_64-unknown-linux-gnu/release/cella");
+    let probe = root.join(
+        "probes/freeze-thaw-clock/target/x86_64-unknown-linux-gnu/release/freeze-thaw-clock-probe",
+    );
+    for p in [&bin, &probe] {
+        if !p.is_file() {
+            return Err(format!("{} did not build", p.display()));
+        }
+    }
+    Ok((bin, probe))
+}
+
+/// One nested-family rootfs: the canonical tree plus /opt with the
+/// static cella and the canonical inner assets, and the given init.
+/// The inception variant adds the static probe.
+fn rootfs_nested_family(
+    golden: &Path,
+    init_name: &str,
+    with_probe: bool,
+    dist_name: &str,
+    tree_name: &str,
+) -> Result<(), String> {
+    let root = repo_root();
+    let init = root.join("scripts/build").join(init_name);
+    if !init.is_file() {
+        return Err(format!("{} missing", init.display()));
+    }
+    let rbuild = root.join("target/rootfs-build");
+    if !rbuild.join("root").is_dir() {
+        rootfs_canonical(&crate::machine::rootfs_path("canonical"))?;
+    }
+    let inner_kernel = crate::machine::kernel_path("canonical");
+    let inner_rootfs = crate::machine::rootfs_path("canonical");
+    for p in [&inner_kernel, &inner_rootfs] {
+        if !p.is_file() {
+            return Err(format!(
+                "inner asset {} missing -- build the canonical flavors first",
+                p.display()
+            ));
+        }
+    }
+    let (bin, probe) = build_static_binaries()?;
+
+    println!("cella: rootfs {tree_name}: assembling");
+    let nroot = rbuild.join(tree_name);
+    let _ = fs::remove_dir_all(&nroot);
+    run(
+        "copy the root",
+        "cp",
+        &[
+            "-a",
+            rbuild.join("root").to_str().unwrap(),
+            nroot.to_str().unwrap(),
+        ],
+        None,
+    )?;
+    fs::create_dir_all(nroot.join("opt")).map_err(|e| e.to_string())?;
+    let mut copies = vec![
+        (bin, nroot.join("opt/cella"), 0o755),
+        (inner_kernel, nroot.join("opt/bzImage"), 0o644),
+        (inner_rootfs, nroot.join("opt/rootfs.ext4"), 0o644),
+        (init, nroot.join("sbin/init"), 0o755),
+    ];
+    if with_probe {
+        copies.push((probe, nroot.join("opt/freeze-thaw-clock-probe"), 0o755));
+    }
+    for (from, to, mode) in copies {
+        fs::copy(&from, &to).map_err(|e| format!("copying {}: {e}", from.display()))?;
+        let mut p = fs::metadata(&to).map_err(|e| e.to_string())?.permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut p, mode);
+        fs::set_permissions(&to, p).map_err(|e| e.to_string())?;
+    }
+    let img = rbuild.join(format!("{tree_name}.ext4"));
+    let _ = fs::remove_file(&img);
+    let f = fs::File::create(&img).map_err(|e| e.to_string())?;
+    f.set_len(64 * 1024 * 1024).map_err(|e| e.to_string())?;
+    drop(f);
+    run_in_toolbox_quiet(
+        "mkfs",
+        &rbuild,
+        &[
+            "mkfs.ext4",
+            "-q",
+            "-F",
+            "-d",
+            nroot.to_str().unwrap(),
+            img.to_str().unwrap(),
+        ],
+    )?;
+    fs::create_dir_all(golden.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = golden.with_extension("tmp");
+    fs::copy(&img, &tmp).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
+    let dist = root.join("dist").join(dist_name);
+    if dist.parent().unwrap().is_dir() {
+        let _ = fs::copy(&img, &dist);
+    }
+    println!("cella: golden rootfs {tree_name} -> {}", golden.display());
+    Ok(())
+}
+
+pub fn rootfs_nested(golden: &Path) -> Result<(), String> {
+    rootfs_nested_family(
+        golden,
+        "rootfs-nested.sh",
+        false,
+        "rootfs-nested.ext4",
+        "root-nested",
+    )
+}
+
+pub fn rootfs_inception(golden: &Path) -> Result<(), String> {
+    rootfs_nested_family(
+        golden,
+        "rootfs-inception.sh",
+        true,
+        "rootfs-inception.ext4",
+        "root-inception",
+    )
 }

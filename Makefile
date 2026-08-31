@@ -23,7 +23,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 
 .PHONY: help build build-static install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
-        init dist dist-nested setup-tap \
+        init dist dist-nested golden golden-nested setup-tap \
         boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean test-jail test-seccomp test-machine \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
@@ -46,7 +46,7 @@ help: ## Show this help
 	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
-	grep -hE '^(init|dist|dist-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(init|dist|dist-nested|golden|golden-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Everything:"
 	grep -hE '^(test-all|clean|distclean|distclean-kernel|distclean-rootfs|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -303,6 +303,18 @@ $(DIST)/rootfs-inception.ext4: .static $(SCRIPTS)/build/rootfs-nested.sh $(SCRIP
 	$(SCRIPTS)/build/assets-nested.sh
 
 dist-nested: dist $(DIST)/bzImage-nested $(DIST)/rootfs-nested.ext4 $(DIST)/rootfs-inception.ext4 ## Nested test assets: bzImage-nested (KVM host stack), rootfs-nested.ext4 (static cella + canonical inner assets), rootfs-inception.ext4 (+ the static probe)
+
+golden: build ## Build the base goldens natively: kernel canonical, rootfs canonical, rootfs cella
+	$(LOG)
+	$(CELLA_DEV) build kernel canonical
+	$(CELLA_DEV) build rootfs canonical
+	$(CELLA_DEV) build rootfs cella
+
+golden-nested: build ## Build the nested-family goldens natively: kernel nested, rootfs nested, rootfs inception
+	$(LOG)
+	$(CELLA_DEV) build kernel nested
+	$(CELLA_DEV) build rootfs nested
+	$(CELLA_DEV) build rootfs inception
 
 kernel-config-check: ## Resolve kernel-fragment.config against defconfig and report any line kconfig silently overruled (seconds, no compile)
 	$(LOG)
