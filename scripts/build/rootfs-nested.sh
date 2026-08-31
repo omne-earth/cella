@@ -1,20 +1,12 @@
 #!/bin/sh
-# /sbin/init for the nested test rootfs (dist/rootfs-nested.ext4).
-# This guest is a host: it starts the inner cella with the canonical
-# assets from the golden layout of the guest (/root/.cella). The inner guest prints the standard heartbeat
-# ("cella-rootfs: ..."), and this init prints "cella-nested: ..."
-# lines only. The test script tells the two layers apart by that
-# prefix.
-#
-# Modes, selected by the kernel command line of the outer guest:
-#   (default)               the inner guest runs with the block device
-#                           only. The airgapped and hybrid tests use
-#                           this mode.
-#   cella_nested_mode=www   the inner cella also gets a TAP. cella
-#                           creates the interface when it opens
-#                           /dev/net/tun, and this init then gives the
-#                           interface an address. The init pings the
-#                           inner guest and reports the result.
+# /sbin/init for the nested test rootfs (dist era: /opt; now the
+# golden layout). This guest is a host, and it hosts the way the host
+# does: through the verbs, jailed. cella and bwrap are static
+# binaries on the path, the inner goldens live at /root/.cella, and
+# the inner machine runs inside its own bwrap jail with its own
+# seccomp filter, one level down. The init prints "cella-nested:"
+# lines only; a "cella-rootfs:" line can come from the inner guest
+# alone, relayed from its console log.
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t tmpfs tmpfs /tmp
@@ -23,26 +15,28 @@ if [ ! -c /dev/kvm ]; then
     echo "cella-nested: FAIL: no /dev/kvm in the outer guest"
     while true; do sleep 1; done
 fi
-mkdir -p /tmp/state
-BASE="$(/bin/cella --print-default-cmdline)"
+# The machine home lives on the tmpfs: the RAM file of the inner
+# machine is larger than the root disk of this guest. The goldens
+# stay on the disk, reachable through symlinks.
+mkdir -p /tmp/cella
+ln -s /root/.cella/kernel /tmp/cella/kernel
+ln -s /root/.cella/rootfs /tmp/cella/rootfs
+export CELLA_HOME=/tmp/cella
 
 if grep -q cella_nested_mode=www /proc/cmdline; then
-    echo "cella-nested: starting the inner cella (www: block + net)"
-    /bin/cella --state-dir /tmp/state \
-        --kernel /root/.cella/kernel/canonical/bzImage --disk /root/.cella/rootfs/canonical/rootfs.ext4 --tap tap0 \
-        --mem-mb 64 --cmdline "$BASE root=/dev/vda rw \
-virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 \
-ip=192.168.201.2::192.168.201.1:255.255.255.0::eth0:off" &
-    INNER=$!
-    # The interface exists after the inner cella opens /dev/net/tun.
-    n=0
-    while [ $n -lt 30 ]; do
-        ip link show tap0 >/dev/null 2>&1 && break
-        n=$((n+1)); sleep 1
-    done
-    ip addr add 192.168.201.1/24 dev tap0
-    ip link set tap0 up
+    # tap1, not tap0: the pool convention gives tap1 the 192.168.201
+    # subnet, and the outer guest's own eth0 already uses 192.168.200.
+    # tap1 must exist before the jailed start: the inner VMM runs in a
+    # user namespace with no CAP_NET_ADMIN, and it can only open a
+    # persistent tap. setup net creates and addresses it (this init is
+    # root in the guest, thus no sudo).
+    cella setup net --taps 1 --from 1 || echo "cella-nested: FAIL: setup net failed"
     echo 1 > /proc/sys/net/ipv4/ip_forward
+    echo "cella-nested: creating the inner machine (www: block + net)"
+    cella create inner --kernel canonical --rootfs canonical \
+        --mem-mb 64 --net tap1 || echo "cella-nested: FAIL: create failed"
+    echo "cella-nested: starting the inner machine (jailed)"
+    cella start inner || echo "cella-nested: FAIL: start failed"
     n=0
     while [ $n -lt 60 ]; do
         if ping -c 1 -W 1 192.168.201.2 >/dev/null 2>&1; then
@@ -52,14 +46,14 @@ ip=192.168.201.2::192.168.201.1:255.255.255.0::eth0:off" &
         n=$((n+1)); sleep 1
     done
     [ $n -ge 60 ] && echo "cella-nested: FAIL: no ICMP reply from the inner guest"
-    wait $INNER
 else
-    # The inner guest gets the block device only: no TAP in this mode.
-    echo "cella-nested: starting the inner cella (block only)"
-    /bin/cella --state-dir /tmp/state \
-        --kernel /root/.cella/kernel/canonical/bzImage --disk /root/.cella/rootfs/canonical/rootfs.ext4 \
-        --mem-mb 64 --cmdline "$BASE root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5"
+    echo "cella-nested: creating the inner machine (block only)"
+    cella create inner --kernel canonical --rootfs canonical \
+        --mem-mb 64 --net none || echo "cella-nested: FAIL: create failed"
+    echo "cella-nested: starting the inner machine (jailed)"
+    cella start inner || echo "cella-nested: FAIL: start failed"
 fi
-echo "cella-nested: inner cella exited with code $?"
-# Keep the guest alive, so that the serial output stays readable.
+# Relay the inner console to this console, for the outer observer.
+tail -f /tmp/cella/machines/inner/console.log
+# tail returns only on an error; keep the serial readable.
 while true; do sleep 1; done
