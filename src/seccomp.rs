@@ -71,6 +71,9 @@ const ALLOWED: &[(u32, &str)] = &[
     // inside a cella guest dies with SIGSYS in do_freeze without this
     // entry. probe-inception found this.
     (228, "clock_gettime: freeze/thaw timing instrumentation; vDSO fallback inside a guest"),
+    (288, "accept4: the console socket client; the listener binds before this filter, and socket(2) stays the canary"),
+    (45,  "recvfrom: std reads a unix stream with recv, not read (console client input)"),
+    (44,  "sendto: std writes a unix stream with send, not write (console client output)"),
     (82,  "rename: atomic state.tmp -> state"),
     (87,  "unlink: finalize_thaw removing the one-shot state file, on some libc versions"),
     (263, "unlinkat: finalize_thaw removing the one-shot state file"),

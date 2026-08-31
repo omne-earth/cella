@@ -51,6 +51,7 @@ struct Args {
     kernel: Option<PathBuf>,
     cmdline: String,
     mem_mb: u64,
+    console: Option<PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -60,6 +61,7 @@ fn parse_args() -> Args {
     let mut tap = None;
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
+    let mut console = None;
     // The defaults are in cella::config, in one place.
     let mut cmdline = config::default_cmdline();
     let mut mem_mb = 256u64;
@@ -77,6 +79,7 @@ fn parse_args() -> Args {
             "--tap" => tap = Some(next()),
             "--mac" => mac = parse_mac(&next()),
             "--kernel" => kernel = Some(PathBuf::from(next())),
+            "--console" => console = Some(PathBuf::from(next())),
             "--cmdline" => cmdline = next(),
             "--mem-mb" => {
                 mem_mb = next()
@@ -99,6 +102,7 @@ fn parse_args() -> Args {
         kernel,
         cmdline,
         mem_mb,
+        console,
     }
 }
 
@@ -195,6 +199,10 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             [name] => machine::thaw(name),
             _ => Err("usage: cella thaw <name>".to_string()),
         },
+        "enter" => match args {
+            [name] => machine::enter(name),
+            _ => Err("usage: cella enter <name>".to_string()),
+        },
         "selftest" => machine::selftest(),
         "help" | "--help" | "-h" => {
             print_help();
@@ -242,6 +250,7 @@ fn main() {
                 | "stop"
                 | "freeze"
                 | "thaw"
+                | "enter"
                 | "selftest"
                 | "help"
                 | "--help"
@@ -372,7 +381,33 @@ fn main() {
         None => None,
     };
 
-    let mut serial = SerialDevice::new(vm.clone());
+    // The console socket. The listener binds before the seccomp
+    // filter, thus socket(2) stays outside the allowlist (the canary
+    // of test-seccomp); only accept4 runs at runtime. The client
+    // handle is shared with the serial output, which tees to it.
+    let console_client: devices::serial::ConsoleClient =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let console_listener = args.console.as_ref().map(|path| {
+        let _ = std::fs::remove_file(path);
+        // A unix socket path caps at ~108 bytes. Bind by the file name
+        // from inside the parent directory, thus any home path works.
+        // Single-threaded startup: the chdir dance is safe here.
+        let cwd = std::env::current_dir().unwrap_or_else(|e| fatal(&format!("cwd: {e}")));
+        let parent = path
+            .parent()
+            .unwrap_or_else(|| fatal("console path has no parent"));
+        std::env::set_current_dir(parent)
+            .unwrap_or_else(|e| fatal(&format!("entering {parent:?}: {e}")));
+        let l = std::os::unix::net::UnixListener::bind(path.file_name().unwrap())
+            .unwrap_or_else(|e| fatal(&format!("binding the console socket {path:?}: {e}")));
+        std::env::set_current_dir(&cwd)
+            .unwrap_or_else(|e| fatal(&format!("returning to {cwd:?}: {e}")));
+        l.set_nonblocking(true).expect("nonblocking listener");
+        set_async(&l);
+        l
+    });
+
+    let mut serial = SerialDevice::new(vm.clone(), console_client.clone());
     // Serial input needs the SIGIO handler even without a TAP.
     install_sigio_handler();
     setup_stdin_async();
@@ -427,7 +462,7 @@ fn main() {
         // back the IOAPIC routing and the PIT programming that the guest
         // set before the freeze. Without this call, a halted guest waits
         // for a timer interrupt that does not occur.
-        serial = SerialDevice::restore(vm.clone(), frozen_state.serial);
+        serial = SerialDevice::restore(vm.clone(), frozen_state.serial, console_client.clone());
         vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
             .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
@@ -500,6 +535,8 @@ fn main() {
         &mut serial,
         &mut mmio_devices,
         net_poll,
+        console_listener,
+        console_client,
         &args.state_dir,
         mem_size_bytes,
     );
@@ -513,6 +550,8 @@ fn run_loop(
     serial: &mut SerialDevice,
     mmio_devices: &mut [(u64, u64, MmioTransport)],
     net_poll: Option<(usize, i32)>,
+    console_listener: Option<std::os::unix::net::UnixListener>,
+    console_client: devices::serial::ConsoleClient,
     state_dir: &std::path::Path,
     mem_size_bytes: u64,
 ) {
@@ -566,6 +605,13 @@ fn run_loop(
         // raises SIGIO, KVM_RUN returns with EINTR, and the byte lands
         // here even when the guest is idle in HLT.
         poll_stdin_rx(serial);
+        // The console socket: accept a client, and drain its input into
+        // the serial RX FIFO. The accepted stream carries O_ASYNC, thus
+        // a keystroke from the client wakes an idle guest the same way
+        // stdin does.
+        if let Some(listener) = &console_listener {
+            poll_console(listener, &console_client, serial);
+        }
     }
 }
 
@@ -598,6 +644,50 @@ fn setup_stdin_async() {
         libc::fcntl(0, libc::F_SETOWN, libc::getpid());
         let flags = libc::fcntl(0, libc::F_GETFL);
         libc::fcntl(0, libc::F_SETFL, flags | libc::O_ASYNC | libc::O_NONBLOCK);
+    }
+}
+
+/// Accept a console client and drain its input. One client at a
+/// time: a new connection replaces a dead one, and a second live
+/// client is refused by the accept order (the first stays).
+fn poll_console(
+    listener: &std::os::unix::net::UnixListener,
+    client: &devices::serial::ConsoleClient,
+    serial: &mut SerialDevice,
+) {
+    if client.borrow().is_none() {
+        if let Ok((stream, _)) = listener.accept() {
+            let _ = stream.set_nonblocking(true);
+            set_async(&stream);
+            *client.borrow_mut() = Some(stream);
+        }
+    }
+    let mut drop_client = false;
+    if let Some(stream) = client.borrow_mut().as_mut() {
+        use std::io::Read;
+        let mut buf = [0u8; 64];
+        match stream.read(&mut buf) {
+            Ok(0) => drop_client = true,
+            Ok(n) => serial.enqueue(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(_) => drop_client = true,
+        }
+    }
+    if drop_client {
+        *client.borrow_mut() = None;
+    }
+}
+
+/// Give a socket O_ASYNC with this process as the owner, so that its
+/// readiness raises SIGIO and interrupts KVM_RUN (see tap.rs for the
+/// same pattern).
+fn set_async<F: std::os::fd::AsRawFd>(f: &F) {
+    let fd = f.as_raw_fd();
+    // SAFETY: fcntl on an owned fd with valid commands.
+    unsafe {
+        libc::fcntl(fd, libc::F_SETOWN, libc::getpid());
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_ASYNC);
     }
 }
 

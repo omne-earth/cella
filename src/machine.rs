@@ -649,6 +649,7 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         cmd.args(["--tap", &m.net]);
     }
     cmd.args(["--mem-mb", &m.mem_mb.to_string()]);
+    cmd.args(["--console", dir.join("console.sock").to_str().unwrap()]);
     cmd.args(["--cmdline", &cmdline_for(&m)]);
     cmd.env("CELLA_READY_FD", write_fd.to_string());
     cmd.stdin(std::process::Stdio::null());
@@ -764,6 +765,112 @@ pub fn stop(name: &str) -> Result<(), String> {
         println!("cella: cleared transients: {}", cleared.join(", "));
     }
     Ok(())
+}
+
+// --- enter ------------------------------------------------------------
+
+/// Attach the terminal to the serial console of the running machine.
+/// Ctrl-] detaches (the virsh convention). With a pipe on stdin (the
+/// tests), raw mode is skipped, and the end of the input detaches
+/// after a short drain, so that the caller can read the response from
+/// console.log.
+pub fn enter(name: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    if !is_running(name) {
+        return Err(format!(
+            "machine {name:?} is not running -- start it (or thaw it)"
+        ));
+    }
+    // A unix socket path caps at ~108 bytes: connect by the file name
+    // from inside the machine directory, thus any home path works.
+    let dir = machine_dir(name);
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    std::env::set_current_dir(&dir).map_err(|e| format!("entering {}: {e}", dir.display()))?;
+    let connected = std::os::unix::net::UnixStream::connect("console.sock");
+    std::env::set_current_dir(&cwd).map_err(|e| e.to_string())?;
+    let mut stream = connected
+        .map_err(|e| format!("connecting to {}: {e}", dir.join("console.sock").display()))?;
+    stream.set_nonblocking(true).map_err(|e| e.to_string())?;
+
+    // SAFETY: isatty on fd 0 reads a fact.
+    let tty = unsafe { libc::isatty(0) } == 1;
+    let mut saved: libc::termios = unsafe { std::mem::zeroed() };
+    if tty {
+        // SAFETY: tcgetattr/cfmakeraw/tcsetattr on the owned terminal.
+        unsafe {
+            libc::tcgetattr(0, &mut saved);
+            let mut raw = saved;
+            libc::cfmakeraw(&mut raw);
+            libc::tcsetattr(0, libc::TCSANOW, &raw);
+        }
+        eprintln!("(connected to {name:?} -- detach: Ctrl-])\r");
+    }
+    // SAFETY: fcntl on stdin, restored implicitly at exit.
+    unsafe {
+        let flags = libc::fcntl(0, libc::F_GETFL);
+        libc::fcntl(0, libc::F_SETFL, flags | libc::O_NONBLOCK);
+    }
+
+    let mut stdin_open = true;
+    let mut drain_until: Option<std::time::Instant> = None;
+    let result = loop {
+        let mut fds = [
+            libc::pollfd {
+                fd: 0,
+                events: if stdin_open { libc::POLLIN } else { 0 },
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: std::os::fd::AsRawFd::as_raw_fd(&stream),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        // SAFETY: fds is valid for the duration of the call.
+        unsafe { libc::poll(fds.as_mut_ptr(), 2, 100) };
+
+        let mut buf = [0u8; 512];
+        if fds[1].revents & (libc::POLLIN | libc::POLLHUP) != 0 {
+            match stream.read(&mut buf) {
+                Ok(0) => break Ok(()), // the machine went away
+                Ok(n) => {
+                    let mut out = std::io::stdout();
+                    let _ = out.write_all(&buf[..n]);
+                    let _ = out.flush();
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => break Ok(()),
+            }
+        }
+        if stdin_open && fds[0].revents & (libc::POLLIN | libc::POLLHUP) != 0 {
+            // SAFETY: reading stdin into a valid buffer.
+            let n = unsafe { libc::read(0, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            if n > 0 {
+                let chunk = &buf[..n as usize];
+                if tty && chunk.contains(&0x1d) {
+                    break Ok(()); // Ctrl-]
+                }
+                if stream.write_all(chunk).is_err() {
+                    break Ok(());
+                }
+            } else if n == 0 {
+                stdin_open = false;
+                drain_until =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(700));
+            }
+        }
+        if let Some(t) = drain_until {
+            if std::time::Instant::now() >= t {
+                break Ok(());
+            }
+        }
+    };
+    if tty {
+        // SAFETY: restoring the saved terminal state.
+        unsafe { libc::tcsetattr(0, libc::TCSANOW, &saved) };
+        eprintln!("\n(detached)");
+    }
+    result
 }
 
 // --- selftest ---------------------------------------------------------

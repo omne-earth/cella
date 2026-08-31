@@ -55,6 +55,6 @@ N=0
 while true; do
     N=$((N+1))
     echo "cella-shell: getty generation $N starting"
-    /bin/getty -n -l /bin/sh 115200 ttyS0
+    /bin/getty -n -l /bin/bash 115200 ttyS0
     echo "cella-shell: getty generation $N exited with $?"
 done

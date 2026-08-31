@@ -14,9 +14,31 @@ fi
 
 ROOTDIR="$HERE/target/rootfs-build/root"
 [ -d "$ROOTDIR" ] || { echo "cella: canonical rootfs tree missing -- run: make distclean-rootfs && make dist" >&2; exit 1; }
+
+# A real bash for the interactive image, static, from pinned source.
+# The canonical rootfs stays busybox-only.
+BASH_VERSION="${GUEST_BASH_VERSION:-5.3}"
+BBUILD="$HERE/target/rootfs-build/bash-$BASH_VERSION"
+if [ ! -x "$BBUILD/bash" ]; then
+    TARBALL="$HERE/target/rootfs-build/bash-$BASH_VERSION.tar.gz"
+    URL="https://ftp.gnu.org/gnu/bash/bash-$BASH_VERSION.tar.gz"
+    if [ ! -d "$BBUILD" ]; then
+        echo "cella: downloading bash $BASH_VERSION source ($URL)"
+        curl -fL --progress-bar --retry 5 --retry-delay 2 --retry-all-errors -C - -o "$TARBALL" "$URL"
+        tar -xf "$TARBALL" -C "$HERE/target/rootfs-build"
+        rm -f "$TARBALL"
+    fi
+    cd "$BBUILD"
+    echo "cella: building a static bash"
+    ./configure --enable-static-link --without-bash-malloc >/dev/null
+    make -j"$(nproc)" >/dev/null
+    cd "$HERE"
+fi
+
 CROOT="$HERE/target/rootfs-build/root-cella"
 rm -rf "$CROOT"
 cp -a "$ROOTDIR" "$CROOT"
+install -m 0755 "$BBUILD/bash" "$CROOT/bin/bash"
 install -m 0755 "$HERE/scripts/build/rootfs-cella.sh" "$CROOT/sbin/init"
 IMG="$HERE/target/rootfs-build/rootfs-cella.ext4"
 rm -f "$IMG"

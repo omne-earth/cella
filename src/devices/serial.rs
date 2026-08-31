@@ -1,7 +1,10 @@
 //! Serial console: vm-superio's 16550 model, hooked to stdout and to a
 //! `Trigger` that pulses legacy IRQ4 through KVM's in-kernel PIC.
 
-use std::io;
+use std::cell::RefCell;
+use std::io::{self, Write};
+use std::os::unix::net::UnixStream;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use kvm_ioctls::VmFd;
@@ -23,14 +26,43 @@ impl Trigger for IrqTrigger {
     }
 }
 
+/// A handle to the console client. The run loop accepts and replaces
+/// the client; the serial output tees to it. One thread owns both,
+/// thus Rc<RefCell<...>> and not a lock.
+pub type ConsoleClient = Rc<RefCell<Option<UnixStream>>>;
+
+/// The serial output: always to stdout (the console log of a
+/// detached machine), and to the connected console client when one
+/// exists. A client that fails a write is dropped: the guest must
+/// never block on a reader.
+pub struct ConsoleOut {
+    client: ConsoleClient,
+}
+
+impl Write for ConsoleOut {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let _ = io::stdout().write(buf);
+        let mut c = self.client.borrow_mut();
+        if let Some(stream) = c.as_mut() {
+            if stream.write_all(buf).is_err() {
+                *c = None;
+            }
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        io::stdout().flush()
+    }
+}
+
 pub struct SerialDevice {
-    inner: Serial<IrqTrigger, NoEvents, io::Stdout>,
+    inner: Serial<IrqTrigger, NoEvents, ConsoleOut>,
 }
 
 impl SerialDevice {
-    pub fn new(vm: Arc<VmFd>) -> Self {
+    pub fn new(vm: Arc<VmFd>, client: ConsoleClient) -> Self {
         SerialDevice {
-            inner: Serial::new(IrqTrigger { vm }, io::stdout()),
+            inner: Serial::new(IrqTrigger { vm }, ConsoleOut { client }),
         }
     }
 
@@ -60,7 +92,7 @@ impl SerialDevice {
     /// gives the guest a reset UART: the interrupt-enable register
     /// reads 0, RX bytes raise no IRQ, and a shell on the serial line
     /// never hears another keystroke.
-    pub fn restore(vm: Arc<VmFd>, regs: [u8; 9]) -> Self {
+    pub fn restore(vm: Arc<VmFd>, regs: [u8; 9], client: ConsoleClient) -> Self {
         let state = vm_superio::serial::SerialState {
             baud_divisor_low: regs[0],
             baud_divisor_high: regs[1],
@@ -78,7 +110,7 @@ impl SerialDevice {
             regs[2], regs[3], regs[4], regs[5], regs[6], regs[7]
         );
         SerialDevice {
-            inner: Serial::from_state(&state, IrqTrigger { vm }, NoEvents, io::stdout())
+            inner: Serial::from_state(&state, IrqTrigger { vm }, NoEvents, ConsoleOut { client })
                 .expect("an empty in_buffer cannot overflow the FIFO"),
         }
     }

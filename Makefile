@@ -16,7 +16,10 @@ CELLA_TAP_CIDR ?= 192.168.200.1/24
 # https://www.kernel.org/releases.json.
 KERNEL_VERSION ?= 7.2.2
 BUSYBOX_VERSION ?= 1.37.0
-export KERNEL_VERSION BUSYBOX_VERSION
+# Not BASH_VERSION: bash itself defines that variable in every shell,
+# and it would win over this default through the environment.
+GUEST_BASH_VERSION ?= 5.3
+export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 
 .PHONY: help build build-static install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
