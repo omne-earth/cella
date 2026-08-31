@@ -1,37 +1,105 @@
 #!/usr/bin/env bash
 # Acceptance gates for docs/DEVICE-STATE.md. One argument selects the
-# criterion: ac1, ac2, ac3, or ac4. Each gate fails until its
-# implementation lands; the FAIL is the specification.
+# criterion: ac1, ac2, ac3, or ac4. A gate that is not implemented yet
+# fails; the FAIL is the specification.
 set -ueo pipefail
 
+cd "$(dirname "$0")/../.."
+BIN=target/release/cella
 ac="${1:-}"
 
 case "$ac" in
-ac1)
-	echo "AC1: the disk survives the thaw."
-	echo "  Gate: write a file, freeze, thaw, read it back, sync."
-	echo "  Pass condition: make demo runs on a rw root."
-	;;
-ac2)
-	echo "AC2: the network survives the thaw."
-	echo "  Gate: the net gate, moved past a freeze; the tap claim"
-	echo "  persists through the manifest."
-	;;
-ac3)
-	echo "AC3: the in-flight layer is exact."
-	echo "  Gate: a parked egress frame is delivered and completed"
-	echo "  after the thaw; the same request works, no retransmission."
-	;;
-ac4)
-	echo "AC4: the verdict is external (the world-ratchet gate)."
-	echo "  Gate: every egress frame parks; the test, as the stand-in"
-	echo "  engine, renders release-with-allow or freeze-grow-thaw."
-	;;
+ac1 | ac2 | ac3 | ac4) ;;
 *)
 	echo "usage: $0 ac1|ac2|ac3|ac4" >&2
 	exit 2
 	;;
 esac
 
-echo "FAIL: $ac is not implemented yet (see docs/DEVICE-STATE.md)"
-exit 1
+[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
+if ! [ -r /dev/kvm ] || ! [ -w /dev/kvm ]; then
+    echo "SKIP: no read and write access to /dev/kvm"; exit 0
+fi
+command -v bwrap >/dev/null || { echo "SKIP: bwrap not found -- run: make init"; exit 0; }
+
+REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
+for f in kernel/canonical/bzImage rootfs/cella/rootfs.ext4; do
+    [ -f "$REAL_HOME/$f" ] || { echo "SKIP: golden $f missing -- run: make golden"; exit 0; }
+done
+export CELLA_HOME=$(mktemp -d /tmp/cella-devstate.XXXXXX)
+mkdir -p "$CELLA_HOME/kernel/canonical" "$CELLA_HOME/rootfs/cella"
+cp "$REAL_HOME/kernel/canonical/bzImage" "$CELLA_HOME/kernel/canonical/"
+cp "$REAL_HOME/rootfs/cella/rootfs.ext4" "$CELLA_HOME/rootfs/cella/"
+
+VM=devstate
+teardown() {
+    "$BIN" stop "$VM" >/dev/null 2>&1 || true
+    rm -rf "$CELLA_HOME"
+}
+trap teardown EXIT
+say() { echo; echo "==> $1"; }
+type_in() { (printf '%s\n' "$1"; sleep 2) | timeout 20 "$BIN" enter "$VM" >/dev/null; }
+CON="$CELLA_HOME/machines/$VM/console.log"
+
+# Wait until a marker shows in the console log, with a deadline.
+wait_for() {
+    local marker="$1" deadline=$((SECONDS + 15))
+    while [ $SECONDS -lt $deadline ]; do
+        grep -aq "$marker" "$CON" && return 0
+        sleep 1
+    done
+    return 1
+}
+
+case "$ac" in
+ac1)
+	echo "AC1: the disk survives the thaw (rw root; write, freeze, thaw, read back, sync)."
+
+	say "step 1: create and start a machine on a rw root"
+	"$BIN" create "$VM" --net none >/dev/null
+	"$BIN" start "$VM" >/dev/null
+	sleep 4
+
+	say "step 2: write a file to the disk, and sync it"
+	type_in 'echo payload-$((6*7)) > /ac1.txt; sync; echo disk-write-d"one"'
+	wait_for "disk-write-done" || { echo "FAIL: the pre-freeze write did not complete"; exit 1; }
+
+	say "step 3: freeze, then thaw"
+	"$BIN" freeze "$VM" >/dev/null
+	"$BIN" thaw "$VM" >/dev/null
+	sleep 2
+
+	say "step 4: read the file back through the thawed disk"
+	type_in 'echo "readback: $(cat /ac1.txt)"'
+	wait_for "readback: payload-42" || { echo "FAIL: the post-thaw read hung or returned wrong data"; exit 1; }
+
+	say "step 5: write and sync after the thaw (the field-evidence wedge)"
+	type_in 'echo post-thaw >> /ac1.txt; sync; echo post-thaw-write-d"one"'
+	wait_for "post-thaw-write-done" || { echo "FAIL: the post-thaw write wedged (see docs/DEVICE-STATE.md)"; exit 1; }
+
+	echo
+	echo "PASS: AC1 -- the disk survived the thaw"
+	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
+	;;
+ac2)
+	echo "AC2: the network survives the thaw."
+	echo "  Gate: the net gate, moved past a freeze; the tap claim"
+	echo "  persists through the manifest."
+	echo "FAIL: ac2 is not implemented yet (see docs/DEVICE-STATE.md)"
+	exit 1
+	;;
+ac3)
+	echo "AC3: the in-flight layer is exact."
+	echo "  Gate: a parked egress frame is delivered and completed"
+	echo "  after the thaw; the same request works, no retransmission."
+	echo "FAIL: ac3 is not implemented yet (see docs/DEVICE-STATE.md)"
+	exit 1
+	;;
+ac4)
+	echo "AC4: the verdict is external (the world-ratchet gate)."
+	echo "  Gate: every egress frame parks; the test, as the stand-in"
+	echo "  engine, renders release-with-allow or freeze-grow-thaw."
+	echo "FAIL: ac4 is not implemented yet (see docs/DEVICE-STATE.md)"
+	exit 1
+	;;
+esac

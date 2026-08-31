@@ -514,6 +514,22 @@ fn main() {
         serial = SerialDevice::restore(vm.clone(), frozen_state.serial, console_client.clone());
         vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
             .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
+        // The transports above came up at reset state, and the guest
+        // driver in RAM holds a negotiated state. Put the device side
+        // back before the first KVM_RUN, or the first request lands in
+        // a ring the device never reads (see docs/DEVICE-STATE.md).
+        if frozen_state.devices.len() != mmio_devices.len() {
+            fatal(&format!(
+                "refusing to thaw: the image froze with {} virtio device(s), \
+                 and this command line makes {} (a machine frozen with a tap \
+                 must thaw with a tap)",
+                frozen_state.devices.len(),
+                mmio_devices.len()
+            ));
+        }
+        for (st, (_, _, transport)) in frozen_state.devices.iter().zip(mmio_devices.iter_mut()) {
+            transport.restore_state(st);
+        }
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
         // PVCLOCK_GUEST_STOPPED in the pvclock page, and the flag tells
         // the guest that it was stopped. The freeze must not exist for
@@ -606,6 +622,10 @@ fn run_loop(
 ) {
     loop {
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
+            let device_states: Vec<_> = mmio_devices
+                .iter()
+                .map(|(_, _, t)| t.save_state())
+                .collect();
             do_freeze(
                 &vcpu_fd,
                 vm,
@@ -613,6 +633,7 @@ fn run_loop(
                 state_dir,
                 mem_size_bytes,
                 serial.registers(),
+                &device_states,
             );
             std::process::exit(0);
         }
@@ -765,6 +786,7 @@ fn do_freeze(
     state_dir: &std::path::Path,
     mem_size_bytes: u64,
     serial_regs: [u8; 9],
+    device_states: &[devices::virtio::mmio::TransportState],
 ) {
     eprintln!("cella: freezing to {:?}", state_dir);
     // The guest stopped when KVM_RUN returned. Measure the delay from
@@ -811,6 +833,7 @@ fn do_freeze(
         &clock,
         &irqchip,
         &serial_regs,
+        device_states,
     )
     .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
 

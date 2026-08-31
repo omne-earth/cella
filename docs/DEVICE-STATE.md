@@ -23,8 +23,8 @@ reads. Field evidence (2026-08-30, bare metal):
   cold pages of busybox, and the read went to the dead disk.
 - Networking after a thaw is dead for the same reason.
 
-Until this lands, `make demo` runs its guest with ROOT=ro, and a
-thawed guest lives on what its RAM held at the freeze instant.
+Until AC1 landed, `make demo` ran its guest with ROOT=ro, and a
+thawed guest lived on what its RAM held at the freeze instant.
 
 ## What the device holds, and what RAM holds
 
@@ -124,27 +124,16 @@ Each criterion stands alone, in dependency order. Each has a gate
 target (`make device-state-ac1` .. `device-state-ac4`), and
 `make smoke-device-state` runs all four.
 
-- **AC1 -- the disk survives the thaw.** The transport state rides
-  the sidecar, and `make demo` drops ROOT=ro: the shell writes its
-  history through a thaw on a rw root. A disk gate makes the wedge
-  of the field evidence a FAIL that cannot return silently: write a
-  file, freeze, thaw, read it back, sync.
-- **AC2 -- the network survives the thaw.** The tap claim persists
-  through the manifest, the tap itself is recreated by convention
-  where absent, and the host pings the guest after a thaw (the
-  existing net gate, moved past a freeze).
-- **AC3 -- the in-flight layer is exact.** The synchronous block
-  path and the droppable inbound path are verified as stated, and a
-  parked egress frame is delivered and completed after the thaw:
-  the same request works, with no retransmission.
-- **AC4 -- the verdict is external.** Egress parks by default, and
-  the manager (standing in for the engine) renders the verdict:
-  release with allow for a known destination, or freeze, grow the
-  world, thaw, deliver. The guest never knows. The world-ratchet
-  gate below proves it end to end.
-- The clock gates must not move: the transport restore adds
-  host-time work outside the clock window, and the probes verify
-  that nothing entered the guest clock.
+| Criterion | Current state | Target state | On target |
+|---|---|---|---|
+| **AC1 -- the disk survives the thaw** | The sidecar (v7) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. | The same. | yes |
+| **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, and the transport restore covers virtio-net. The gate does not exist, and no ping crosses a freeze. | The tap is recreated by convention where absent, and the host pings the guest after a thaw (the existing net gate, moved past a freeze). | no |
+| **AC3 -- the in-flight layer is exact** | The sidecar format carries held egress frames, and the block path is synchronous by construction. No park point exists, and no held frame is delivered at thaw. | A parked egress frame is delivered and completed after the thaw: the same request works, with no retransmission. | no |
+| **AC4 -- the verdict is external** | Nothing parks. | Every egress frame parks by default, and the manager (standing in for the engine) renders the verdict: release with allow for a known destination, or freeze, grow the world, thaw, deliver. The guest never knows. The world-ratchet gate below proves it end to end. | no |
+
+The clock gates must not move: the transport restore adds host-time
+work outside the clock window, and the probes verify that nothing
+entered the guest clock.
 
 ## The world-ratchet gate
 

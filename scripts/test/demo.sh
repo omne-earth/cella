@@ -32,8 +32,8 @@ say() { echo; echo "==> $1"; }
 type_in() { (printf '%s\n' "$1"; sleep 2) | timeout 10 "$BIN" enter demo >/dev/null; }
 CON="$CELLA_HOME/machines/demo/console.log"
 
-say "step 1: create and start a machine with a shell (read-only root)"
-"$BIN" create demo --net none --root ro --diag >/dev/null
+say "step 1: create and start a machine with a shell (rw root)"
+"$BIN" create demo --net none --diag >/dev/null
 "$BIN" start demo >/dev/null
 sleep 4
 

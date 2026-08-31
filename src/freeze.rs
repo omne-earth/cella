@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use kvm_bindings::kvm_clock_data;
 
+use crate::devices::virtio::mmio::{QueueState, TransportState};
 use crate::vcpu::{IrqChipState, VcpuState, SAVED_MSR_COUNT};
 
 const MAGIC: &[u8; 8] = b"MVMMFRZ1";
@@ -27,13 +28,14 @@ const MAGIC: &[u8; 8] = b"MVMMFRZ1";
 // MSR_IA32_TSC_DEADLINE to SAVED_MSRS. Version 3 added the irqchip and
 // PIT state. Version 4 added the xsave and xcrs blocks. Version 5
 // added MSR_IA32_XSS to SAVED_MSRS. Version 6 added the serial
-// device registers. Each of these
+// device registers. Version 7 added the virtio transport blocks and
+// the held egress frames (see docs/DEVICE-STATE.md). Each of these
 // changes moves all data that comes after it in the file. Therefore a
 // binary must not read a sidecar that has a different version.
 // read_state compares the version and refuses the file if it does not
 // agree. No sidecar files exist at an older version, but this check is
 // what makes that assumption safe.
-const FORMAT_VERSION: u32 = 6;
+const FORMAT_VERSION: u32 = 7;
 
 pub struct HostCheck {
     pub tsc_khz: u32,
@@ -49,6 +51,11 @@ pub struct FrozenState {
     pub vcpu: VcpuState,
     pub clock: kvm_clock_data,
     pub irqchip: IrqChipState,
+    /// One block per virtio transport, in device order: block, then
+    /// net when present. The rings live in guest RAM; these blocks
+    /// carry the device-side registers, indices, and any held egress
+    /// frames (see docs/DEVICE-STATE.md).
+    pub devices: Vec<TransportState>,
 }
 
 #[allow(dead_code)] // fields read via {:?} in error messages, not field access
@@ -102,6 +109,7 @@ pub fn write_state(
     clock: &kvm_clock_data,
     irqchip: &IrqChipState,
     serial: &[u8; 9],
+    devices: &[TransportState],
 ) -> Result<(), Error> {
     fs::create_dir_all(dir)?;
     let tmp = state_tmp_path(dir);
@@ -139,6 +147,7 @@ pub fn write_state(
         f.write_all(as_bytes(&irqchip.pit))?;
     }
     f.write_all(serial)?;
+    write_devices(&mut f, devices)?;
     f.sync_all()?;
     drop(f);
 
@@ -150,6 +159,36 @@ pub fn write_state(
     // SAFETY: dir_fd is a valid, open fd for the directory's lifetime.
     unsafe {
         libc::fsync(dir_fd.as_raw_fd());
+    }
+    Ok(())
+}
+
+/// The virtio transport blocks, after the serial registers:
+/// a transport count, then per transport the status, the queue
+/// select, the ISR, the negotiated features, the queue states, and
+/// the held egress frames.
+fn write_devices(f: &mut impl Write, devices: &[TransportState]) -> Result<(), Error> {
+    f.write_all(&(devices.len() as u32).to_le_bytes())?;
+    for d in devices {
+        f.write_all(&d.status.to_le_bytes())?;
+        f.write_all(&d.queue_sel.to_le_bytes())?;
+        f.write_all(&d.isr.to_le_bytes())?;
+        f.write_all(&d.driver_features.to_le_bytes())?;
+        f.write_all(&(d.queues.len() as u32).to_le_bytes())?;
+        for q in &d.queues {
+            f.write_all(&[q.ready as u8])?;
+            f.write_all(&q.size.to_le_bytes())?;
+            f.write_all(&q.desc_table.to_le_bytes())?;
+            f.write_all(&q.avail_ring.to_le_bytes())?;
+            f.write_all(&q.used_ring.to_le_bytes())?;
+            f.write_all(&q.next_avail.to_le_bytes())?;
+            f.write_all(&q.next_used.to_le_bytes())?;
+        }
+        f.write_all(&(d.held_frames.len() as u32).to_le_bytes())?;
+        for frame in &d.held_frames {
+            f.write_all(&(frame.len() as u32).to_le_bytes())?;
+            f.write_all(frame)?;
+        }
     }
     Ok(())
 }
@@ -221,6 +260,42 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
 
     let serial: [u8; 9] = take(9)?.try_into().unwrap();
 
+    let n_devices = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+    let mut devices = Vec::with_capacity(n_devices);
+    for _ in 0..n_devices {
+        let status = u32::from_le_bytes(take(4)?.try_into().unwrap());
+        let queue_sel = u32::from_le_bytes(take(4)?.try_into().unwrap());
+        let isr = u32::from_le_bytes(take(4)?.try_into().unwrap());
+        let driver_features = u64::from_le_bytes(take(8)?.try_into().unwrap());
+        let n_queues = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+        let mut queues = Vec::with_capacity(n_queues);
+        for _ in 0..n_queues {
+            queues.push(QueueState {
+                ready: take(1)?[0] != 0,
+                size: u16::from_le_bytes(take(2)?.try_into().unwrap()),
+                desc_table: u64::from_le_bytes(take(8)?.try_into().unwrap()),
+                avail_ring: u64::from_le_bytes(take(8)?.try_into().unwrap()),
+                used_ring: u64::from_le_bytes(take(8)?.try_into().unwrap()),
+                next_avail: u16::from_le_bytes(take(2)?.try_into().unwrap()),
+                next_used: u16::from_le_bytes(take(2)?.try_into().unwrap()),
+            });
+        }
+        let n_frames = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+        let mut held_frames = Vec::with_capacity(n_frames);
+        for _ in 0..n_frames {
+            let len = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+            held_frames.push(take(len)?.to_vec());
+        }
+        devices.push(TransportState {
+            status,
+            queue_sel,
+            isr,
+            driver_features,
+            queues,
+            held_frames,
+        });
+    }
+
     Ok(FrozenState {
         mem_size,
         serial,
@@ -238,6 +313,7 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
         },
         clock,
         irqchip,
+        devices,
     })
 }
 
@@ -302,6 +378,25 @@ mod tests {
         }
     }
 
+    fn sample_devices() -> Vec<TransportState> {
+        vec![TransportState {
+            status: 0xf,
+            queue_sel: 0,
+            isr: 1,
+            driver_features: 1 << 32,
+            queues: vec![QueueState {
+                ready: true,
+                size: 256,
+                desc_table: 0x7f0_0000,
+                avail_ring: 0x7f1_0000,
+                used_ring: 0x7f2_0000,
+                next_avail: 17,
+                next_used: 17,
+            }],
+            held_frames: vec![vec![0xaa; 60], vec![0x55; 1514]],
+        }]
+    }
+
     fn sample_vcpu_state() -> VcpuState {
         let mut lapic_regs = [0i8; 1024];
         lapic_regs[0] = 42;
@@ -355,6 +450,7 @@ mod tests {
             &clock,
             &sample_irqchip(),
             &[7u8; 9],
+            &sample_devices(),
         )
         .unwrap();
         assert!(is_frozen(&dir));
@@ -375,6 +471,10 @@ mod tests {
         assert_eq!(read_back.irqchip.pit.channels[0].count, 12345);
         assert_eq!(read_back.irqchip.pic_slave.chip_id, 1);
         assert_eq!(read_back.irqchip.ioapic.chip_id, 2);
+        // The virtio transport blocks come after the serial registers.
+        // The indices and the held frames are what AC1 and AC3 stand
+        // on; the equality here covers every field.
+        assert_eq!(read_back.devices, sample_devices());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -395,6 +495,7 @@ mod tests {
             &clock,
             &sample_irqchip(),
             &[7u8; 9],
+            &sample_devices(),
         )
         .unwrap();
 
@@ -436,6 +537,7 @@ mod tests {
             &clock,
             &sample_irqchip(),
             &[7u8; 9],
+            &sample_devices(),
         )
         .unwrap();
 
@@ -474,6 +576,7 @@ mod tests {
             vcpu: sample_vcpu_state(),
             clock: kvm_clock_data::default(),
             irqchip: sample_irqchip(),
+            devices: sample_devices(),
         };
         assert!(check_hardware(&frozen, 2_500_000).is_ok());
         assert!(matches!(

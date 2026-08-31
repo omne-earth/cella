@@ -40,6 +40,33 @@ impl IrqLine for VmFd {
     }
 }
 
+/// The device-side position of one queue. The rings live in guest RAM,
+/// which the freeze preserves; these fields are the private view of the
+/// device, and the sidecar must carry them (see docs/DEVICE-STATE.md).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct QueueState {
+    pub ready: bool,
+    pub size: u16,
+    pub desc_table: u64,
+    pub avail_ring: u64,
+    pub used_ring: u64,
+    pub next_avail: u16,
+    pub next_used: u16,
+}
+
+/// Everything a thaw must put back into a fresh MmioTransport. The
+/// held egress frames are frames read from the TX ring and not yet
+/// written to the TAP at the freeze instant (see docs/DEVICE-STATE.md).
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct TransportState {
+    pub status: u32,
+    pub queue_sel: u32,
+    pub isr: u32,
+    pub driver_features: u64,
+    pub queues: Vec<QueueState>,
+    pub held_frames: Vec<Vec<u8>>,
+}
+
 pub struct MmioTransport {
     device: Box<dyn VirtioDevice>,
     queues: Vec<Queue>,
@@ -220,6 +247,62 @@ impl MmioTransport {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Copy the device-side state out, for the freeze sidecar. The
+    /// held-frames field stays empty here: the run loop owns the parked
+    /// egress frames and fills the field itself.
+    pub fn save_state(&self) -> TransportState {
+        TransportState {
+            status: self.status,
+            queue_sel: self.queue_sel as u32,
+            isr: self.isr,
+            driver_features: self.driver_features,
+            queues: self
+                .queues
+                .iter()
+                .map(|q| QueueState {
+                    ready: q.ready(),
+                    size: q.size(),
+                    desc_table: q.desc_table(),
+                    avail_ring: q.avail_ring(),
+                    used_ring: q.used_ring(),
+                    next_avail: q.next_avail(),
+                    next_used: q.next_used(),
+                })
+                .collect(),
+            held_frames: Vec::new(),
+        }
+    }
+
+    /// Put the device-side state back into a fresh transport, at thaw.
+    /// The guest driver keeps its own copy in RAM, and the two sides
+    /// must agree before the first KVM_RUN. The feature bits go to the
+    /// device backend again: the guest negotiated them once, before
+    /// the freeze, and does not negotiate again.
+    pub fn restore_state(&mut self, st: &TransportState) {
+        if st.status & STATUS_FEATURES_OK != 0 {
+            self.device.ack_features(st.driver_features);
+        }
+        self.status = st.status;
+        self.queue_sel = st.queue_sel as usize;
+        self.isr = st.isr;
+        self.driver_features = st.driver_features;
+        for (q, qs) in self.queues.iter_mut().zip(st.queues.iter()) {
+            q.set_size(qs.size);
+            q.set_desc_table_address(
+                Some(qs.desc_table as u32),
+                Some((qs.desc_table >> 32) as u32),
+            );
+            q.set_avail_ring_address(
+                Some(qs.avail_ring as u32),
+                Some((qs.avail_ring >> 32) as u32),
+            );
+            q.set_used_ring_address(Some(qs.used_ring as u32), Some((qs.used_ring >> 32) as u32));
+            q.set_next_avail(qs.next_avail);
+            q.set_next_used(qs.next_used);
+            q.set_ready(qs.ready);
         }
     }
 
