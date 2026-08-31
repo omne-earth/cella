@@ -180,6 +180,14 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             }),
             _ => Err("usage: cella destroy <name>".to_string()),
         },
+        "start" => match args {
+            [name] => machine::start(name),
+            _ => Err("usage: cella start <name>".to_string()),
+        },
+        "stop" => match args {
+            [name] => machine::stop(name),
+            _ => Err("usage: cella stop <name>".to_string()),
+        },
         _ => unreachable!(),
     };
     match ok {
@@ -191,7 +199,10 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if let Some(first) = argv.first() {
-        if matches!(first.as_str(), "build" | "create" | "destroy") {
+        if matches!(
+            first.as_str(),
+            "build" | "create" | "destroy" | "start" | "stop"
+        ) {
             run_verb(first.clone().as_str(), &argv[1..]);
         }
     }
@@ -423,6 +434,19 @@ fn main() {
             "cella: thaw timing: clock write to first KVM_RUN {}",
             fmt_ns(t.elapsed().as_nanos() as i128)
         );
+    }
+
+    // Readiness for the start verb: one line on the inherited pipe,
+    // immediately before the first KVM_RUN. See machine::start.
+    if let Ok(fd) = std::env::var("CELLA_READY_FD") {
+        if let Ok(fd) = fd.parse::<i32>() {
+            // SAFETY: the fd comes from the parent's pipe and belongs
+            // to this process; write and close are its whole use.
+            unsafe {
+                libc::write(fd, b"ready\n".as_ptr() as *const libc::c_void, 6);
+                libc::close(fd);
+            }
+        }
     }
 
     run_loop(

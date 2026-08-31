@@ -57,6 +57,12 @@ pub const DEFAULT_TIME_ARGS: &str = "tsc=reliable clocksource=kvm-clock trace_cl
 /// of the guest. Override with CELLA_THAW_PREFAULT.
 pub const DEFAULT_THAW_PREFAULT: &str = "deep";
 
+/// The static addresses of the TAP subnet, in one place: the guest
+/// address and the host gateway. scripts/setup/tap.sh creates the
+/// host side; a networked machine uses these on its ip= argument.
+pub const DEFAULT_GUEST_IP: &str = "192.168.200.2";
+pub const DEFAULT_HOST_IP: &str = "192.168.200.1";
+
 pub fn default_cmdline() -> String {
     format!("{DEFAULT_BASE_ARGS} {DEFAULT_TIME_ARGS}")
 }

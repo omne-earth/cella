@@ -289,3 +289,249 @@ mod tests {
         });
     }
 }
+
+// --- start and stop ---------------------------------------------------
+
+use crate::config;
+
+fn pid_path(name: &str) -> PathBuf {
+    machine_dir(name).join("pid")
+}
+
+/// The transients of a machine: everything that only a running or a
+/// crashed machine leaves behind. A stopped machine is its manifest
+/// and its disk, nothing else.
+fn clear_transients(name: &str) -> Vec<&'static str> {
+    let dir = machine_dir(name);
+    let mut cleared = Vec::new();
+    for (file, label) in [
+        ("ram.img", "ram.img"),
+        ("pid", "pid"),
+        ("console.sock", "console.sock"),
+        ("state.tmp", "state.tmp"),
+    ] {
+        if fs::remove_file(dir.join(file)).is_ok() {
+            cleared.push(label);
+        }
+    }
+    cleared
+}
+
+fn is_frozen(name: &str) -> bool {
+    machine_dir(name).join("state").is_file()
+}
+
+/// The kernel command line of a machine, from its manifest. One
+/// source: config.rs holds the defaults, and the manifest holds the
+/// choices of create.
+fn cmdline_for(m: &Manifest) -> String {
+    let base = config::default_cmdline();
+    if m.net == "none" {
+        format!(
+            "{base} root=/dev/vda {} virtio_mmio.device=4K@0xd0000000:5",
+            m.root
+        )
+    } else {
+        format!(
+            "{base} root=/dev/vda {} virtio_mmio.device=4K@0xd0000000:5 \
+             virtio_mmio.device=4K@0xd0001000:6 \
+             ip={}::{}:255.255.255.0::eth0:off",
+            m.root,
+            config::DEFAULT_GUEST_IP,
+            config::DEFAULT_HOST_IP
+        )
+    }
+}
+
+/// Start the machine: spawn the VMM inside the jail, detached, and
+/// return when the VMM signals readiness (immediately before the
+/// first KVM_RUN). The jail is the bwrap invocation of
+/// scripts/jail.sh, spawned directly with no shell. One deliberate
+/// difference: no --die-with-parent. The verb process exits after
+/// readiness, and the machine must survive it; the pid file and stop
+/// own the cleanup instead.
+pub fn start(name: &str) -> Result<(), String> {
+    let m = read_manifest(name)?;
+    if is_running(name) {
+        return Err(format!("machine {name:?} is already running"));
+    }
+    if is_frozen(name) {
+        return Err(format!("machine {name:?} is frozen -- thaw it"));
+    }
+    clear_transients(name);
+    let dir = machine_dir(name);
+    let kernel = kernel_path(&m.kernel);
+    if !kernel.is_file() {
+        return Err(format!(
+            "golden kernel {:?} missing -- run: cella build kernel {}",
+            m.kernel, m.kernel
+        ));
+    }
+    let bin = std::env::current_exe().map_err(|e| format!("finding the binary: {e}"))?;
+    let kernel_dir = kernel.parent().expect("kernel path has a parent");
+
+    // The readiness pipe. The child inherits the write end, and the
+    // VMM writes one line on it immediately before the first KVM_RUN
+    // (see CELLA_READY_FD in main.rs).
+    let mut fds = [0i32; 2];
+    // SAFETY: fds is a valid two-element array.
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err("creating the readiness pipe failed".to_string());
+    }
+    let (read_fd, write_fd) = (fds[0], fds[1]);
+
+    let console = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("console.log"))
+        .map_err(|e| format!("opening console.log: {e}"))?;
+    let vmm_log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("vmm.log"))
+        .map_err(|e| format!("opening vmm.log: {e}"))?;
+
+    let mut cmd = std::process::Command::new("bwrap");
+    cmd.args([
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--unshare-cgroup",
+    ]);
+    // The mounts apply in order, and a later mount shadows an earlier
+    // one. The /tmp tmpfs therefore comes first: a machine directory
+    // under /tmp (the sandboxed tests) must bind over it, not under
+    // it.
+    cmd.args(["--proc", "/proc", "--tmpfs", "/tmp"]);
+    let ro = |c: &mut std::process::Command, p: &str| {
+        c.args(["--ro-bind", p, p]);
+    };
+    cmd.args(["--ro-bind", bin.to_str().unwrap(), "/cella"]);
+    ro(&mut cmd, "/lib");
+    ro(&mut cmd, "/usr/lib");
+    if Path::new("/lib64").is_dir() {
+        ro(&mut cmd, "/lib64");
+    }
+    cmd.args(["--dev-bind", "/dev/kvm", "/dev/kvm"]);
+    if m.net != "none" {
+        cmd.args(["--dev-bind", "/dev/net/tun", "/dev/net/tun"]);
+    }
+    let dir_s = dir.to_str().unwrap().to_string();
+    cmd.args(["--bind", &dir_s, &dir_s]);
+    cmd.args([
+        "--ro-bind",
+        kernel_dir.to_str().unwrap(),
+        kernel_dir.to_str().unwrap(),
+    ]);
+    cmd.arg("--new-session");
+    cmd.arg("/cella");
+    cmd.args(["--state-dir", &dir_s]);
+    cmd.args(["--kernel", kernel.to_str().unwrap()]);
+    cmd.args(["--disk", dir.join("disk.img").to_str().unwrap()]);
+    if m.net != "none" {
+        cmd.args(["--tap", &m.net]);
+    }
+    cmd.args(["--mem-mb", &m.mem_mb.to_string()]);
+    cmd.args(["--cmdline", &cmdline_for(&m)]);
+    cmd.env("CELLA_READY_FD", write_fd.to_string());
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(console);
+    cmd.stderr(vmm_log);
+    // SAFETY: setsid in the child detaches it from this session, and
+    // it calls nothing async-signal-unsafe.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    use std::os::unix::process::CommandExt;
+    let child = cmd.spawn().map_err(|e| format!("spawning the jail: {e}"))?;
+    // SAFETY: write_fd is this process's end; the child holds its own.
+    unsafe { libc::close(write_fd) };
+    let pid = child.id() as i32;
+    write_atomic(&pid_path(name), format!("{pid}\n").as_bytes())
+        .map_err(|e| format!("writing the pid file: {e}"))?;
+
+    // Wait for readiness: one byte on the pipe, or the death of the
+    // child, or the timeout.
+    let mut pfd = libc::pollfd {
+        fd: read_fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: pfd is valid for the duration of the call.
+    let ready = unsafe { libc::poll(&mut pfd, 1, 60_000) };
+    let mut byte = [0u8; 8];
+    // SAFETY: byte is a valid writable buffer.
+    let n = if ready > 0 {
+        unsafe { libc::read(read_fd, byte.as_mut_ptr() as *mut libc::c_void, byte.len()) }
+    } else {
+        0
+    };
+    // SAFETY: read_fd is this process's fd.
+    unsafe { libc::close(read_fd) };
+    if n <= 0 {
+        let _ = fs::remove_file(pid_path(name));
+        let tail = fs::read_to_string(dir.join("vmm.log"))
+            .map(|s| {
+                s.lines()
+                    .rev()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        // SAFETY: pid names the child this function spawned.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        return Err(format!(
+            "machine {name:?} did not reach readiness -- last vmm.log lines:\n{tail}"
+        ));
+    }
+    println!("cella: machine {name:?} running (pid {pid})");
+    Ok(())
+}
+
+/// Stop the machine as fast as possible, and clear the transients.
+/// An emergency maneuver: SIGKILL, no grace. On a machine that is not
+/// running, the verb still clears leftovers, thus stop is also the
+/// recovery from a crash. A frozen machine is refused: its sidecar is
+/// not a transient.
+pub fn stop(name: &str) -> Result<(), String> {
+    if !machine_dir(name).exists() {
+        return Err(format!("no machine named {name:?}"));
+    }
+    if is_frozen(name) && !is_running(name) {
+        return Err(format!(
+            "machine {name:?} is frozen -- thaw it, or destroy it"
+        ));
+    }
+    if is_running(name) {
+        let pid: i32 = fs::read_to_string(pid_path(name))
+            .map_err(|e| format!("reading the pid file: {e}"))?
+            .trim()
+            .parse()
+            .map_err(|_| "the pid file is not a number".to_string())?;
+        // SAFETY: pid comes from the machine's own pid file.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        for _ in 0..200 {
+            // SAFETY: signal 0 probes only.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        println!("cella: machine {name:?} stopped");
+    } else {
+        println!("cella: machine {name:?} was not running");
+    }
+    let cleared = clear_transients(name);
+    if !cleared.is_empty() {
+        println!("cella: cleared transients: {}", cleared.join(", "));
+    }
+    Ok(())
+}
