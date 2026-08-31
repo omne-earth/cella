@@ -142,7 +142,8 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
     let ok = match verb {
         "build" => match args {
             [axis, flavor] => machine::build(axis, flavor),
-            _ => Err("usage: cella build <kernel|rootfs> <flavor>".to_string()),
+            [axis, flavor, flag] if flag == "--fresh" => machine::build_flags(axis, flavor, true),
+            _ => Err("usage: cella build <kernel|rootfs> <flavor> [--fresh]".to_string()),
         },
         "create" => {
             // cella create <name> [--kernel F] [--rootfs F] [--mem-mb N]
@@ -267,7 +268,7 @@ fn print_help() {
     println!(
         "cella -- a cryogenic chamber for agents\n\n\
          The machine lifecycle (see docs/LIFECYCLE.md):\n\
-         \x20 cella build <kernel|rootfs> <flavor>   make a golden artifact\n\
+         \x20 cella build <kernel|rootfs> <flavor> [--fresh]   make a golden artifact\n\
          \x20 cella create <name> [options]          stage a machine from the goldens\n\
          \x20 cella start <name>                     run it (detached, jailed)\n\
          \x20 cella enter <name>                     attach to its console (Ctrl-] detaches)\n\

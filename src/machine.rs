@@ -491,6 +491,25 @@ pub fn destroy(name: &str) -> Result<(), String> {
 /// src/build.rs and docs/LIFECYCLE.md). The flavor decides the
 /// recipe; an unknown pair is an error, not a fallback.
 pub fn build(axis: &str, flavor: &str) -> Result<(), String> {
+    build_flags(axis, flavor, false)
+}
+
+/// A golden that exists is done: the artifacts are canonical, and a
+/// rebuild produces the same one at real cost (see
+/// docs/LIFECYCLE.md). `--fresh` rebuilds deliberately.
+pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> {
+    let out = match axis {
+        "kernel" => kernel_path(flavor),
+        "rootfs" => rootfs_path(flavor),
+        _ => PathBuf::new(),
+    };
+    if !fresh && out.is_file() {
+        println!(
+            "cella: {axis} {flavor} already built at {} (use --fresh to rebuild)",
+            out.display()
+        );
+        return Ok(());
+    }
     match (axis, flavor) {
         ("kernel", "canonical") => crate::build::kernel_canonical(&kernel_path(flavor)),
         ("kernel", "nested") => crate::build::kernel_nested(&kernel_path(flavor)),
