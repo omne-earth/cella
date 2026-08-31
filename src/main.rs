@@ -32,9 +32,19 @@ const BLOCK_IRQ: u32 = 5;
 const NET_IRQ: u32 = 6;
 
 static FREEZE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static HOLD_REQUESTED: AtomicBool = AtomicBool::new(false);
+static RELEASE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_sigusr1(_: libc::c_int) {
     FREEZE_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn on_sigusr2(_: libc::c_int) {
+    HOLD_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn on_sigwinch(_: libc::c_int) {
+    RELEASE_REQUESTED.store(true, Ordering::SeqCst);
 }
 
 // SIGIO from the TAP fd (see tap.rs). The handler's only job is to exist
@@ -137,7 +147,8 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
     let ok = match verb {
         "build" => match args {
             [axis, flavor] => machine::build(axis, flavor),
-            _ => Err("usage: cella build <kernel|rootfs> <flavor>".to_string()),
+            [axis, flavor, flag] if flag == "--fresh" => machine::build_flags(axis, flavor, true),
+            _ => Err("usage: cella build <kernel|rootfs> <flavor> [--fresh]".to_string()),
         },
         "create" => {
             // cella create <name> [--kernel F] [--rootfs F] [--mem-mb N]
@@ -262,7 +273,7 @@ fn print_help() {
     println!(
         "cella -- a cryogenic chamber for agents\n\n\
          The machine lifecycle (see docs/LIFECYCLE.md):\n\
-         \x20 cella build <kernel|rootfs> <flavor>   make a golden artifact\n\
+         \x20 cella build <kernel|rootfs> <flavor> [--fresh]   make a golden artifact\n\
          \x20 cella create <name> [options]          stage a machine from the goldens\n\
          \x20 cella start <name>                     run it (detached, jailed)\n\
          \x20 cella enter <name>                     attach to its console (Ctrl-] detaches)\n\
@@ -514,6 +525,28 @@ fn main() {
         serial = SerialDevice::restore(vm.clone(), frozen_state.serial, console_client.clone());
         vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
             .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
+        // The transports above came up at reset state, and the guest
+        // driver in RAM holds a negotiated state. Put the device side
+        // back before the first KVM_RUN, or the first request lands in
+        // a ring the device never reads (see docs/DEVICE-STATE.md).
+        if frozen_state.devices.len() != mmio_devices.len() {
+            fatal(&format!(
+                "refusing to thaw: the image froze with {} virtio device(s), \
+                 and this command line makes {} (a machine frozen with a tap \
+                 must thaw with a tap)",
+                frozen_state.devices.len(),
+                mmio_devices.len()
+            ));
+        }
+        for (st, (_, _, transport)) in frozen_state.devices.iter().zip(mmio_devices.iter_mut()) {
+            transport.restore_state(st);
+        }
+        // Deliver and complete the held egress frames: write each to
+        // the TAP, oldest first, mark its buffer used, and raise the
+        // interrupt (see docs/DEVICE-STATE.md, "Order in the thaw").
+        for (_, _, transport) in mmio_devices.iter_mut() {
+            transport.deliver_held(&mem);
+        }
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
         // PVCLOCK_GUEST_STOPPED in the pvclock page, and the flag tells
         // the guest that it was stopped. The freeze must not exist for
@@ -605,7 +638,27 @@ fn run_loop(
     mem_size_bytes: u64,
 ) {
     loop {
+        if HOLD_REQUESTED.swap(false, Ordering::SeqCst) {
+            // The egress hold, before the freeze: hold-then-freeze,
+            // in that order (see docs/DEVICE-STATE.md). Every
+            // transport gets the call; only virtio-net acts on it.
+            for (_, _, t) in mmio_devices.iter_mut() {
+                t.set_hold(true);
+            }
+            eprintln!("cella: egress hold on");
+        }
+        if RELEASE_REQUESTED.swap(false, Ordering::SeqCst) {
+            apply_verdicts(state_dir, mmio_devices, mem);
+        }
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
+            let device_states: Vec<_> = mmio_devices
+                .iter()
+                .map(|(_, _, t)| t.save_state())
+                .collect();
+            let held: usize = device_states.iter().map(|d| d.held_frames.len()).sum();
+            if held > 0 {
+                eprintln!("cella: freezing with {held} held egress frame(s)");
+            }
             do_freeze(
                 &vcpu_fd,
                 vm,
@@ -613,6 +666,7 @@ fn run_loop(
                 state_dir,
                 mem_size_bytes,
                 serial.registers(),
+                &device_states,
             );
             std::process::exit(0);
         }
@@ -758,6 +812,41 @@ fn poll_net_rx(
     }
 }
 
+/// The release verdict, from outside: read the verdict file, install
+/// each allow entry, and release every parked frame -- delivered to
+/// the TAP and completed, the same path as the thaw delivery. The
+/// engine writes the file and sends SIGWINCH (see
+/// docs/DEVICE-STATE.md). Reapplying a stale file is harmless: allow
+/// entries deduplicate, and an empty park delivers nothing.
+fn apply_verdicts(
+    state_dir: &std::path::Path,
+    mmio_devices: &mut [(u64, u64, MmioTransport)],
+    mem: &vm_memory::GuestMemoryMmap,
+) {
+    if let Ok(text) = std::fs::read_to_string(state_dir.join("verdict")) {
+        for line in text.lines() {
+            let Some(rest) = line.strip_prefix("allow ") else {
+                continue;
+            };
+            let Some((ip_s, port_s)) = rest.rsplit_once(':') else {
+                continue;
+            };
+            let octets: Vec<u8> = ip_s.split('.').filter_map(|o| o.parse().ok()).collect();
+            let (Ok(port), [a, b, c, d]) = (port_s.parse::<u16>(), octets.as_slice()) else {
+                continue;
+            };
+            for (_, _, t) in mmio_devices.iter_mut() {
+                t.allow([*a, *b, *c, *d], port);
+            }
+            eprintln!("cella: allow {ip_s}:{port}");
+        }
+    }
+    for (_, _, t) in mmio_devices.iter_mut() {
+        t.deliver_held(mem);
+    }
+    eprintln!("cella: egress release");
+}
+
 fn do_freeze(
     vcpu_fd: &kvm_ioctls::VcpuFd,
     vm: &kvm_ioctls::VmFd,
@@ -765,6 +854,7 @@ fn do_freeze(
     state_dir: &std::path::Path,
     mem_size_bytes: u64,
     serial_regs: [u8; 9],
+    device_states: &[devices::virtio::mmio::TransportState],
 ) {
     eprintln!("cella: freezing to {:?}", state_dir);
     // The guest stopped when KVM_RUN returned. Measure the delay from
@@ -811,6 +901,7 @@ fn do_freeze(
         &clock,
         &irqchip,
         &serial_regs,
+        device_states,
     )
     .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
 
@@ -827,6 +918,18 @@ fn install_sigusr1_handler() {
         // through it.
         sa.sa_flags = 0;
         libc::sigaction(libc::SIGUSR1, &sa, std::ptr::null_mut());
+        // SIGUSR2 turns the egress hold on, and SIGWINCH applies the
+        // verdict file (see docs/DEVICE-STATE.md).
+        let mut sa2: libc::sigaction = std::mem::zeroed();
+        sa2.sa_sigaction = on_sigusr2 as *const () as usize;
+        libc::sigemptyset(&mut sa2.sa_mask);
+        sa2.sa_flags = 0;
+        libc::sigaction(libc::SIGUSR2, &sa2, std::ptr::null_mut());
+        let mut sa3: libc::sigaction = std::mem::zeroed();
+        sa3.sa_sigaction = on_sigwinch as *const () as usize;
+        libc::sigemptyset(&mut sa3.sa_mask);
+        sa3.sa_flags = 0;
+        libc::sigaction(libc::SIGWINCH, &sa3, std::ptr::null_mut());
     }
 }
 

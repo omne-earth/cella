@@ -23,6 +23,38 @@ const MAX_FRAME: usize = 65550; // 65535 + vnet hdr + slack
 pub struct Net {
     tap: Tap,
     mac: [u8; 6],
+    hold: bool,
+    /// Egress frames read from the TX ring and not yet written to the
+    /// TAP: the descriptor head index and the frame bytes. The guest
+    /// considers these sent, and their completion is owed (see
+    /// docs/DEVICE-STATE.md).
+    parked: Vec<(u16, Vec<u8>)>,
+    /// Pass entries, installed by an allow verdict: a destination
+    /// IPv4 address and port whose frames flow at full speed under
+    /// hold. The verdict cost is amortized per destination: one park
+    /// for a destination without a pass entry, and an inline match
+    /// for every frame after it.
+    allowed: Vec<([u8; 4], u16)>,
+}
+
+/// The IPv4 destination of one egress frame: the address, the port
+/// (0 when the protocol has none), and the protocol number. Returns
+/// None for a non-IPv4 frame (ARP stays link-local housekeeping and
+/// never parks). The frame starts with the 12-byte vnet header.
+fn ipv4_destination(frame: &[u8]) -> Option<([u8; 4], u16, u8)> {
+    let eth = frame.get(12..)?;
+    if eth.get(12..14)? != [0x08, 0x00] {
+        return None;
+    }
+    let ip = eth.get(14..)?;
+    let ihl = ((*ip.first()? & 0x0f) as usize) * 4;
+    let proto = *ip.get(9)?;
+    let dst: [u8; 4] = ip.get(16..20)?.try_into().ok()?;
+    let port = match proto {
+        6 | 17 => u16::from_be_bytes(ip.get(ihl + 2..ihl + 4)?.try_into().ok()?),
+        _ => 0,
+    };
+    Some((dst, port, proto))
 }
 
 impl Net {
@@ -30,6 +62,9 @@ impl Net {
         Ok(Net {
             tap: Tap::open(tap_name)?,
             mac,
+            hold: false,
+            parked: Vec::new(),
+            allowed: Vec::new(),
         })
     }
 
@@ -101,6 +136,29 @@ impl Net {
                 }
                 len += take;
             }
+            if self.hold {
+                let dest = ipv4_destination(&buf[..len]);
+                let pass = match dest {
+                    // ARP and other non-IPv4 housekeeping never parks.
+                    None => true,
+                    Some((ip, port, _)) => self.allowed.contains(&(ip, port)),
+                };
+                if !pass {
+                    // The park point: after the read from the TX ring,
+                    // and before the write to the TAP. No completion
+                    // here -- a verdict releases the frame, or the
+                    // thaw delivers and completes it. The line below
+                    // is the report primitive: the engine reads it.
+                    if let Some((ip, port, proto)) = dest {
+                        eprintln!(
+                            "cella: parked egress to {}.{}.{}.{}:{port} proto {proto}",
+                            ip[0], ip[1], ip[2], ip[3]
+                        );
+                    }
+                    self.parked.push((head_index, buf[..len].to_vec()));
+                    continue;
+                }
+            }
             let _ = self.tap.write_frame(&buf[..len]);
             let _ = queue.add_used(mem, head_index, 0);
             used_any = true;
@@ -135,6 +193,36 @@ impl VirtioDevice for Net {
             QUEUE_RX => self.drain_rx(mem, queue),
             QUEUE_TX => self.drain_tx(mem, queue),
             _ => false,
+        }
+    }
+
+    fn set_hold(&mut self, on: bool) {
+        self.hold = on;
+    }
+
+    fn held_frames(&self) -> Vec<(u16, Vec<u8>)> {
+        self.parked.clone()
+    }
+
+    fn restore_held(&mut self, frames: Vec<(u16, Vec<u8>)>) {
+        self.parked = frames;
+    }
+
+    fn take_held(&mut self) -> Vec<(u16, Vec<u8>)> {
+        std::mem::take(&mut self.parked)
+    }
+
+    fn write_egress(&mut self, frame: &[u8]) {
+        let _ = self.tap.write_frame(frame);
+    }
+
+    fn egress_queue(&self) -> u16 {
+        QUEUE_TX
+    }
+
+    fn allow(&mut self, ip: [u8; 4], port: u16) {
+        if !self.allowed.contains(&(ip, port)) {
+            self.allowed.push((ip, port));
         }
     }
 }

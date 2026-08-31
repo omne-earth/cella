@@ -266,8 +266,11 @@ journal, and the journal commit waited on a virtio-blk request that
 the reset transport never processed. The in-guest diagnostics showed
 the shell in the D state in do_get_write_access, and jbd2 in
 jbd2_journal_commit_transaction, while the serial interrupts kept
-arriving. `make demo` therefore runs its guest with ROOT=ro until
-this work lands: a read-only root writes nothing to the disk.
+arriving. `make demo` ran its guest with ROOT=ro until this work
+landed. The sidecar (format v7) now carries the transport state, the
+thaw restores it before the first KVM_RUN, and the demo and the AC1
+gate (`make device-state-ac1`) run on a rw root. The design lives in
+docs/DEVICE-STATE.md.
 
 The smoke tests and the clock probes do not detect this, because the
 heartbeat needs no virtio. The guest reads /proc and writes to the
