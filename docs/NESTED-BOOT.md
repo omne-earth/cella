@@ -172,9 +172,9 @@ both machines, without a kernel change at any layer.
 Depth three needed one more fix: memory headroom. With 384 MB the
 outer guest starves, its own reclaim evicts the warmed mappings
 between the warming and the first heartbeat, and +30 ms remained.
-With 1024 MB the gate passes (-0.8 ms and +11 ms across runs, inside
-the interval; the baseline jitter at this depth widens the interval
-to ~+/-20 ms). Warming builds the mappings; headroom keeps them.
+With headroom the gate passes (-6.5 ms to +11 ms across runs at 512,
+768, and 1024 MB, inside the interval; the baseline jitter at this
+depth widens the interval to ~+/-20 ms). Warming builds the mappings; headroom keeps them.
 Every depth now passes on both machines, without a kernel change at
 any layer.
 
@@ -239,8 +239,10 @@ stays in place. The guest never addresses its range.
 Depth three still showed +30 ms after the warming. The cause was not
 a hypervisor: the outer guest had 384 MB, its own reclaim ran during
 the inner boot, and the reclaim evicted the warmed mappings between
-the warming and the first heartbeat. With 1024 MB the gate passes.
-Warming builds the mappings; headroom keeps them.
+the warming and the first heartbeat. The measured boundary: 384 MB
+fails; 512, 768, and 1024 MB pass. The default is 768 MB, one step
+above the measured minimum. Warming builds the mappings; headroom
+keeps them.
 
 ### Paths not taken
 

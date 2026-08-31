@@ -20,9 +20,12 @@ TIMEOUT=240
 # The RAM of the outer guest. 384 MB starves the outer guest: its own
 # reclaim then evicts the warmed mappings between the warming and the
 # first heartbeat, and the inner thaw showed +30 ms at depth three.
-# With 1024 MB the same gate passes (-0.8 ms and +11 ms across runs,
-# inside the interval). Headroom is part of the seamlessness contract.
-MEM_MB="${CELLA_INCEPTION_MEM_MB:-1024}"
+# Measured boundary: 384 MB FAIL; 512, 768, and 1024 MB PASS. The
+# default is 768 MB, one step above the measured minimum, because a
+# 512 MB run sits close to the boundary. Headroom is part of the
+# seamlessness contract: warming builds the mappings, headroom keeps
+# them.
+MEM_MB="${CELLA_INCEPTION_MEM_MB:-768}"
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 [ -f "$KERNEL" ] && [ -f "$DISK" ] || { echo "SKIP: inception assets missing -- run: make dist-nested"; exit 0; }
