@@ -21,7 +21,7 @@ export KERNEL_VERSION BUSYBOX_VERSION
 .PHONY: help build build-static debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init dist dist-nested setup-tap \
-        smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-clean test-jail test-seccomp \
+        smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-clean test-jail test-seccomp \
         clean distclean distclean-kernel distclean-rootfs logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate \
         kernel-config-check
@@ -37,7 +37,7 @@ help: ## Show this help
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-clean):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
 	grep -hE '^(init|dist|dist-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -142,9 +142,19 @@ smoke-thaw: build dist ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -> 
 # Deliberately not dist-nested: at test time only the artifacts matter,
 # and the bare-metal machine receives them through the shared copy.
 # Build them with: make dist-nested (needs the toolbox).
-smoke-nested-boot: build ## Boot cella inside a cella guest: PASS when the inner guest's init line reaches the outer serial console
+smoke-nested-boot-airgapped: build ## cella hosts cella, no network on either layer
 	$(LOG)
-	$(SCRIPTS)/test/nested-boot.sh
+	$(SCRIPTS)/test/nested-boot.sh airgapped
+
+smoke-nested-boot-hybrid: build ## cella hosts cella, the outer guest networked, the inner airgapped
+	$(LOG)
+	$(SCRIPTS)/test/nested-boot.sh hybrid
+
+smoke-nested-boot-www: build ## cella hosts cella, both layers networked (the outer init pings the inner guest)
+	$(LOG)
+	$(SCRIPTS)/test/nested-boot.sh www
+
+smoke-nested-boot: smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www ## All three nested variants
 
 smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	$(LOG)
