@@ -76,27 +76,43 @@ layers. The outer init prints cella-nested lines only, thus a
 cella-rootfs line can come from the inner guest alone. The test
 greps for that line.
 
-## Verdicts
+## Variants and verdicts
 
-- **PASS**: "cella-rootfs: init running" appears within 90 s.
-- **SKIP**: the outer guest has no /dev/kvm. That host does not offer
-  virtualization one layer deeper. The test also skips without host
-  /dev/kvm access or without the nested artifacts.
-- **FAIL**: anything else within the timeout. The serial log and the
-  stderr of the outer cella stay on disk for the diagnosis.
+Three variants cover the three network shapes. Each variant checks
+each layer that it networks.
+
+| Variant   | Outer guest        | Inner guest        | PASS needs |
+|-----------|--------------------|--------------------|------------|
+| airgapped | no TAP             | block device only  | the inner boot line |
+| hybrid    | TAP + in-kernel IP | block device only  | + an ICMP reply from the outer guest |
+| www       | TAP + in-kernel IP | TAP + in-kernel IP | + an ICMP reply from the inner guest |
+
+In the www variant the inner cella creates its TAP inside the outer
+guest when it opens /dev/net/tun. The outer init gives the interface
+an address and pings the inner guest. The packet path is: outer init
+-> tap0 -> inner cella virtio-net -> inner guest kernel -> back.
+
+- **SKIP**: the outer guest has no /dev/kvm (that host does not offer
+  virtualization one layer deeper), no host /dev/kvm access, no
+  nested artifacts, or no TAP for a networked variant.
+- **FAIL**: an incomplete checklist within the timeout. The serial
+  log and the stderr of the outer cella stay on disk.
 
 ## Results (2026-08-30)
 
-| Machine    | Depth for the inner guest | Result |
-|------------|---------------------------|--------|
-| nested KVM | 3 hypervisor layers       | PASS   |
-| bare metal | 2 hypervisor layers       | pending |
+| Machine    | Depth for the inner guest | airgapped | hybrid | www |
+|------------|---------------------------|-----------|--------|-----|
+| nested KVM | 3 hypervisor layers       | PASS      | PASS   | PASS |
+| bare metal | 2 hypervisor layers       | pending   | pending | pending |
 
 ## Reproduce
 
 ```
-make dist-nested        # build the nested artifacts (needs the toolbox)
-make smoke-nested-boot  # the test; needs only the artifacts and /dev/kvm
+make dist-nested                  # build the nested artifacts (needs the toolbox)
+make smoke-nested-boot            # all three variants
+make smoke-nested-boot-airgapped  # one variant at a time
+make smoke-nested-boot-hybrid
+make smoke-nested-boot-www
 ```
 
 ## Next steps
