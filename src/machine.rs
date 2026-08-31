@@ -1010,3 +1010,94 @@ fn selftest_cycle() -> Result<(), String> {
     step("destroy", destroy("m1"))?;
     Ok(())
 }
+
+// --- list and info ----------------------------------------------------
+
+/// The observable state of a machine, from facts on disk.
+pub fn state_of(name: &str) -> &'static str {
+    if is_running(name) {
+        "running"
+    } else if is_frozen(name) {
+        "frozen"
+    } else {
+        "created"
+    }
+}
+
+/// One line per machine, the arrangement of docker and podman ps.
+pub fn list() -> Result<(), String> {
+    let dir = home().join("machines");
+    let mut names: Vec<String> = match fs::read_dir(&dir) {
+        Ok(entries) => entries
+            .flatten()
+            .filter(|e| e.path().join("manifest.json").is_file())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    println!(
+        "{:<20} {:<9} {:>7} {:>7}  {:<10} {:<5} {:<10} {:<10}",
+        "NAME", "STATE", "PID", "MEM", "NET", "ROOT", "KERNEL", "ROOTFS"
+    );
+    for name in names {
+        let Ok(m) = read_manifest(&name) else {
+            println!("{name:<20} (unreadable manifest)");
+            continue;
+        };
+        let pid = fs::read_to_string(pid_path(&name))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "-".to_string());
+        println!(
+            "{:<20} {:<9} {:>7} {:>6}M  {:<10} {:<5} {:<10} {:<10}",
+            name,
+            state_of(&name),
+            if is_running(&name) { pid } else { "-".into() },
+            m.mem_mb,
+            m.net,
+            m.root,
+            m.kernel,
+            m.rootfs
+        );
+    }
+    Ok(())
+}
+
+/// Everything about one machine: the manifest, the state, and the
+/// files with their sizes.
+pub fn info(name: &str) -> Result<(), String> {
+    let m = read_manifest(name)?;
+    let dir = machine_dir(name);
+    println!("name:    {}", m.name);
+    println!("state:   {}", state_of(name));
+    if is_running(name) {
+        if let Ok(pid) = fs::read_to_string(pid_path(name)) {
+            println!("pid:     {}", pid.trim());
+        }
+    }
+    println!(
+        "kernel:  {} ({})",
+        m.kernel,
+        kernel_path(&m.kernel).display()
+    );
+    println!("rootfs:  {}", m.rootfs);
+    println!("mem_mb:  {}", m.mem_mb);
+    println!("net:     {}", m.net);
+    println!("root:    {}", m.root);
+    println!("dir:     {}", dir.display());
+    println!("files:");
+    let mut entries: Vec<_> = fs::read_dir(&dir)
+        .map_err(|e| format!("reading {}: {e}", dir.display()))?
+        .flatten()
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let size = e.metadata().map(|md| md.len()).unwrap_or(0);
+        println!(
+            "  {:<16} {:>12} bytes",
+            e.file_name().to_string_lossy(),
+            size
+        );
+    }
+    Ok(())
+}

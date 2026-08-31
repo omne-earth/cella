@@ -25,7 +25,10 @@ grep -q '"mem_mb": 128' "$CELLA_HOME/machines/m1/manifest.json" \
 
 "$BIN" create m1 2>/dev/null && { echo "FAIL: a second create must refuse"; exit 1; }
 
+"$BIN" list | grep -q "m1.*created" || { echo "FAIL: list does not show the machine"; exit 1; }
+"$BIN" info m1 | grep -q "state:   created" || { echo "FAIL: info does not show the state"; exit 1; }
+
 "$BIN" destroy m1 >/dev/null
 [ ! -d "$CELLA_HOME/machines/m1" ] || { echo "FAIL: destroy left the directory"; exit 1; }
 
-echo "PASS: build, create, refuse-duplicate, destroy"
+echo "PASS: build, create, list, info, refuse-duplicate, destroy"

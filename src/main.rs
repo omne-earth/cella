@@ -127,6 +127,13 @@ fn usage_error(msg: &str) -> ! {
 /// selects a verb; anything else falls through to the legacy flag
 /// interface, which the probes and the test scripts use.
 fn run_verb(verb: &str, args: &[String]) -> ! {
+    // A verb is a CLI citizen: `cella list | head` must not panic.
+    // Rust ignores SIGPIPE by default, and println then panics on a
+    // closed pipe; the default disposition ends the process quietly.
+    // SAFETY: setting a signal disposition before any other work.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let ok = match verb {
         "build" => match args {
             [axis, flavor] => machine::build(axis, flavor),
@@ -203,6 +210,14 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             [name] => machine::enter(name),
             _ => Err("usage: cella enter <name>".to_string()),
         },
+        "list" => match args {
+            [] => machine::list(),
+            _ => Err("usage: cella list".to_string()),
+        },
+        "info" => match args {
+            [name] => machine::info(name),
+            _ => Err("usage: cella info <name>".to_string()),
+        },
         "selftest" => machine::selftest(),
         "help" | "--help" | "-h" => {
             print_help();
@@ -227,6 +242,8 @@ fn print_help() {
          \x20 cella thaw <name>                      resume the instant\n\
          \x20 cella stop <name>                      end it fast, clear the transients\n\
          \x20 cella destroy <name>                   delete it, once and for all\n\
+         \x20 cella list                             every machine, one line each\n\
+         \x20 cella info <name>                      everything about one machine\n\
          \x20 cella selftest                         run the lifecycle cycle end to end\n\n\
          create options: --kernel F --rootfs F --mem-mb N --net TAP|auto|none --root rw|ro\n\
          Defaults live in ~/.cella/config.json; flags override them.\n\n\
@@ -251,6 +268,8 @@ fn main() {
                 | "freeze"
                 | "thaw"
                 | "enter"
+                | "list"
+                | "info"
                 | "selftest"
                 | "help"
                 | "--help"
