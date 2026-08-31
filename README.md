@@ -179,20 +179,25 @@ mkfs.ext4 rootfs.img
 ## Run
 
 ```sh
-make init          # once per host: deps, toolbox, tap0, dist
-make demo          # the chamber, narrated: a shell freezes mid-conversation and wakes intact
-make boot          # a detached jailed guest with a shell, state in ./vm1 (VM_DIR=... for another)
-make enter         # attach to its serial console (detach: Ctrl-b d)
-make freeze        # freeze it (SIGUSR1)
-make thaw          # resume it, exactly where it stopped -- enter again: same shell, same instant
+make install       # cella -> ~/.local/bin
+cella build kernel canonical && cella build rootfs cella
+cella create m1    # stage a machine (defaults from ~/.cella/config.json)
+cella start m1     # run it: detached, jailed, ready in milliseconds
+cella enter m1     # your terminal on its serial console (detach: Ctrl-] or exit)
+cella freeze m1    # the machine becomes files
+cella thaw m1      # the same machine, the same instant
+cella list         # every machine, one line each
+cella stop m1 && cella destroy m1
+cella selftest     # the whole cycle proves itself
 ```
 
-The guest runs detached in a tmux session whose pane is the serial
-console; the console transcript lands in `.logs/`. `boot` copies the
-interactive image (`rootfs-cella`, the latest cella mvp image) into
-the state directory on the first run: a guest owns its disk. NET=none
-boots without the TAP, for a second concurrent guest. The equivalent
-by hand:
+The machine lifecycle is the interface (see `docs/LIFECYCLE.md`).
+`make demo` narrates the freeze and the thaw end to end; `make boot`,
+`make enter`, `make freeze`, `make thaw`, and `make remove` are thin
+wrappers over the verbs for one default machine (`VM=<name>` to pick
+another). A machine lives at `~/.cella/machines/<name>`: its manifest,
+its own disk, and -- while frozen -- its RAM image and sidecar. The
+flag interface below remains for the probes and the tests:
 
 ```sh
 make dist          # or use your own kernel/disk

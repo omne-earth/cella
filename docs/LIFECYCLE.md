@@ -174,3 +174,9 @@ and after, and the results land in the documents. Sequence:
 
 Each step is a commit series with green batteries on both machines
 before the next step begins.
+
+Status (2026-08-31): steps 1 through 4 are done. The verbs run --
+build (seeded from dist/), create, start, enter, freeze, thaw, stop,
+destroy, list, info, selftest -- and the make run targets are thin
+wrappers over them. tmux left the dependency list. Step 5 (the native
+build; dist/ retires) remains.

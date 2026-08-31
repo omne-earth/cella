@@ -56,9 +56,14 @@ help: ## Show this help
 
 # --- Build ------------------------------------------------------------
 
-build: ## Release build (target/release/cella)
+# The development binary, as a real file target: the wrappers depend
+# on the file, and cargo runs only when a source changed.
+CELLA_DEV := target/release/cella
+$(CELLA_DEV): $(shell find src -name '*.rs') Cargo.toml Cargo.lock
 	$(LOG)
 	$(CARGO) build --release
+
+build: $(CELLA_DEV) ## Release build (target/release/cella)
 
 debug: ## Debug build (target/debug/cella), faster to compile
 	$(LOG)
@@ -78,7 +83,7 @@ build-static: .static ## Static cella + probe for the nested rootfs, built insid
 
 install: build ## Install cella to ~/.local/bin, and add it to PATH in ~/.bashrc when absent
 	$(LOG)
-	install -D -m 0755 target/release/cella $$HOME/.local/bin/cella
+	install -D -m 0755 $(CELLA_DEV) $$HOME/.local/bin/cella
 	case ":$$PATH:" in
 	*":$$HOME/.local/bin:"*) echo "cella: ~/.local/bin is already on PATH" ;;
 	*)
@@ -126,7 +131,7 @@ selftest: build ## Sanity-run the seccomp self-test binary directly (see also: m
 	# This binary must exit 159 (SIGSYS). `set -e` stops a recipe at such
 	# an exit, thus the code takes the status with `|| status=$$?`.
 	status=0
-	./target/release/cella --selftest-seccomp || status=$$?
+	$(CELLA_DEV) --selftest-seccomp || status=$$?
 	if [ $$status -eq 159 ]; then
 		echo "OK: killed by SIGSYS as expected (exit $$status)"
 	else
@@ -151,97 +156,46 @@ test: check lint unit-test integration-test test-jail test-seccomp test-machine 
 	echo ""
 	echo "=== make test: all no-KVM checks passed ==="
 
-# --- Run: a jailed guest in the foreground ---------------------------
-
-# The guest address on the TAP subnet, for the in-kernel ip= config.
-CELLA_GUEST_IP ?= 192.168.200.2
-# The state directory of the guest. One directory is one guest.
-VM_DIR ?= vm1
-# NET=none boots without the TAP. A persistent TAP admits one guest at
-# a time, thus a second concurrent guest must run without the network.
-NET ?= tap
-# DIAG=1 adds cella_diag to the kernel command line: the interactive
-# image then prints its heartbeat and its diagnostic listings on the
-# console. The demo needs them; an interactive session does not.
-DIAG ?= 0
-# ROOT=ro mounts the root filesystem read-only. A guest that must
-# survive a freeze and a thaw needs this today: the freeze does not
-# save the virtio device state, and the first post-thaw disk write
-# hangs (see docs/FREEZE-THAW.md, "Next steps: virtio state").
-ROOT ?= rw
+# --- Run: the machine lifecycle, through the verbs -------------------
+#
+# The verbs are the interface (see docs/LIFECYCLE.md); these targets
+# are convenience wrappers over one default machine. VM names it, and
+# CREATE_FLAGS feeds cella create on the first boot.
+VM ?= vm1
+CREATE_FLAGS ?=
 
 $(DIST)/rootfs-cella.ext4: $(SCRIPTS)/build/rootfs-cella.sh $(SCRIPTS)/build/assets-cella.sh $(DIST)/rootfs.ext4 | .toolbox
 	$(LOG)
 	rm -f $@
 	$(SCRIPTS)/build/assets-cella.sh
 
-boot: build dist $(DIST)/rootfs-cella.ext4 ## Boot a detached jailed guest at $(VM_DIR) -- or thaw it. Attach: make enter. Console log: .logs/
+boot: $(CELLA_DEV) ## Create (first time) and run the machine $(VM) -- or thaw it when frozen
 	$(LOG)
-	@if ! command -v tmux >/dev/null; then echo "cella: tmux not found -- run: make init"; exit 1; fi
-	if tmux has-session -t "cella-$(VM_DIR)" 2>/dev/null; then \
-		echo "cella: a guest already runs at $(VM_DIR) -- attach with: make enter"; exit 1; fi
-	mkdir -p $(VM_DIR)
-	# A guest owns its disk. The first boot copies the interactive
-	# image (rootfs-cella, the latest cella mvp image) into the state
-	# directory; the jail binds dist/ read-only.
-	[ -f $(VM_DIR)/disk.img ] || cp dist/rootfs-cella.ext4 $(VM_DIR)/disk.img
-	HOST_IP="$(CELLA_TAP_CIDR)"; HOST_IP="$${HOST_IP%%/*}"
-	if [ "$(NET)" = none ]; then
-		TAPARGS=""
-		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda $(ROOT) virtio_mmio.device=4K@0xd0000000:5"
+	$(CELLA_DEV) create $(VM) $(CREATE_FLAGS) 2>/dev/null || true
+	if [ -f "$$HOME/.cella/machines/$(VM)/state" ]; then
+		$(CELLA_DEV) thaw $(VM)
 	else
-		TAPARGS="--tap $(CELLA_TAP)"
-		CMD="$$(./target/release/cella --print-default-cmdline) root=/dev/vda $(ROOT) virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 ip=$(CELLA_GUEST_IP)::$$HOST_IP:255.255.255.0::eth0:off"
+		$(CELLA_DEV) start $(VM)
 	fi
-	[ "$(DIAG)" = 1 ] && CMD="$$CMD cella_diag" || true
-	# Detached: the guest runs in a tmux session, and the pane is the
-	# serial console. pipe-pane mirrors the console into .logs/.
-	# The pane carries the guest serial console only. The stderr of the
-	# VMM (timing, restore, warm lines) goes to its own log: a reader of
-	# the console -- a person, or an agent whose world is this pane --
-	# must not see the instrumentation of the operator.
-	tmux new-session -d -s "cella-$(VM_DIR)" \
-		"$(SCRIPTS)/jail.sh --state-dir $(VM_DIR) --kernel dist/bzImage --disk $(VM_DIR)/disk.img $$TAPARGS --mem-mb 256 --cmdline '$$CMD' 2>> $(LOGDIR)/vmm-$(VM_DIR)-$$(date +%Y%m%d-%H%M%S).log"
-	tmux pipe-pane -t "cella-$(VM_DIR)" -o "cat >> $(LOGDIR)/console-$(VM_DIR)-$$(date +%Y%m%d-%H%M%S).log"
-	# Do not report a running guest before the guest survives its start:
-	# a stale sidecar or a busy TAP kills it within the first second.
-	sleep 1
-	if ! tmux has-session -t "cella-$(VM_DIR)" 2>/dev/null; then
-		echo "cella: the guest exited at start -- last console lines:"
-		tail -n 5 $$(ls -t $(LOGDIR)/console-$(VM_DIR)-* | head -1)
-		exit 1
-	fi
-	echo "cella: guest running detached at $(VM_DIR)"
-	echo "cella: attach:  make enter    (detach again: Ctrl-b d)"
-	echo "cella: freeze:  make freeze   thaw: make thaw"
+	echo "cella: attach with: make enter (or: cella enter $(VM))"
 
-enter: ## Attach to the console of the running guest at $(VM_DIR) (detach: Ctrl-b d)
-	@tmux has-session -t "cella-$(VM_DIR)" 2>/dev/null \
-		|| { echo "cella: no running guest at $(VM_DIR) -- run: make boot (or: make thaw)"; exit 1; }
-	@tmux attach -t "cella-$(VM_DIR)"
+enter: $(CELLA_DEV) ## Attach to the console of $(VM) (detach: Ctrl-] or exit)
+	@$(CELLA_DEV) enter $(VM)
 
-thaw: ## Thaw the frozen guest at $(VM_DIR), detached (fails when no frozen state exists; boot also thaws)
+freeze: $(CELLA_DEV) ## Freeze $(VM); resume with: make thaw
 	$(LOG)
-	[ -f $(VM_DIR)/state ] || { echo "cella: no frozen state in $(VM_DIR) -- run: make boot, then: make freeze"; exit 1; }
-	$(MAKE) boot
+	$(CELLA_DEV) freeze $(VM)
 
-remove: ## Discard the guest at $(VM_DIR): end its session and delete its state directory
+thaw: $(CELLA_DEV) ## Thaw the frozen machine $(VM)
 	$(LOG)
-	tmux kill-session -t "cella-$(VM_DIR)" 2>/dev/null \
-		&& echo "cella: ended the session of $(VM_DIR)" \
-		|| echo "cella: no running guest at $(VM_DIR)"
-	rm -rf $(VM_DIR)
-	echo "cella: removed $(VM_DIR)"
+	$(CELLA_DEV) thaw $(VM)
 
-freeze: ## Freeze the running guest (SIGUSR1); thaw it with: make thaw
+remove: $(CELLA_DEV) ## Discard $(VM): stop it and destroy it
 	$(LOG)
-	# -x matches the process name exactly. A -f pattern would match the
-	# recipe shell itself, whose command line contains the same text.
-	pkill -USR1 -x cella \
-		&& echo "cella: freeze signal sent -- the process exits once the state file is written" \
-		|| { echo "cella: no running cella process"; exit 1; }
+	$(CELLA_DEV) stop $(VM) 2>/dev/null || true
+	$(CELLA_DEV) destroy $(VM)
 
-demo: build dist $(DIST)/rootfs-cella.ext4 ## End-to-end demonstration: boot a shell, store a value, freeze, thaw, read the value back. Tears down after.
+demo: $(CELLA_DEV) $(DIST)/rootfs-cella.ext4 ## End-to-end demonstration: a shell learns a value, freezes, thaws, and remembers. Tears down after.
 	$(LOG)
 	$(SCRIPTS)/test/demo.sh
 
@@ -284,9 +238,9 @@ smoke-nested-boot-www: build ## cella hosts cella, both layers networked (the ou
 
 smoke-nested-boot: smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www ## All three nested variants
 
-smoke-machine: build ## The lifecycle cycle with a real guest: cella selftest (the first migrated target)
+smoke-machine: $(CELLA_DEV) ## The lifecycle cycle with a real guest: cella selftest (the first migrated target)
 	$(LOG)
-	./target/release/cella selftest
+	$(CELLA_DEV) selftest
 
 smoke-net: build dist ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	$(LOG)

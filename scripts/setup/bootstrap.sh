@@ -29,7 +29,6 @@ PACKAGES=(
     iputils
     python3
     podman toolbox
-    tmux
 )
 
 echo "cella: installing packages: ${PACKAGES[*]}"
