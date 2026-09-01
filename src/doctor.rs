@@ -1,0 +1,269 @@
+//! cella doctor: the host judged, one fact per line.
+//!
+//! check reports host facts and exits nonzero on any FAIL. fix
+//! repairs what the current uid can, and prints the exact command
+//! for the rest. verify recomputes golden digests against their
+//! manifests -- build makes, doctor judges. Facts that need root to
+//! inspect (nft tables) degrade to a note instead of a guess.
+//! Becomes its own thin CLI at the split (see TASKS.md).
+
+use std::fs;
+use std::path::Path;
+
+use crate::{golden, machine};
+
+struct Report {
+    failed: u32,
+}
+
+impl Report {
+    fn ok(&mut self, what: &str, detail: &str) {
+        println!("  ok    {what}: {detail}");
+    }
+    fn fail(&mut self, what: &str, detail: &str) {
+        println!("  FAIL  {what}: {detail}");
+        self.failed += 1;
+    }
+    fn note(&mut self, what: &str, detail: &str) {
+        println!("  note  {what}: {detail}");
+    }
+}
+
+fn run_out(cmd: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(cmd).args(args).output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// The host facts. Returns the number of FAIL lines.
+pub fn check() -> u32 {
+    let mut r = Report { failed: 0 };
+    println!("cella doctor: host facts");
+
+    // /dev/kvm: the one device that makes a machine possible.
+    let kvm = Path::new("/dev/kvm");
+    if !kvm.exists() {
+        r.fail(
+            "/dev/kvm",
+            "absent -- enable virtualization, load kvm_intel/kvm_amd",
+        );
+    } else {
+        let rw = unsafe { libc::access(c"/dev/kvm".as_ptr(), libc::R_OK | libc::W_OK) } == 0;
+        if rw {
+            r.ok("/dev/kvm", "read-write");
+        } else {
+            r.fail("/dev/kvm", "present but not read-write for this user");
+        }
+    }
+
+    // bwrap: the jail of every VMM.
+    if run_out("bwrap", &["--version"]).is_some() {
+        r.ok("bwrap", "present");
+    } else {
+        r.fail("bwrap", "not found -- run: make install");
+    }
+
+    // Nested KVM: required by the nested and inception images only.
+    let nested = ["kvm_intel", "kvm_amd"].iter().any(|m| {
+        fs::read_to_string(format!("/sys/module/{m}/parameters/nested"))
+            .map(|v| {
+                let v = v.trim();
+                v == "Y" || v == "1"
+            })
+            .unwrap_or(false)
+    });
+    if nested {
+        r.ok("nested kvm", "enabled");
+    } else {
+        r.note(
+            "nested kvm",
+            "off -- nested/inception images need it, the rest do not",
+        );
+    }
+
+    // The tap pool: existence, address, and the deterministic MAC.
+    let mut taps = 0u32;
+    if let Ok(entries) = fs::read_dir("/sys/class/net") {
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                n.strip_prefix("tap")
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .map(|_| n)
+            })
+            .collect();
+        names.sort();
+        for tap in names {
+            taps += 1;
+            let n: u32 = tap.strip_prefix("tap").unwrap().parse().unwrap();
+            let mac = fs::read_to_string(format!("/sys/class/net/{tap}/address"))
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let want_mac = format!("02:ce:11:a0:00:{n:02x}");
+            let host_ip = format!("192.168.{}.1", 200 + n);
+            let addressed = run_out("ip", &["-br", "addr", "show", &tap])
+                .map(|s| s.contains(&host_ip))
+                .unwrap_or(false);
+            match (mac == want_mac, addressed) {
+                (true, true) => r.ok(&tap, &format!("{host_ip}/24, mac {mac}")),
+                (_, false) => r.fail(&tap, &format!("missing {host_ip} -- run: sudo cella setup net")),
+                (false, true) => r.note(&tap, &format!("mac {mac}, not the convention {want_mac} (predates it, or hand-made); a recreation will differ")),
+            }
+        }
+    }
+    if taps == 0 {
+        r.fail("tap pool", "no taps -- run: sudo cella setup net --taps 4");
+    }
+
+    // Forwarding: guest egress dies without it.
+    match fs::read_to_string("/proc/sys/net/ipv4/ip_forward") {
+        Ok(v) if v.trim() == "1" => r.ok("ip_forward", "on"),
+        _ => r.fail("ip_forward", "off -- run: sudo cella setup net"),
+    }
+
+    // The nft tables need root to inspect: state the fact, no guess.
+    if unsafe { libc::geteuid() } == 0 {
+        match run_out("nft", &["list", "table", "inet", "cella_nat"]) {
+            Some(_) => r.ok("nat", "table inet cella_nat present"),
+            None => r.fail("nat", "table inet cella_nat absent -- run: cella setup net"),
+        }
+    } else {
+        r.note(
+            "nat",
+            "needs root to inspect -- run: sudo cella doctor check",
+        );
+    }
+
+    // The goldens, and their manifests.
+    for (axis, flavor) in [
+        ("kernel", "canonical"),
+        ("rootfs", "canonical"),
+        ("rootfs", "cella"),
+    ] {
+        let p = if axis == "kernel" {
+            machine::kernel_path(flavor)
+        } else {
+            machine::rootfs_path(flavor)
+        };
+        let label = format!("{axis} {flavor}");
+        if !p.is_file() {
+            r.fail(
+                &label,
+                &format!("absent -- run: cella build {axis} {flavor}"),
+            );
+        } else if !golden::manifest_path(&p).is_file() {
+            r.fail(
+                &label,
+                &format!("no manifest -- run: cella build {axis} {flavor}"),
+            );
+        } else {
+            r.ok(&label, "present, with manifest");
+        }
+    }
+
+    // The build toolbox: only the build verb needs it.
+    match run_out("podman", &["container", "exists", "cella-build"]) {
+        Some(_) => r.ok("toolbox", "cella-build present"),
+        None => r.note(
+            "toolbox",
+            "cella-build absent -- the build verb creates it on first use",
+        ),
+    }
+
+    if r.failed == 0 {
+        println!("cella doctor: all facts hold");
+    } else {
+        println!("cella doctor: {} fact(s) FAIL", r.failed);
+    }
+    r.failed
+}
+
+/// Repair what this uid can; print the exact command for the rest.
+/// Today every repair either belongs to the build verb (which heals
+/// itself on the next call) or needs root -- thus fix reports, and
+/// escalates nothing.
+pub fn fix() -> u32 {
+    let failed = check();
+    if failed > 0 {
+        println!();
+        println!("cella doctor: the commands above repair each FAIL; doctor escalates nothing");
+    }
+    failed
+}
+
+/// Recompute the digest of each golden against its manifest. A
+/// target narrows it: `verify kernel canonical`. Machine layers
+/// join when their manifests carry digests (the universe family).
+pub fn verify(target: Option<(&str, &str)>) -> u32 {
+    let all = [
+        ("kernel", "canonical"),
+        ("kernel", "nested"),
+        ("rootfs", "canonical"),
+        ("rootfs", "cella"),
+        ("rootfs", "nested"),
+        ("rootfs", "inception"),
+    ];
+    let mut failed = 0u32;
+    let mut seen = 0u32;
+    println!("cella doctor: verify");
+    for (axis, flavor) in all {
+        if let Some((a, f)) = target {
+            if a != axis || f != flavor {
+                continue;
+            }
+        }
+        let p = if axis == "kernel" {
+            machine::kernel_path(flavor)
+        } else {
+            machine::rootfs_path(flavor)
+        };
+        if !p.is_file() {
+            if target.is_some() {
+                println!("  FAIL  {axis} {flavor}: artifact absent");
+                failed += 1;
+            }
+            continue;
+        }
+        seen += 1;
+        let mpath = golden::manifest_path(&p);
+        let Ok(text) = fs::read_to_string(&mpath) else {
+            println!("  FAIL  {axis} {flavor}: no manifest -- run: cella build {axis} {flavor}");
+            failed += 1;
+            continue;
+        };
+        let Some(recorded) = golden::field(&text, "sha3_256") else {
+            println!("  FAIL  {axis} {flavor}: manifest carries no sha3_256");
+            failed += 1;
+            continue;
+        };
+        match golden::sha3_256_hex(&p) {
+            Ok(actual) if actual == recorded => {
+                println!("  ok    {axis} {flavor}: sha3-256 {}", &actual[..16]);
+            }
+            Ok(actual) => {
+                println!(
+                    "  FAIL  {axis} {flavor}: digest mismatch (manifest {}.., artifact {}..)",
+                    &recorded[..16],
+                    &actual[..16]
+                );
+                failed += 1;
+            }
+            Err(e) => {
+                println!("  FAIL  {axis} {flavor}: {e}");
+                failed += 1;
+            }
+        }
+    }
+    if seen == 0 && failed == 0 {
+        println!("  note  nothing to verify -- no goldens found");
+    }
+    if failed == 0 {
+        println!("cella doctor: verified");
+    } else {
+        println!("cella doctor: {failed} FAIL");
+    }
+    failed
+}

@@ -10,7 +10,7 @@
 //! plumbing that ties memory.rs / boot/x86_64.rs / vcpu.rs / devices/ /
 //! freeze.rs / seccomp.rs together.
 
-use cella::{boot, config, devices, freeze, machine, memory, seccomp, vcpu, warm};
+use cella::{boot, config, devices, doctor, freeze, machine, memory, seccomp, vcpu, warm};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -231,6 +231,22 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             _ => Err("usage: cella info <name>".to_string()),
         },
         "selftest" => machine::selftest(),
+        "doctor" => {
+            let failed = match args.first().map(|s| s.as_str()) {
+                Some("check") | None => doctor::check(),
+                Some("fix") => doctor::fix(),
+                Some("verify") => match &args[1..] {
+                    [] => doctor::verify(None),
+                    [axis, flavor] => doctor::verify(Some((axis, flavor))),
+                    _ => usage_error("usage: cella doctor verify [kernel|rootfs <flavor>]"),
+                },
+                _ => usage_error("usage: cella doctor [check|fix|verify]"),
+            };
+            if failed > 0 {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         "setup" => match args.first().map(|s| s.as_str()) {
             Some("net") => {
                 let mut taps = 4u32;
@@ -312,6 +328,7 @@ fn main() {
                 | "info"
                 | "selftest"
                 | "setup"
+                | "doctor"
                 | "help"
                 | "--help"
                 | "-h"

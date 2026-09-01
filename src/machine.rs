@@ -508,11 +508,6 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
             "cella: {axis} {flavor} already built at {} (use --fresh to rebuild)",
             out.display()
         );
-        // A golden from before the manifests gets one now, from the
-        // artifact as it stands.
-        if !crate::golden::manifest_path(&out).is_file() {
-            write_golden_manifest(axis, flavor, &out)?;
-        }
         return Ok(());
     }
     match (axis, flavor) {
@@ -1063,6 +1058,13 @@ fn read_lossy(p: &Path) -> String {
 }
 
 pub fn selftest() -> Result<(), String> {
+    // Doctor first: a lifecycle failure must never be a disguised
+    // environment failure. The facts print either way; only the
+    // /dev/kvm and bwrap facts gate the run (the rest of the checks
+    // may FAIL on a host that can still run an airgapped machine).
+    println!("== step 0: doctor check ==");
+    crate::doctor::check();
+    println!();
     let kvm_ok = fs::OpenOptions::new()
         .read(true)
         .write(true)

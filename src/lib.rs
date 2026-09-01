@@ -7,6 +7,7 @@ pub mod boot;
 pub mod build;
 pub mod config;
 pub mod devices;
+pub mod doctor;
 pub mod freeze;
 pub mod golden;
 pub mod machine;
