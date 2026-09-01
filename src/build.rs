@@ -16,7 +16,7 @@ use std::process::Command;
 /// pins for the remaining script-driven flavors during the migration.
 pub const KERNEL_VERSION: &str = "7.2.2";
 
-fn repo_root() -> PathBuf {
+pub fn repo_root() -> PathBuf {
     // The build reads its fragments from the repository. A build from
     // an installed binary needs the repository checkout as the
     // current directory, and says so when the fragments are absent.

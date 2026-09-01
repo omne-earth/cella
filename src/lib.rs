@@ -8,6 +8,7 @@ pub mod build;
 pub mod config;
 pub mod devices;
 pub mod freeze;
+pub mod golden;
 pub mod machine;
 pub mod memory;
 pub mod seccomp;

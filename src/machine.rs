@@ -508,6 +508,11 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
             "cella: {axis} {flavor} already built at {} (use --fresh to rebuild)",
             out.display()
         );
+        // A golden from before the manifests gets one now, from the
+        // artifact as it stands.
+        if !crate::golden::manifest_path(&out).is_file() {
+            write_golden_manifest(axis, flavor, &out)?;
+        }
         return Ok(());
     }
     match (axis, flavor) {
@@ -522,7 +527,39 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
         _ => Err(format!(
             "unknown build target {axis:?} {flavor:?} -- axes: kernel, rootfs; see docs/LIFECYCLE.md"
         )),
-    }
+    }?;
+    write_golden_manifest(axis, flavor, &out)
+}
+
+/// The manifest, after every successful build, in one place. The
+/// build inputs pinned per axis: the kernel fragments for a kernel,
+/// the init script and the busybox fragment for a rootfs.
+fn write_golden_manifest(axis: &str, flavor: &str, artifact: &Path) -> Result<(), String> {
+    let root = crate::build::repo_root();
+    let b = root.join("scripts/build");
+    let sources: Vec<(&str, &str)> = vec![
+        ("kernel", crate::build::KERNEL_VERSION),
+        ("busybox", crate::build::BUSYBOX_VERSION),
+        ("bash", crate::build::GUEST_BASH_VERSION),
+    ];
+    let inputs: Vec<std::path::PathBuf> = match axis {
+        "kernel" => vec![
+            b.join("kernel-fragment.config"),
+            b.join("kernel-fragment-nested.config"),
+        ],
+        _ => vec![
+            b.join(format!("rootfs-{flavor}.sh")),
+            b.join("rootfs.sh"),
+            b.join("busybox-fragment.config"),
+        ],
+    };
+    let input_refs: Vec<&Path> = inputs.iter().map(|p| p.as_path()).collect();
+    crate::golden::write_manifest(artifact, axis, flavor, &sources, &input_refs)?;
+    println!(
+        "cella: wrote {} (sha3-256, read-only)",
+        crate::golden::manifest_path(artifact).display()
+    );
+    Ok(())
 }
 
 // --- start and stop ---------------------------------------------------
