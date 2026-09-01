@@ -222,6 +222,7 @@ toolbox. The repository carries the build inputs, not the artifacts.
 | rootfs | canonical | busybox + the heartbeat init; the proof rootfs |
 | rootfs | cella     | + a shell on the serial console; diagnostics only when the command line asks |
 | rootfs | nested    | + a static cella and the canonical inner assets |
+| rootfs | gateway   | canonical + the appliance init: agent side from cella_pair=, plain forwarding (see docs/NETWORK-MODEL.md) |
 | rootfs | inception | nested + the static cella-probe |
 
 ## Process management, daemonless

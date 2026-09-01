@@ -21,7 +21,9 @@ classes with the pinned guest kernel (7.2.2). The virtio transports
 now ride the freeze sidecar (format v7), the egress-hold surface --
 park, report, release, allow -- is in place (`docs/DEVICE-STATE.md`),
 and the universe family treats machines as artifacts: branch,
-archive, inspect (`docs/LIFECYCLE.md`).
+archive, inspect (`docs/LIFECYCLE.md`). The network model -- every
+machine shielded behind its own appliance -- is decided and being
+built (`docs/NETWORK-MODEL.md`).
 
 ## The machine lifecycle
 
@@ -158,6 +160,7 @@ tests/
   virtio_mmio.rs        virtio-mmio v2 protocol tests
 docs/
   LIFECYCLE.md          the verbs, the machine directory, the golden artifacts
+  NETWORK-MODEL.md      the decision record: always shielded, the membrane, the phases
   FREEZE-THAW.md        time and state across freeze/thaw: design, gates, measurements
   DEVICE-STATE.md       virtio state, the egress hold, the world-ratchet gate
   NESTED-BOOT.md        cella hosts cella: layers, the fix, the depth tables
@@ -168,7 +171,8 @@ scripts/
                         kernel-config-check.sh
   test/                 one script per system test: boot, thaw, net, demo,
                         device-state (the four acceptance gates), universe,
-                        nested-boot, inception, jail, seccomp, machine
+                        multinet, gateway, nested-boot, inception, jail,
+                        seccomp, machine
   utils/count_lines.py  source-vs-tests line counting for `make lines`
 security/profiles/<cli>/  seccomp + SELinux placeholders per thin CLI (shakedown fills them)
 selinux/cella.te.example  policy sketch, reference only
@@ -180,8 +184,8 @@ TESTING.md              what each target verifies, and how to reproduce
 Line counts (`make lines`):
 
 ```
-SOURCE ONLY (src/, excluding inline #[cfg(test)])         8719
-SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)         9801
+SOURCE ONLY (src/, excluding inline #[cfg(test)])         9017
+SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)        10204
 ```
 
 The count now carries the probes (they moved into src/bin at the
