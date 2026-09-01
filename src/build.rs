@@ -16,7 +16,7 @@ use std::process::Command;
 /// pins for the remaining script-driven flavors during the migration.
 pub const KERNEL_VERSION: &str = "7.2.2";
 
-fn repo_root() -> PathBuf {
+pub fn repo_root() -> PathBuf {
     // The build reads its fragments from the repository. A build from
     // an installed binary needs the repository checkout as the
     // current directory, and says so when the fragments are absent.
@@ -597,14 +597,15 @@ fn bwrap_static() -> Result<PathBuf, String> {
     Ok(out)
 }
 
-/// The static binaries for the in-guest layers: cella and the clock
-/// probe, crt-static against glibc-static in the toolbox.
+/// The static binaries for the in-guest layers: cella and
+/// cella-probe, crt-static against glibc-static in the toolbox. One
+/// cargo invocation builds every bin of the package.
 fn build_static_binaries() -> Result<(PathBuf, PathBuf), String> {
     let root = repo_root();
-    println!("cella: building the static cella and the static probe");
+    println!("cella: building the static cella and the static cella-probe");
     let rustflags = "RUSTFLAGS=-C target-feature=+crt-static";
     run_in_toolbox_quiet(
-        "static cella",
+        "static binaries",
         &root,
         &[
             "env",
@@ -614,27 +615,10 @@ fn build_static_binaries() -> Result<(PathBuf, PathBuf), String> {
             "--release",
             "--target",
             "x86_64-unknown-linux-gnu",
-        ],
-    )?;
-    run_in_toolbox_quiet(
-        "static probe",
-        &root,
-        &[
-            "env",
-            rustflags,
-            "cargo",
-            "build",
-            "--release",
-            "--target",
-            "x86_64-unknown-linux-gnu",
-            "--manifest-path",
-            "probes/freeze-thaw-clock/Cargo.toml",
         ],
     )?;
     let bin = root.join("target/x86_64-unknown-linux-gnu/release/cella");
-    let probe = root.join(
-        "probes/freeze-thaw-clock/target/x86_64-unknown-linux-gnu/release/freeze-thaw-clock-probe",
-    );
+    let probe = root.join("target/x86_64-unknown-linux-gnu/release/cella-probe");
     for p in [&bin, &probe] {
         if !p.is_file() {
             return Err(format!("{} did not build", p.display()));
@@ -690,6 +674,20 @@ fn rootfs_nested_family(
     )?;
     fs::create_dir_all(nroot.join("root/.cella/kernel/canonical")).map_err(|e| e.to_string())?;
     fs::create_dir_all(nroot.join("root/.cella/rootfs/canonical")).map_err(|e| e.to_string())?;
+    // The manifests travel with the goldens: each layer verifies its
+    // inherited artifacts (cella doctor verify) before it boots an
+    // inner machine. Green-field: a golden without a manifest is a
+    // build error, not a heal case.
+    let inner_kernel_manifest = crate::golden::manifest_path(&inner_kernel);
+    let inner_rootfs_manifest = crate::golden::manifest_path(&inner_rootfs);
+    for m in [&inner_kernel_manifest, &inner_rootfs_manifest] {
+        if !m.is_file() {
+            return Err(format!(
+                "{} is absent -- rebuild the golden (cella build) so its manifest exists",
+                m.display()
+            ));
+        }
+    }
     let mut copies = vec![
         (bin, nroot.join("bin/cella"), 0o755),
         (
@@ -698,14 +696,24 @@ fn rootfs_nested_family(
             0o644,
         ),
         (
+            inner_kernel_manifest,
+            nroot.join("root/.cella/kernel/canonical/golden.json"),
+            0o444,
+        ),
+        (
             inner_rootfs,
             nroot.join("root/.cella/rootfs/canonical/rootfs.ext4"),
             0o644,
         ),
+        (
+            inner_rootfs_manifest,
+            nroot.join("root/.cella/rootfs/canonical/golden.json"),
+            0o444,
+        ),
         (init, nroot.join("sbin/init"), 0o755),
     ];
     if with_probe {
-        copies.push((probe, nroot.join("bin/freeze-thaw-clock-probe"), 0o755));
+        copies.push((probe, nroot.join("bin/cella-probe"), 0o755));
     }
     if with_jail {
         // The in-guest verbs run the same jail as the host.

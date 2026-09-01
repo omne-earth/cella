@@ -13,6 +13,16 @@ path = "src/lib.rs"
 name = "cella"
 path = "src/main.rs"
 
+# The thin CLIs (see TASKS.md, the CLI map). Each carries only its
+# own confinement; cella-network is the one CAP_NET_ADMIN holder.
+[[bin]]
+name = "cella-network"
+path = "src/bin/cella-network.rs"
+
+[[bin]]
+name = "cella-probe"
+path = "src/bin/cella-probe/main.rs"
+
 [dependencies]
 libc = "0.2"
 # Raw KVM ioctls/struct layouts are load-bearing correctness: a wrong struct
@@ -24,6 +34,10 @@ vm-memory = { version = "0.16", features = ["backend-mmap"] }
 linux-loader = { version = "0.13", features = ["bzimage", "elf"] }
 vm-superio = "0.8"
 virtio-queue = "0.14"
+# The one dependency beyond the KVM layer and libc: the golden
+# manifests carry sha3-256 digests, and the static in-guest binary
+# must compute them itself (no sha3 tool exists in the guest).
+sha3 = "0.10"
 
 [profile.release]
 panic = "abort"

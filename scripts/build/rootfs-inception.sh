@@ -20,7 +20,7 @@ export CELLA_TEST_TAP=none
 export CELLA_POST_THAW_SECS=0
 export TMPDIR=/tmp
 echo "cella-inception: starting the probe"
-/bin/freeze-thaw-clock-probe
+/bin/cella-probe freeze-thaw-clock
 echo "cella-inception: probe exited with code $?"
 # Keep the guest alive, so that the serial output stays readable.
 while true; do sleep 1; done

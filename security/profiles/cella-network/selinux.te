@@ -1,0 +1,4 @@
+# SELinux type enforcement for cella-network
+#
+# Placeholder. The path is the contract; the shakedown branch
+# writes the contents (see TASKS.md and selinux/cella.te.example).

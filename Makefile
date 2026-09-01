@@ -24,7 +24,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 .PHONY: help build install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested setup-tap \
-        boot enter freeze thaw remove demo smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
+        boot enter freeze thaw remove demo doctor smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
         clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -46,7 +46,7 @@ help: ## Show this help
 	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean|smoke-device-state|device-state-ac1|device-state-ac2|device-state-ac3|device-state-ac4):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
-	grep -hE '^(init|golden|golden-nested|setup-tap|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(init|golden|golden-nested|setup-tap|doctor|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Everything:"
 	grep -hE '^(test-all|clean|distclean|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -189,21 +189,18 @@ smoke-thaw: build golden ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -
 	#
 	# CELLA_OBSERVE_SECS=0 and CELLA_POST_THAW_SECS=0 leave out the two
 	# long measurements. Run the probes by hand for those.
-	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0 PROBE_CARGO_FLAGS=--release
-	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0 PROBE_CARGO_FLAGS=--release
+	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0
+	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0
 
-# Deliberately not golden-nested: at test time only the artifacts
-# matter, and the bare-metal machine builds or receives them once.
-# Build them with: make golden-nested (needs the toolbox).
-smoke-nested-boot-airgapped: build ## cella hosts cella, no network on either layer
+smoke-nested-boot-airgapped: build golden-nested ## cella hosts cella, no network on either layer
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh airgapped
 
-smoke-nested-boot-hybrid: build ## cella hosts cella, the outer guest networked, the inner airgapped
+smoke-nested-boot-hybrid: build golden-nested ## cella hosts cella, the outer guest networked, the inner airgapped
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh hybrid
 
-smoke-nested-boot-www: build ## cella hosts cella, both layers networked (the outer init pings the inner guest)
+smoke-nested-boot-www: build golden-nested ## cella hosts cella, both layers networked (the outer init pings the inner guest)
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh www
 
@@ -212,6 +209,11 @@ smoke-nested-boot: smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-ne
 smoke-machine: $(CELLA_DEV) ## The lifecycle cycle with a real guest: cella selftest (the first migrated target)
 	$(LOG)
 	$(CELLA_DEV) selftest
+
+doctor: $(CELLA_DEV) ## Judge the host and the goldens: cella doctor check + verify
+	$(LOG)
+	$(CELLA_DEV) doctor check
+	$(CELLA_DEV) doctor verify
 
 smoke-net: build golden ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
 	$(LOG)
@@ -282,9 +284,9 @@ kernel-config-check: ## Resolve kernel-fragment.config against defconfig and rep
 	$(LOG)
 	$(SCRIPTS)/build/kernel-config-check.sh
 
-setup-tap: build ## Provision the tap pool + NAT via the root verb (TAPS controls the pool size)
+setup-tap: build ## Provision the tap pool + NAT via cella-network (no sudo; make install granted the capability)
 	$(LOG)
-	sudo $(CELLA_DEV) setup net --taps $(TAPS)
+	target/release/cella-network setup --taps $(TAPS)
 
 # --- Everything -----------------------------------------------------
 
@@ -324,8 +326,8 @@ distclean: clean ## clean + remove built dist/ assets
 
 # --- Probes ---------------------------------------------------------
 #
-# To add a probe, make probes/<name>/ with its own Cargo.toml and
-# src/main.rs, and add a target here.
+# To add a probe, add a module under src/bin/cella-probe/ and a
+# subcommand in its main.rs, and add a target here.
 #
 # Parameters. Each is `?=`, thus the environment or the command line
 # takes precedence:
@@ -381,9 +383,6 @@ distclean: clean ## clean + remove built dist/ assets
 # absence of PVCLOCK_TSC_STABLE_BIT, which the host KVM owns and sets
 # only when the TSC of the host is stable.
 
-# Flags for the probe builds. A hand run uses the dev profile, which
-# compiles fast. smoke-thaw passes --release.
-PROBE_CARGO_FLAGS ?=
 CELLA_FROZEN_SECS ?= 6
 CELLA_POST_THAW_SECS ?= 30
 CELLA_TIME_ARGS ?=
@@ -392,17 +391,17 @@ CELLA_OBSERVE_SECS ?= 60
 export CELLA_FROZEN_SECS CELLA_POST_THAW_SECS CELLA_TIME_ARGS CELLA_EXTRA_CMDLINE
 export CELLA_OBSERVE_SECS
 
-probe-sregs: ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same* ioctl call? (no /dev/kvm needed beyond opening it; boots nothing, just exercises raw ioctls -- see probes/sregs/src/main.rs)
+probe-sregs: build ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same* ioctl call? (no /dev/kvm needed beyond opening it; boots nothing -- see src/bin/cella-probe/sregs.rs)
 	$(LOG)
-	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/sregs/Cargo.toml
+	target/release/cella-probe sregs
 
-probe-wallclock: build golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see probes/wallclock/src/main.rs)
+probe-wallclock: build golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see src/bin/cella-probe/wallclock.rs)
 	$(LOG)
-	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/wallclock/Cargo.toml
+	target/release/cella-probe wallclock
 
-probe-freeze-thaw-clock: build golden ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see probes/freeze-thaw-clock/src/main.rs)
+probe-freeze-thaw-clock: build golden ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see src/bin/cella-probe/freeze_thaw_clock.rs)
 	$(LOG)
-	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/freeze-thaw-clock/Cargo.toml
+	target/release/cella-probe freeze-thaw-clock
 
 # Findings from the 2026-08-30 investigation of the thaw delay:
 # - The excess across the freeze is a constant cost of each thaw. It does
@@ -435,13 +434,12 @@ probe-freeze-thaw-clock: build golden ## Does freeze/thaw leak real elapsed time
 #   crossing interval, because the wake-up is scheduled in the same clock.
 probe-prefault-ept: build golden ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
 	$(LOG)
-	CELLA_THAW_PREFAULT=ept $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
+	CELLA_THAW_PREFAULT=ept target/release/cella-probe freeze-thaw-clock
 
-# Deliberately not golden-nested: see smoke-nested-boot.
-probe-inception: build ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
+probe-inception: build golden-nested ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
 	$(LOG)
 	$(SCRIPTS)/test/inception.sh
 
 probe-thaw-gate: build golden ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
 	$(LOG)
-	CELLA_POST_THAW_SECS=30 $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
+	CELLA_POST_THAW_SECS=30 target/release/cella-probe freeze-thaw-clock

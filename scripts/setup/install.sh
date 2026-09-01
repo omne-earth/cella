@@ -62,17 +62,16 @@ if sudo nft list chain ip filter DOCKER-USER &>/dev/null; then
     fi
 fi
 
-cat <<EOT
+cat <<'EOT'
 cella: install done.
 
 Next, from any directory (no make needed from here on):
 
-  1. The network, once per host boot (the one root verb; the pool
-     feeds `cella create --net auto`, and the manifests are the
-     allocation record). sudo does not search ~/.local/bin, thus the
-     full path:
-       NUMBER_OF_TAPS=4
-       sudo "\$(which cella)" setup net --taps "\$NUMBER_OF_TAPS"
+  1. The network, once per host boot -- no sudo: cella-network
+     carries cap_net_admin from this install (the pool feeds
+     `cella create --net auto`, and the manifests are the
+     allocation record):
+       cella-network setup --taps 4
 
   2. Prove the lifecycle end to end:
        cella selftest
@@ -88,6 +87,36 @@ EOT
 # make install calls this script).
 cargo build --release
 install -D -m 0755 target/release/cella "$HOME/.local/bin/cella"
+# The thin CLIs. cella-network is the one CAP_NET_ADMIN holder: the
+# file capability makes every later invocation sudo-free -- this
+# setcap is the root moment, once, here.
+install -D -m 0755 target/release/cella-network "$HOME/.local/bin/cella-network"
+install -D -m 0755 target/release/cella-probe "$HOME/.local/bin/cella-probe"
+sudo setcap 'cap_net_admin+eip' "$HOME/.local/bin/cella-network"
+echo "cella: cella-network installed with cap_net_admin"
+sudo setcap 'cap_net_admin+eip' target/release/cella-network 2>/dev/null || true
+
+# The tap pool at boot: TUNSETPERSIST is kernel-lifetime, thus a
+# reboot deletes the pool. This oneshot recreates it. The unit runs
+# as root at boot (file capabilities matter only for the runtime
+# path); SUDO_UID pins the tap owner to the installing user.
+sudo tee /etc/systemd/system/cella-network.service >/dev/null <<UNIT
+[Unit]
+Description=cella tap pool (cella-network setup)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SUDO_UID=$(id -u)
+ExecStart=$HOME/.local/bin/cella-network setup --taps 4
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable cella-network.service >/dev/null 2>&1
+echo "cella: cella-network.service enabled -- the pool survives a reboot"
 case ":$PATH:" in
 *":$HOME/.local/bin:"*) echo "cella: ~/.local/bin is already on PATH" ;;
 *)

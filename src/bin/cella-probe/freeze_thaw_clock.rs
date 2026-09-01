@@ -82,7 +82,11 @@ fn frozen_real_secs() -> u64 {
 fn fmt_ns(ns: i128) -> String {
     let sign = if ns < 0 { "-" } else { "" };
     let a = ns.unsigned_abs();
-    format!("{ns} ns ({sign}{}.{:09} s)", a / 1_000_000_000, a % 1_000_000_000)
+    format!(
+        "{ns} ns ({sign}{}.{:09} s)",
+        a / 1_000_000_000,
+        a % 1_000_000_000
+    )
 }
 
 /// The same as fmt_ns, and the sign is always written. Use it for a
@@ -104,17 +108,29 @@ fn fmt_secs(s: f64) -> String {
 }
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    // The probe modules compile inside the main package, thus the
+    // manifest directory is the repo root.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+}
+
+/// The cella binary: CELLA_BIN, else the sibling of this probe, else
+/// target/release/cella under the repo root.
+fn sibling_cella(root: &std::path::Path) -> PathBuf {
+    if let Ok(me) = std::env::current_exe() {
+        let p = me.parent().unwrap().join("cella");
+        if p.is_file() {
+            return p;
+        }
+    }
+    root.join("target/release/cella")
 }
 
 fn golden(axis: &str, flavor: &str, file: &str) -> PathBuf {
     let home = std::env::var("CELLA_HOME").unwrap_or_else(|_| {
-        format!("{}/.cella", std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+        format!(
+            "{}/.cella",
+            std::env::var("HOME").unwrap_or_else(|_| ".".into())
+        )
     });
     PathBuf::from(home).join(axis).join(flavor).join(file)
 }
@@ -277,11 +293,17 @@ fn default_base_args(bin: &Path) -> String {
     full.replace(&time, "").trim().to_string()
 }
 
-fn main() {
+pub fn run() {
     let root = repo_root();
-    let bin = env_path("CELLA_BIN", root.join("target/release/cella"));
-    let kernel = env_path("CELLA_TEST_KERNEL", golden("kernel", "canonical", "bzImage"));
-    let disk = env_path("CELLA_TEST_DISK", golden("rootfs", "canonical", "rootfs.ext4"));
+    let bin = env_path("CELLA_BIN", sibling_cella(&root));
+    let kernel = env_path(
+        "CELLA_TEST_KERNEL",
+        golden("kernel", "canonical", "bzImage"),
+    );
+    let disk = env_path(
+        "CELLA_TEST_DISK",
+        golden("rootfs", "canonical", "rootfs.ext4"),
+    );
     // CELLA_TEST_TAP=none runs the guest without a network device. The
     // probe then names one virtio_mmio device on the command line, not
     // two. probe-inception uses this mode: inside a guest no TAP
@@ -296,7 +318,7 @@ fn main() {
         fail(&format!("{} not built -- run: make build", bin.display()));
     }
     if !kernel.is_file() || !disk.is_file() {
-        fail("test assets missing -- run: make dist");
+        fail("test assets missing -- run: make golden");
     }
 
     // Skip, and do not fail, when this machine cannot run a guest. This
@@ -437,9 +459,14 @@ fn main() {
     }
     // The guest may have printed one more heartbeat between our reading
     // and the signal landing; take the very last one it ever managed.
-    let guest_before = read_heartbeats(&boot_log).last().copied().unwrap_or(guest_before);
+    let guest_before = read_heartbeats(&boot_log)
+        .last()
+        .copied()
+        .unwrap_or(guest_before);
     let uptime_before = read_uptimes(&boot_log).last().copied();
-    println!("step 2: frozen (state file present). last pre-freeze guest wall-clock = {guest_before}");
+    println!(
+        "step 2: frozen (state file present). last pre-freeze guest wall-clock = {guest_before}"
+    );
 
     // Dump the sidecar now, while the file exists. A thaw that is
     // successful deletes it (see finalize_thaw). This is the only time at
@@ -551,15 +578,18 @@ fn main() {
     // all, is a host on which that bit stays clear, and the guest then
     // runs the clocksource watchdog against its TSC unless the command
     // line stops it.
-    let host_cs = std::fs::read_to_string(
-        "/sys/devices/system/clocksource/clocksource0/current_clocksource",
-    )
-    .unwrap_or_else(|_| "unknown".into());
+    let host_cs =
+        std::fs::read_to_string("/sys/devices/system/clocksource/clocksource0/current_clocksource")
+            .unwrap_or_else(|_| "unknown".into());
     let host_avail = std::fs::read_to_string(
         "/sys/devices/system/clocksource/clocksource0/available_clocksource",
     )
     .unwrap_or_else(|_| "unknown".into());
-    println!("host clocksource: {} (available: {})", host_cs.trim(), host_avail.trim());
+    println!(
+        "host clocksource: {} (available: {})",
+        host_cs.trim(),
+        host_avail.trim()
+    );
     if host_avail.contains("tsc") {
         println!("  The host offers the TSC. Expect PVCLOCK_TSC_STABLE_BIT to be set below.");
     } else {
@@ -848,7 +878,9 @@ fn main() {
     }
 
     let guest_delta = guest_after - guest_before;
-    println!("step 4: thawed. first post-thaw guest wall-clock = {guest_after}, host = {host_at_thaw}");
+    println!(
+        "step 4: thawed. first post-thaw guest wall-clock = {guest_after}, host = {host_at_thaw}"
+    );
     println!();
     println!(
         "  real time spent frozen (host):    {}",
@@ -857,10 +889,7 @@ fn main() {
     // The monotonic clock of the guest has a resolution of 1 ns. The
     // epoch field has a resolution of 1 s. Use the monotonic value.
     match mono_measure {
-        Some((across, _, _)) => println!(
-            "  time the guest thinks passed:     {}",
-            fmt_ns(across)
-        ),
+        Some((across, _, _)) => println!("  time the guest thinks passed:     {}", fmt_ns(across)),
         None => println!(
             "  time the guest thinks passed:     {} (resolution 1 s)",
             fmt_ns(guest_delta as i128 * 1_000_000_000)

@@ -153,7 +153,7 @@ fn add_e820_entry(params: &mut boot_params, addr: u64, size: u64, typ: u32) {
 /// segment that claims L=1 (64-bit code, see `setup_gdt`) is rejected
 /// with EINVAL unless CR0.PE/PG and EFER.LMA are *already* set by the
 /// time that segment is loaded -- confirmed against real KVM in
-/// probes/sregs (splitting this call itself across CR0.PE vs.
+/// the sregs probe (splitting this call itself across CR0.PE vs.
 /// CR0.PG/EFER also fails: PE has to land in the same call as PG/LMA,
 /// not deferred to setup_gdt's call the way it used to be).
 pub fn enable_long_mode(vcpu: &VcpuFd) -> Result<(), Error> {
