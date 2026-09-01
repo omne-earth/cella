@@ -44,7 +44,7 @@ done
 mkdir -p "$STATE_DIR"
 
 BIND_ARGS=(
-    --ro-bind "$BIN" "/cella"
+    --ro-bind "$BIN" "/cella-vmm"
     --ro-bind /lib /lib
     --ro-bind /usr/lib /usr/lib
     --dev-bind /dev/kvm /dev/kvm
@@ -66,4 +66,4 @@ exec bwrap \
     --tmpfs /tmp \
     --die-with-parent \
     --new-session \
-    /cella "$@"
+    /cella-vmm "$@"

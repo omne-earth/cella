@@ -92,6 +92,14 @@ install -D -m 0755 target/release/cella "$HOME/.local/bin/cella"
 # setcap is the root moment, once, here.
 install -D -m 0755 target/release/cella-network "$HOME/.local/bin/cella-network"
 install -D -m 0755 target/release/cella-probe "$HOME/.local/bin/cella-probe"
+# The multi-call names: one binary, one symlink per thin CLI. Each
+# name admits only its own verbs (persona dispatch on argv0); the
+# shakedown branch attaches the confinement per name. cella-network
+# stays a real binary: a file capability binds to an inode.
+for name in cella-machine cella-build cella-doctor cella-vmm; do
+    ln -sf cella "$HOME/.local/bin/$name"
+done
+echo "cella: multi-call links: cella-machine cella-build cella-doctor cella-vmm"
 sudo setcap 'cap_net_admin+eip' "$HOME/.local/bin/cella-network"
 echo "cella: cella-network installed with cap_net_admin"
 sudo setcap 'cap_net_admin+eip' target/release/cella-network 2>/dev/null || true

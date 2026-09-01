@@ -316,9 +316,50 @@ fn print_help() {
     );
 }
 
+/// The persona: the basename this binary was invoked as. The thin
+/// CLIs of the map are names of one multi-call binary (install.sh
+/// makes the symlinks); each name admits only its own verbs, and the
+/// confinement of the shakedown branch attaches per name. Two stay
+/// real separate binaries: cella-network (a file capability binds to
+/// an inode, and only that inode may hold it) and cella-probe.
+fn persona() -> String {
+    std::env::args()
+        .next()
+        .as_deref()
+        .map(std::path::Path::new)
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "cella".to_string())
+}
+
+const MACHINE_VERBS: &[&str] = &[
+    "create", "start", "stop", "enter", "freeze", "thaw", "destroy", "list", "info", "selftest",
+];
+
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    if argv.is_empty() {
+    match persona().as_str() {
+        "cella-machine" => {
+            let Some(first) = argv.first() else {
+                usage_error("usage: cella-machine <create|start|stop|enter|freeze|thaw|destroy|list|info|selftest> ...")
+            };
+            if MACHINE_VERBS.contains(&first.as_str()) {
+                run_verb(first.as_str(), &argv[1..]);
+            }
+            usage_error(&format!(
+                "cella-machine does not own the verb {first:?} -- its verbs: {}",
+                MACHINE_VERBS.join(", ")
+            ));
+        }
+        "cella-build" => run_verb("build", &argv),
+        "cella-doctor" => run_verb("doctor", &argv),
+        "cella-vmm" => {
+            // The flag interface only: the jailed run loop. Every
+            // verb belongs to another name.
+        }
+        _ => {}
+    }
+    if persona() != "cella-vmm" && argv.is_empty() {
         print_help();
         std::process::exit(0);
     }
