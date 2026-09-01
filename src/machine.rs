@@ -834,7 +834,7 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     let ro = |c: &mut std::process::Command, p: &str| {
         c.args(["--ro-bind", p, p]);
     };
-    cmd.args(["--ro-bind", bin.to_str().unwrap(), "/cella"]);
+    cmd.args(["--ro-bind", bin.to_str().unwrap(), "/cella-vmm"]);
     // Library binds only where the directories exist: the busybox
     // guest has none, and the in-guest cella is static.
     for lib in ["/lib", "/usr/lib", "/lib64"] {
@@ -854,7 +854,7 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         kernel_dir.to_str().unwrap(),
     ]);
     cmd.arg("--new-session");
-    cmd.arg("/cella");
+    cmd.arg("/cella-vmm");
     cmd.args(["--state-dir", &dir_s]);
     cmd.args(["--kernel", kernel.to_str().unwrap()]);
     cmd.args(["--disk", dir.join("disk.img").to_str().unwrap()]);

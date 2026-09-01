@@ -7,7 +7,8 @@ No PCI, no ACPI, one vCPU. It freezes a running guest to files and
 thaws it later -- across a host reboot -- and the guest cannot tell
 from the inside. Its monotonic clock, wall clock, TSC, timers, RNG
 state, disk, network, and in-flight requests continue from the freeze
-instant. The probes in `probes/` verify the clocks to microseconds.
+instant. The probes (`cella probe ...`) verify the clocks to
+microseconds.
 
 cella also hosts itself: a cella guest runs cella, and the same time
 guarantees hold one nesting level down (`make smoke-nested-boot`,
@@ -29,7 +30,7 @@ manifest, its own disk, and, while frozen, its RAM image and sidecar.
 
 ```sh
 make install       # host deps + cella -> ~/.local/bin
-sudo cella setup net --taps 4    # the one root step: TAP pool + NAT
+cella network setup --taps 4     # the pool, no sudo (install granted the capability)
 cella build kernel canonical     # goldens, built natively (skips when present)
 cella build rootfs cella
 cella create m1    # stage a machine (defaults from ~/.cella/config.json)
@@ -40,6 +41,7 @@ cella thaw m1      # the same machine, the same instant
 cella list         # every machine, one line each
 cella stop m1 && cella destroy m1
 cella selftest     # the whole cycle proves itself
+cella doctor check # the host judged, one fact per line (fix repairs, verify audits)
 ```
 
 `make demo` narrates the freeze and the thaw end to end. `make boot`,
@@ -125,7 +127,11 @@ the `KVM_VCPU_TSC_OFFSET` attribute API.
 
 ```
 src/
-  main.rs               the binary: CLI, the run loop, freeze/thaw, verdicts
+  main.rs               the multi-call binary: personas, the run loop, freeze/thaw, verdicts
+  doctor.rs             cella doctor: check, fix, verify
+  golden.rs             golden manifests: sha3-256, write/read (the seed of cella-libs)
+  bin/cella-network.rs  the one CAP_NET_ADMIN holder (a real binary: file capability)
+  bin/cella-probe/      the diagnostics: wallclock, freeze-thaw-clock, sregs
   machine.rs            the verbs: registry, spawn/jail, taps, setup net
   build.rs              native golden builds (kernel, rootfs) via the toolbox
   config.rs             guest defaults in one place (cmdline, thaw warming)
@@ -144,10 +150,6 @@ src/
 tests/
   virtio_block.rs       descriptor-chain-driven virtio-blk tests
   virtio_mmio.rs        virtio-mmio v2 protocol tests
-probes/
-  freeze-thaw-clock/    does a thaw leak real time into the guest clocks?
-  wallclock/            does the guest wall clock seed correctly at boot?
-  sregs/                KVM_SET_SREGS ordering check, no guest needed
 docs/
   LIFECYCLE.md          the verbs, the machine directory, the golden artifacts
   FREEZE-THAW.md        time and state across freeze/thaw: design, gates, measurements
@@ -162,7 +164,9 @@ scripts/
                         device-state (the four acceptance gates), nested-boot,
                         inception, jail, seccomp, machine
   utils/count_lines.py  source-vs-tests line counting for `make lines`
+security/profiles/<cli>/  seccomp + SELinux placeholders per thin CLI (shakedown fills them)
 selinux/cella.te.example  policy sketch, reference only
+TASKS.md                  the running task scratch and the CLI map
 Makefile                one target per workflow -- see TESTING.md
 TESTING.md              what each target verifies, and how to reproduce
 ```
@@ -215,8 +219,10 @@ filesystem driver. Any raw filesystem image works as a disk.
 - **Jail**: the start verb spawns the VMM under bubblewrap
   (`--unshare-user/pid/ipc/uts/cgroup`, `--as-pid-1`), binding only
   the machine directory, the kernel, `/dev/kvm`, and `/dev/net/tun`.
-  No root at runtime. `sudo cella setup net` is the one root step:
-  the TAP pool, deterministic tap MACs, forwarding, and the NAT.
+  No root at runtime: cella-network carries CAP_NET_ADMIN as a file
+  capability (the single setcap at install), provisions the pool,
+  the deterministic MACs, forwarding, and the NAT, and a boot
+  oneshot recreates the pool after a reboot.
 - **seccomp**: a hand-rolled classic-BPF allowlist (~30 syscalls, no
   argument filtering), installed before the run loop. Each entry
   carries its reason. The next tightening: filter `ioctl` to the
