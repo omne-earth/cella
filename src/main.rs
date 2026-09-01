@@ -269,13 +269,14 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             let failed = match args.first().map(|s| s.as_str()) {
                 Some("check") | None => doctor::check(),
                 Some("fix") => doctor::fix(),
+                Some("gate") => doctor::gate(&args[1..]),
                 Some("verify") => match &args[1..] {
                     [] => doctor::verify(None),
                     [vm] => doctor::verify_machine(vm),
                     [axis, flavor] => doctor::verify(Some((axis, flavor))),
                     _ => usage_error("usage: cella doctor verify [<vm> | kernel|rootfs <flavor>]"),
                 },
-                _ => usage_error("usage: cella doctor [check|fix|verify]"),
+                _ => usage_error("usage: cella doctor [check|fix|verify|gate <needs...>]"),
             };
             if failed > 0 {
                 std::process::exit(1);

@@ -16,10 +16,7 @@ TAP="${CELLA_TEST_TAP:-tap0}"
 BOOT_WAIT_SECS="${CELLA_BOOT_WAIT:-8}"
 FREEZE_TIMEOUT_SECS="${CELLA_FREEZE_TIMEOUT:-10}"
 
-if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
-    echo "SKIP: no rw access to /dev/kvm on this machine"
-    exit 0
-fi
+"$BIN" doctor gate kvm || exit 0
 if [ ! -x "$BIN" ]; then
     echo "FAIL: $BIN not built (run: make build)"
     exit 1

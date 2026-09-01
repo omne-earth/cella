@@ -33,10 +33,7 @@ TIMEOUT=120
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 [ -f "$KERNEL" ] && [ -f "$DISK" ] || { echo "SKIP: nested assets missing -- run: make golden-nested"; exit 0; }
-if ! [ -r /dev/kvm ] || ! [ -w /dev/kvm ]; then
-    echo "SKIP: no read and write access to /dev/kvm"
-    exit 0
-fi
+"$BIN" doctor gate kvm || exit 0
 if [ "$MODE" != airgapped ] && [ ! -e "/sys/class/net/$TAP" ]; then
     echo "SKIP: $TAP does not exist -- run: make setup-tap"
     exit 0

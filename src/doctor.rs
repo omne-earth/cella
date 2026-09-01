@@ -36,6 +36,61 @@ fn run_out(cmd: &str, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// The gate for the test scripts: quiet, one SKIP line on the
+/// first unmet need, exit through the caller. Needs: kvm, bwrap,
+/// tap, golden:<axis>:<flavor>. The scripts stop re-implementing
+/// the checks that doctor owns; a script with its own asset
+/// overrides (CELLA_TEST_*) keeps those checks local.
+pub fn gate(needs: &[String]) -> u32 {
+    for need in needs {
+        match need.as_str() {
+            "kvm" => {
+                let rw =
+                    unsafe { libc::access(c"/dev/kvm".as_ptr(), libc::R_OK | libc::W_OK) } == 0;
+                if !rw {
+                    println!("SKIP: no read and write access to /dev/kvm");
+                    return 3;
+                }
+            }
+            "bwrap" => {
+                if run_out("bwrap", &["--version"]).is_none() {
+                    println!("SKIP: bwrap not found -- run: make install");
+                    return 3;
+                }
+            }
+            "tap" => {
+                let ok = run_out("ip", &["-br", "addr", "show", "tap0"])
+                    .map(|s| s.contains("192.168.200.1"))
+                    .unwrap_or(false);
+                if !ok {
+                    println!("SKIP: tap0 is not configured -- run: cella doctor fix");
+                    return 3;
+                }
+            }
+            g => {
+                let Some(rest) = g.strip_prefix("golden:") else {
+                    println!("SKIP: unknown gate need {need:?}");
+                    return 3;
+                };
+                let Some((axis, flavor)) = rest.split_once(':') else {
+                    println!("SKIP: unknown gate need {need:?}");
+                    return 3;
+                };
+                let p = if axis == "kernel" {
+                    machine::kernel_path(flavor)
+                } else {
+                    machine::rootfs_path(flavor)
+                };
+                if !p.is_file() {
+                    println!("SKIP: golden {axis} {flavor} missing -- run: make golden");
+                    return 3;
+                }
+            }
+        }
+    }
+    0
+}
+
 /// The host facts. Returns the number of FAIL lines.
 pub fn check() -> u32 {
     let mut r = Report { failed: 0 };

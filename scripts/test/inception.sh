@@ -30,10 +30,7 @@ MEM_MB="${CELLA_INCEPTION_MEM_MB:-768}"
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 [ -f "$KERNEL" ] && [ -f "$DISK" ] || { echo "SKIP: inception assets missing -- run: make golden-nested"; exit 0; }
-if ! [ -r /dev/kvm ] || ! [ -w /dev/kvm ]; then
-    echo "SKIP: no read and write access to /dev/kvm"
-    exit 0
-fi
+"$BIN" doctor gate kvm || exit 0
 
 TMP=$(mktemp -d /tmp/cella-inception.XXXXXX)
 trap 'kill $PID 2>/dev/null || true; wait $PID 2>/dev/null || true' EXIT

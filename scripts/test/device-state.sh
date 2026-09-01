@@ -17,15 +17,9 @@ ac1 | ac2 | ac3 | ac4) ;;
 esac
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
-if ! [ -r /dev/kvm ] || ! [ -w /dev/kvm ]; then
-    echo "SKIP: no read and write access to /dev/kvm"; exit 0
-fi
-command -v bwrap >/dev/null || { echo "SKIP: bwrap not found -- run: make init"; exit 0; }
+"$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
-for f in kernel/canonical/bzImage rootfs/cella/rootfs.ext4; do
-    [ -f "$REAL_HOME/$f" ] || { echo "SKIP: golden $f missing -- run: make golden"; exit 0; }
-done
 export CELLA_HOME=$(mktemp -d /tmp/cella-devstate.XXXXXX)
 mkdir -p "$CELLA_HOME/kernel/canonical" "$CELLA_HOME/rootfs/cella"
 cp "$REAL_HOME/kernel/canonical/bzImage" "$CELLA_HOME/kernel/canonical/"
