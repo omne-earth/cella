@@ -189,8 +189,8 @@ smoke-thaw: build golden ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -
 	#
 	# CELLA_OBSERVE_SECS=0 and CELLA_POST_THAW_SECS=0 leave out the two
 	# long measurements. Run the probes by hand for those.
-	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0 PROBE_CARGO_FLAGS=--release
-	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0 PROBE_CARGO_FLAGS=--release
+	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0
+	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0
 
 # Deliberately not golden-nested: at test time only the artifacts
 # matter, and the bare-metal machine builds or receives them once.
@@ -329,8 +329,8 @@ distclean: clean ## clean + remove built dist/ assets
 
 # --- Probes ---------------------------------------------------------
 #
-# To add a probe, make probes/<name>/ with its own Cargo.toml and
-# src/main.rs, and add a target here.
+# To add a probe, add a module under src/bin/cella-probe/ and a
+# subcommand in its main.rs, and add a target here.
 #
 # Parameters. Each is `?=`, thus the environment or the command line
 # takes precedence:
@@ -386,9 +386,6 @@ distclean: clean ## clean + remove built dist/ assets
 # absence of PVCLOCK_TSC_STABLE_BIT, which the host KVM owns and sets
 # only when the TSC of the host is stable.
 
-# Flags for the probe builds. A hand run uses the dev profile, which
-# compiles fast. smoke-thaw passes --release.
-PROBE_CARGO_FLAGS ?=
 CELLA_FROZEN_SECS ?= 6
 CELLA_POST_THAW_SECS ?= 30
 CELLA_TIME_ARGS ?=
@@ -397,17 +394,17 @@ CELLA_OBSERVE_SECS ?= 60
 export CELLA_FROZEN_SECS CELLA_POST_THAW_SECS CELLA_TIME_ARGS CELLA_EXTRA_CMDLINE
 export CELLA_OBSERVE_SECS
 
-probe-sregs: ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same* ioctl call? (no /dev/kvm needed beyond opening it; boots nothing, just exercises raw ioctls -- see probes/sregs/src/main.rs)
+probe-sregs: build ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same* ioctl call? (no /dev/kvm needed beyond opening it; boots nothing -- see src/bin/cella-probe/sregs.rs)
 	$(LOG)
-	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/sregs/Cargo.toml
+	target/release/cella-probe sregs
 
-probe-wallclock: build golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see probes/wallclock/src/main.rs)
+probe-wallclock: build golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see src/bin/cella-probe/wallclock.rs)
 	$(LOG)
-	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/wallclock/Cargo.toml
+	target/release/cella-probe wallclock
 
-probe-freeze-thaw-clock: build golden ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see probes/freeze-thaw-clock/src/main.rs)
+probe-freeze-thaw-clock: build golden ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see src/bin/cella-probe/freeze_thaw_clock.rs)
 	$(LOG)
-	$(CARGO) run $(PROBE_CARGO_FLAGS) --manifest-path probes/freeze-thaw-clock/Cargo.toml
+	target/release/cella-probe freeze-thaw-clock
 
 # Findings from the 2026-08-30 investigation of the thaw delay:
 # - The excess across the freeze is a constant cost of each thaw. It does
@@ -440,7 +437,7 @@ probe-freeze-thaw-clock: build golden ## Does freeze/thaw leak real elapsed time
 #   crossing interval, because the wake-up is scheduled in the same clock.
 probe-prefault-ept: build golden ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
 	$(LOG)
-	CELLA_THAW_PREFAULT=ept $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
+	CELLA_THAW_PREFAULT=ept target/release/cella-probe freeze-thaw-clock
 
 # Deliberately not golden-nested: see smoke-nested-boot.
 probe-inception: build ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
@@ -449,4 +446,4 @@ probe-inception: build ## The freeze and thaw clock probe one layer deep: cella 
 
 probe-thaw-gate: build golden ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
 	$(LOG)
-	CELLA_POST_THAW_SECS=30 $(CARGO) run --release --manifest-path probes/freeze-thaw-clock/Cargo.toml
+	CELLA_POST_THAW_SECS=30 target/release/cella-probe freeze-thaw-clock

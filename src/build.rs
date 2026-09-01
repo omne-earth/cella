@@ -597,14 +597,15 @@ fn bwrap_static() -> Result<PathBuf, String> {
     Ok(out)
 }
 
-/// The static binaries for the in-guest layers: cella and the clock
-/// probe, crt-static against glibc-static in the toolbox.
+/// The static binaries for the in-guest layers: cella and
+/// cella-probe, crt-static against glibc-static in the toolbox. One
+/// cargo invocation builds every bin of the package.
 fn build_static_binaries() -> Result<(PathBuf, PathBuf), String> {
     let root = repo_root();
-    println!("cella: building the static cella and the static probe");
+    println!("cella: building the static cella and the static cella-probe");
     let rustflags = "RUSTFLAGS=-C target-feature=+crt-static";
     run_in_toolbox_quiet(
-        "static cella",
+        "static binaries",
         &root,
         &[
             "env",
@@ -614,27 +615,10 @@ fn build_static_binaries() -> Result<(PathBuf, PathBuf), String> {
             "--release",
             "--target",
             "x86_64-unknown-linux-gnu",
-        ],
-    )?;
-    run_in_toolbox_quiet(
-        "static probe",
-        &root,
-        &[
-            "env",
-            rustflags,
-            "cargo",
-            "build",
-            "--release",
-            "--target",
-            "x86_64-unknown-linux-gnu",
-            "--manifest-path",
-            "probes/freeze-thaw-clock/Cargo.toml",
         ],
     )?;
     let bin = root.join("target/x86_64-unknown-linux-gnu/release/cella");
-    let probe = root.join(
-        "probes/freeze-thaw-clock/target/x86_64-unknown-linux-gnu/release/freeze-thaw-clock-probe",
-    );
+    let probe = root.join("target/x86_64-unknown-linux-gnu/release/cella-probe");
     for p in [&bin, &probe] {
         if !p.is_file() {
             return Err(format!("{} did not build", p.display()));
@@ -729,7 +713,7 @@ fn rootfs_nested_family(
         (init, nroot.join("sbin/init"), 0o755),
     ];
     if with_probe {
-        copies.push((probe, nroot.join("bin/freeze-thaw-clock-probe"), 0o755));
+        copies.push((probe, nroot.join("bin/cella-probe"), 0o755));
     }
     if with_jail {
         // The in-guest verbs run the same jail as the host.

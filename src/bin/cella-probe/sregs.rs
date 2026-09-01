@@ -13,7 +13,9 @@
 //!
 //! Run: cargo run --manifest-path probes/sregs/Cargo.toml
 
-use kvm_bindings::{kvm_pit_config, kvm_segment, kvm_sregs, CpuId, KVM_MAX_CPUID_ENTRIES, KVM_MP_STATE_RUNNABLE};
+use kvm_bindings::{
+    kvm_pit_config, kvm_segment, kvm_sregs, CpuId, KVM_MAX_CPUID_ENTRIES, KVM_MP_STATE_RUNNABLE,
+};
 use kvm_ioctls::{Kvm, VcpuFd, VmFd};
 
 const X86_CR0_PE: u64 = 1 << 0;
@@ -127,7 +129,10 @@ fn attempt_a_reproduce_bug(kvm: &Kvm) {
     sregs.cr0 |= X86_CR0_PE | X86_CR0_ET | X86_CR0_WP;
     // Note: no CR4.PAE, no CR0.PG, no EFER.LME/LMA yet.
 
-    report("A (reproduce bug: CS.L=1 before paging/EFER)", vcpu.set_sregs(&sregs).map(|_| ()));
+    report(
+        "A (reproduce bug: CS.L=1 before paging/EFER)",
+        vcpu.set_sregs(&sregs).map(|_| ()),
+    );
 }
 
 /// Attempt B: the merged fix. Everything -- GDT/segments (CS.L=1) *and*
@@ -150,7 +155,10 @@ fn attempt_b_merged(kvm: &Kvm) {
     sregs.cr4 |= X86_CR4_PAE;
     sregs.efer |= EFER_LME | EFER_LMA;
 
-    report("B (merged: segments + paging/EFER in one call)", vcpu.set_sregs(&sregs).map(|_| ()));
+    report(
+        "B (merged: segments + paging/EFER in one call)",
+        vcpu.set_sregs(&sregs).map(|_| ()),
+    );
 }
 
 /// Attempt C: staged but reordered. First call enables paging/EFER only
@@ -205,7 +213,10 @@ fn attempt_d_exact_reorder(kvm: &Kvm) {
     sregs.cr0 |= X86_CR0_PG;
     sregs.efer |= EFER_LME | EFER_LMA;
     let step1 = vcpu.set_sregs(&sregs).map(|_| ());
-    report("D step 1 (setup_long_mode's sregs bits, verbatim, run first)", step1);
+    report(
+        "D step 1 (setup_long_mode's sregs bits, verbatim, run first)",
+        step1,
+    );
     if step1.is_err() {
         return;
     }
@@ -227,7 +238,7 @@ fn attempt_d_exact_reorder(kvm: &Kvm) {
     );
 }
 
-fn main() {
+pub fn run() {
     let kvm = Kvm::new().expect("open /dev/kvm");
 
     attempt_a_reproduce_bug(&kvm);

@@ -55,7 +55,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 fn fmt_ns(ns: i128) -> String {
     let sign = if ns < 0 { "-" } else { "" };
     let a = ns.unsigned_abs();
-    format!("{ns} ns ({sign}{}.{:09} s)", a / 1_000_000_000, a % 1_000_000_000)
+    format!(
+        "{ns} ns ({sign}{}.{:09} s)",
+        a / 1_000_000_000,
+        a % 1_000_000_000
+    )
 }
 
 /// The same as fmt_ns, and the sign is always written. Use it for a
@@ -71,19 +75,29 @@ fn fmt_ns_signed(ns: i128) -> String {
 }
 
 fn repo_root() -> PathBuf {
-    // probes/wallclock/ -> repo root is two levels up from this crate's
-    // own directory.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    // The probe modules compile inside the main package, thus the
+    // manifest directory is the repo root.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+}
+
+/// The cella binary: CELLA_BIN, else the sibling of this probe, else
+/// target/release/cella under the repo root.
+fn sibling_cella(root: &std::path::Path) -> PathBuf {
+    if let Ok(me) = std::env::current_exe() {
+        let p = me.parent().unwrap().join("cella");
+        if p.is_file() {
+            return p;
+        }
+    }
+    root.join("target/release/cella")
 }
 
 fn golden(axis: &str, flavor: &str, file: &str) -> PathBuf {
     let home = std::env::var("CELLA_HOME").unwrap_or_else(|_| {
-        format!("{}/.cella", std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+        format!(
+            "{}/.cella",
+            std::env::var("HOME").unwrap_or_else(|_| ".".into())
+        )
     });
     PathBuf::from(home).join(axis).join(flavor).join(file)
 }
@@ -247,18 +261,24 @@ fn default_base_args(bin: &Path) -> String {
     full.replace(&time, "").trim().to_string()
 }
 
-fn main() {
+pub fn run() {
     let root = repo_root();
-    let bin = env_path("CELLA_BIN", root.join("target/release/cella"));
-    let kernel = env_path("CELLA_TEST_KERNEL", golden("kernel", "canonical", "bzImage"));
-    let disk = env_path("CELLA_TEST_DISK", golden("rootfs", "canonical", "rootfs.ext4"));
+    let bin = env_path("CELLA_BIN", sibling_cella(&root));
+    let kernel = env_path(
+        "CELLA_TEST_KERNEL",
+        golden("kernel", "canonical", "bzImage"),
+    );
+    let disk = env_path(
+        "CELLA_TEST_DISK",
+        golden("rootfs", "canonical", "rootfs.ext4"),
+    );
     let tap = std::env::var("CELLA_TEST_TAP").unwrap_or_else(|_| "tap0".to_string());
 
     if !bin.is_file() {
         fail(&format!("{} not built -- run: make build", bin.display()));
     }
     if !kernel.is_file() || !disk.is_file() {
-        fail("test assets missing -- run: make dist");
+        fail("test assets missing -- run: make golden");
     }
 
     let tmp = std::env::temp_dir().join(format!("cella-wallclock-probe-{}", std::process::id()));
@@ -307,7 +327,9 @@ fn main() {
         .arg("128")
         .arg("--cmdline")
         .arg(&cmdline)
-        .stdout(Stdio::from(File::create(&log_path).expect("create log file")))
+        .stdout(Stdio::from(
+            File::create(&log_path).expect("create log file"),
+        ))
         .stderr(Stdio::from(
             File::create(tmp.join("boot.err")).expect("create err file"),
         ))
@@ -411,10 +433,7 @@ fn main() {
     // up to 100 ms and that is the limit of this measurement, not the
     // resolution of the timestamp.
     if let Some(guest_ns) = log.lines().rev().find_map(|l| parse_ns(l, "real_ns")) {
-        let host_ns = host_after
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i128;
+        let host_ns = host_after.duration_since(UNIX_EPOCH).unwrap().as_nanos() as i128;
         let diff = guest_ns as i128 - host_ns;
         println!(
             "guest CLOCK_REALTIME: {}, host: {}, difference: {}",

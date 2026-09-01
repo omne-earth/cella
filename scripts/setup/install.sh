@@ -91,6 +91,7 @@ install -D -m 0755 target/release/cella "$HOME/.local/bin/cella"
 # file capability makes every later invocation sudo-free -- this
 # setcap is the root moment, once, here.
 install -D -m 0755 target/release/cella-network "$HOME/.local/bin/cella-network"
+install -D -m 0755 target/release/cella-probe "$HOME/.local/bin/cella-probe"
 sudo setcap 'cap_net_admin+eip' "$HOME/.local/bin/cella-network"
 echo "cella: cella-network installed with cap_net_admin"
 sudo setcap 'cap_net_admin+eip' target/release/cella-network 2>/dev/null || true
