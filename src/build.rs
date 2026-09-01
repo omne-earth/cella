@@ -62,6 +62,7 @@ const TOOLBOX_PACKAGES: &[&str] = &[
     "ninja-build",
     "libcap-devel",
     "libcap-static",
+    "protobuf-compiler",
 ];
 
 /// Provision the cella-build toolbox when it is absent. The build verb

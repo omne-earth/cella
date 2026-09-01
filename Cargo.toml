@@ -38,10 +38,17 @@ virtio-queue = "0.14"
 # manifests carry sha3-256 digests, and the static in-guest binary
 # must compute them itself (no sha3 tool exists in the guest).
 sha3 = "0.10"
+# The wire vocabulary of the network model (proto/cella.proto):
+# encode/decode only -- prost-the-codec, never a gRPC framework.
+# gRPC lives outside the VMMs (docs/NETWORK-MODEL.md).
+prost = "0.13"
 
 [profile.release]
 panic = "abort"
 lto = true
+
+[build-dependencies]
+prost-build = "0.13"
 
 [dev-dependencies]
 # Transitively pulled in by virtio-queue already; listed explicitly so

@@ -1,0 +1,103 @@
+// The one language of the network model (docs/NETWORK-MODEL.md).
+// Every party speaks it: the membrane inside the appliance, the
+// cella-gateway CLI, and the engine that presides on the longer
+// term. Field numbers are the wire contract: never reuse one.
+syntax = "proto3";
+package cella;
+
+// The envelope on the control wire. A raw byte line has no method
+// dispatch, thus every crossing is one length-delimited Message.
+message Message {
+  oneof body {
+    Accord accord = 1;
+    Event event = 2;
+    Decision decision = 3;
+    Valve valve = 4;
+  }
+}
+
+// The version handshake: two ends agree on the language before
+// anything else crosses.
+message Accord {
+  uint32 version = 1;
+}
+
+// Where an operation points. The host name is present when the
+// appliance resolved it -- the ratchet acts on names; the ip is
+// what went to the wire.
+message Destination {
+  string host = 1;
+  bytes ip = 2;
+  uint32 port = 3;
+}
+
+// One held egress flow. The identifier is a UUIDv7, minted in the
+// guest frame: identifiers repeat across branched twins, thus the
+// engine keys on the machine name plus the identifier. Both clocks
+// ride along -- guest_ns is the T of the timeline rewrite,
+// host_ns serves the ledger math.
+message Operation {
+  bytes id = 1;
+  Destination destination = 2;
+  uint64 guest_ns = 3;
+  uint64 host_ns = 4;
+}
+
+// A ledger entry: the chronicle of one operation's life.
+message Event {
+  oneof event {
+    Operation parked = 1;
+    Released released = 2;
+    Lapsed lapsed = 3;
+  }
+}
+
+message Released {
+  bytes id = 1;
+  uint64 first_response_ns = 2;
+  uint64 bytes_in = 3;
+  uint64 bytes_out = 4;
+}
+
+message Lapsed {
+  bytes id = 1;
+  string why = 2;
+}
+
+// The external word on one operation. A release delivers it and,
+// with allow_flow, installs the pass entry for its destination. A
+// refusal answers the machine cleanly, in-frame, instead of by
+// timeout. Freezing is absent on purpose: the freeze is a machine
+// verb, and the membrane only keeps holding.
+message Decision {
+  bytes id = 1;
+  oneof decision {
+    Release release = 2;
+    Refusal refusal = 3;
+  }
+}
+
+message Release {
+  bool allow_flow = 1;
+}
+
+message Refusal {
+  string why = 1;
+}
+
+// The posture of the appliance. Open forwards (a standing
+// release); closed parks everything. Either way the frames pass
+// through the appliance.
+message Valve {
+  enum V {
+    CLOSED = 0;
+    OPEN = 1;
+  }
+  V v = 1;
+}
+
+// The gRPC face of the same vocabulary, outside every VMM: the
+// engine presides -- events in, decisions out.
+service Engine {
+  rpc Preside(stream Event) returns (stream Decision);
+}

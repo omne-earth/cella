@@ -24,7 +24,7 @@ fi
 PACKAGES=(
     rust cargo rustfmt clippy
     bubblewrap
-    nftables iproute
+    nftables iproute protobuf-compiler
     curl
     iputils
     python3

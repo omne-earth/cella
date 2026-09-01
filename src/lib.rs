@@ -12,6 +12,7 @@ pub mod freeze;
 pub mod golden;
 pub mod machine;
 pub mod memory;
+pub mod proto;
 pub mod seccomp;
 pub mod universe;
 pub mod vcpu;
