@@ -115,7 +115,7 @@ pub fn check() -> u32 {
         }
     }
     if taps == 0 {
-        r.fail("tap pool", "no taps -- run: cella doctor fix");
+        r.fail("tap pool", "no taps -- run: cella doctor fix (a reboot clears the pool; make install enables cella-network.service to recreate it at boot)");
     }
 
     // Forwarding: guest egress dies without it.

@@ -94,6 +94,28 @@ install -D -m 0755 target/release/cella-network "$HOME/.local/bin/cella-network"
 sudo setcap 'cap_net_admin+eip' "$HOME/.local/bin/cella-network"
 echo "cella: cella-network installed with cap_net_admin"
 sudo setcap 'cap_net_admin+eip' target/release/cella-network 2>/dev/null || true
+
+# The tap pool at boot: TUNSETPERSIST is kernel-lifetime, thus a
+# reboot deletes the pool. This oneshot recreates it. The unit runs
+# as root at boot (file capabilities matter only for the runtime
+# path); SUDO_UID pins the tap owner to the installing user.
+sudo tee /etc/systemd/system/cella-network.service >/dev/null <<UNIT
+[Unit]
+Description=cella tap pool (cella-network setup)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SUDO_UID=$(id -u)
+ExecStart=$HOME/.local/bin/cella-network setup --taps 4
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable cella-network.service >/dev/null 2>&1
+echo "cella: cella-network.service enabled -- the pool survives a reboot"
 case ":$PATH:" in
 *":$HOME/.local/bin:"*) echo "cella: ~/.local/bin is already on PATH" ;;
 *)
