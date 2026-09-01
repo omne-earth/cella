@@ -600,11 +600,28 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
         _ => PathBuf::new(),
     };
     if !fresh && out.is_file() {
-        println!(
-            "cella: {axis} {flavor} already built at {} (use --fresh to rebuild)",
-            out.display()
-        );
-        return Ok(());
+        // Skip only when the recorded inputs still match: a changed
+        // init script or fragment makes the golden stale, and a
+        // stale golden lies quietly (a pegasus inspect booted an
+        // image whose init predated /rock). The manifest carries
+        // the input digests; compare them.
+        match stale_inputs(axis, flavor, &out) {
+            Ok(None) => {
+                println!(
+                    "cella: {axis} {flavor} already built at {} (inputs unchanged; --fresh rebuilds)",
+                    out.display()
+                );
+                return Ok(());
+            }
+            Ok(Some(input)) => {
+                println!(
+                    "cella: {axis} {flavor}: input {input} changed since the build -- rebuilding"
+                );
+            }
+            Err(e) => {
+                println!("cella: {axis} {flavor}: {e} -- rebuilding");
+            }
+        }
     }
     match (axis, flavor) {
         ("kernel", "canonical") => crate::build::kernel_canonical(&kernel_path(flavor)),
@@ -620,6 +637,41 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
         )),
     }?;
     write_golden_manifest(axis, flavor, &out)
+}
+
+/// Stale check: the name of the first build input whose digest no
+/// longer matches the manifest, None when everything matches. A
+/// missing or unreadable manifest is an error (rebuild).
+fn stale_inputs(axis: &str, flavor: &str, out: &Path) -> Result<Option<String>, String> {
+    let mpath = crate::golden::manifest_path(out);
+    let text =
+        fs::read_to_string(&mpath).map_err(|_| format!("no manifest at {}", mpath.display()))?;
+    let _ = flavor;
+    let root = crate::build::repo_root();
+    let b = root.join("scripts/build");
+    let inputs: Vec<std::path::PathBuf> = match axis {
+        "kernel" => vec![
+            b.join("kernel-fragment.config"),
+            b.join("kernel-fragment-nested.config"),
+        ],
+        _ => vec![
+            b.join(format!("rootfs-{flavor}.sh")),
+            b.join("rootfs.sh"),
+            b.join("busybox-fragment.config"),
+        ],
+    };
+    for input in inputs {
+        if !input.is_file() {
+            continue;
+        }
+        let name = input.file_name().unwrap().to_string_lossy().to_string();
+        let recorded = manifest_field(&text, &format!("input_{name}"));
+        let actual = crate::golden::sha3_256_hex(&input)?;
+        if recorded.as_deref() != Some(actual.as_str()) {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
 }
 
 /// The manifest, after every successful build, in one place. The
