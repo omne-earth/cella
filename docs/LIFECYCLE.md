@@ -113,6 +113,40 @@ gap. Stop declares the in-flight reality disposable, ends the VM with
 no resumption in mind, and removes the transients: a stopped machine
 is its manifest and its disk, nothing else.
 
+## The universe family
+
+`cella-universe` owns the operations on machines as artifacts:
+branch, archive, and inspect. Every operation records the sha3-256
+of each storage layer it touches into the manifest of the machine
+it produces; `list` shows a short disk digest, `info` the full
+set, and `doctor verify <vm>` recomputes them.
+
+- **branch <existing-vm> <new-vm>** -- both names mandatory. The
+  source must not run: a frozen source copies to a frozen twin
+  (each sidecar thaws once; the twins share the CRNG state of the
+  fork instant, deliberately -- divergence comes from the world,
+  never a reseed), and a stopped source copies to a fresh-bootable
+  machine. The copy's manifest carries `net none` always: the
+  network identity of the source lives in its RAM, and a tap is a
+  deliberate re-attachment, not an inheritance.
+- **archive <vm>** -- the machine becomes a rock: the storage
+  layers stay (disk.img, and ram.img where present), the runtime
+  state goes (the sidecar: irqchip, vCPU, in-flight registers),
+  and the manifest latches `state: archived`. An archived machine
+  cannot be started by accident: start, thaw, and enter refuse it
+  by name. Un-archiving, if it ever exists, is its own verb.
+- **inspect <vm>** -- attach the rock as evidence, never as a
+  machine: a temporary appliance named `<vm>-inspector` boots the
+  stock rootfs, and the rock's disk attaches as an external second
+  virtio-blk device, read-only at the device. The guest init
+  mounts it at /rock with ro,noexec,nosuid,nodev -- the rock's
+  content cannot execute, on top of not being bootable and not
+  being writable. The terminal attaches; a detach destroys the
+  inspector. The rock never changes.
+
+ram.img inspection stays host-side (the file is ordinary); a real
+tool earns its place later.
+
 ## The homes
 
 ```
