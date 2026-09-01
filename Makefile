@@ -192,18 +192,15 @@ smoke-thaw: build golden ## Boot -> freeze (SIGUSR1) -> verify sidecar -> thaw -
 	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0
 	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0
 
-# Deliberately not golden-nested: at test time only the artifacts
-# matter, and the bare-metal machine builds or receives them once.
-# Build them with: make golden-nested (needs the toolbox).
-smoke-nested-boot-airgapped: build ## cella hosts cella, no network on either layer
+smoke-nested-boot-airgapped: build golden-nested ## cella hosts cella, no network on either layer
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh airgapped
 
-smoke-nested-boot-hybrid: build ## cella hosts cella, the outer guest networked, the inner airgapped
+smoke-nested-boot-hybrid: build golden-nested ## cella hosts cella, the outer guest networked, the inner airgapped
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh hybrid
 
-smoke-nested-boot-www: build ## cella hosts cella, both layers networked (the outer init pings the inner guest)
+smoke-nested-boot-www: build golden-nested ## cella hosts cella, both layers networked (the outer init pings the inner guest)
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh www
 
@@ -439,8 +436,7 @@ probe-prefault-ept: build golden ## probe-freeze-thaw-clock with the stage-2 pre
 	$(LOG)
 	CELLA_THAW_PREFAULT=ept target/release/cella-probe freeze-thaw-clock
 
-# Deliberately not golden-nested: see smoke-nested-boot.
-probe-inception: build ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
+probe-inception: build golden-nested ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
 	$(LOG)
 	$(SCRIPTS)/test/inception.sh
 
