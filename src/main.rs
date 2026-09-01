@@ -66,7 +66,8 @@ struct Args {
     /// A second disk, read-only at the device, always: the rock of
     /// the inspect verb. No flag makes it writable.
     attach_ro: Option<PathBuf>,
-    tap: Option<String>,
+    /// The taps, in order: eth0 is the first. --tap repeats.
+    taps: Vec<String>,
     mac: [u8; 6],
     kernel: Option<PathBuf>,
     cmdline: String,
@@ -79,7 +80,7 @@ fn parse_args() -> Args {
     let mut disk = None;
     let mut disk_ro = false;
     let mut attach_ro = None;
-    let mut tap = None;
+    let mut taps: Vec<String> = Vec::new();
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
     let mut console = None;
@@ -98,7 +99,7 @@ fn parse_args() -> Args {
             "--disk" => disk = Some(PathBuf::from(next())),
             "--disk-ro" => disk_ro = true,
             "--attach-ro" => attach_ro = Some(PathBuf::from(next())),
-            "--tap" => tap = Some(next()),
+            "--tap" => taps.push(next()),
             "--mac" => mac = parse_mac(&next()),
             "--kernel" => kernel = Some(PathBuf::from(next())),
             "--console" => console = Some(PathBuf::from(next())),
@@ -120,7 +121,7 @@ fn parse_args() -> Args {
         disk: disk.unwrap_or_else(|| usage_error("--disk is required")),
         disk_ro,
         attach_ro,
-        tap,
+        taps,
         mac,
         kernel,
         cmdline,
@@ -541,28 +542,29 @@ fn main() {
             MmioTransport::new(Box::new(attached), irq_raiser.clone(), ATTACH_IRQ),
         ));
     }
-    // The network is optional. A guest without --tap gets the block
-    // device only, and the kernel command line then must name one
-    // virtio_mmio device, not two. The nested smoke test runs the inner
-    // cella in this mode, because the inner guest has no TAP device.
-    let net_poll: Option<(usize, i32)> = match &args.tap {
-        Some(tap) => {
-            // Must precede Tap::open (inside Net::new): the TAP fd is
-            // O_ASYNC, and SIGIO's default action is to terminate the
-            // process. A frame can arrive the instant the fd exists.
-            install_sigio_handler();
-            let net = Net::new(tap, args.mac)
-                .unwrap_or_else(|e| fatal(&format!("open tap {tap:?}: {e}")));
-            let net_fd = net.tap_fd();
-            mmio_devices.push((
-                NET_MMIO_BASE,
-                MMIO_LEN,
-                MmioTransport::new(Box::new(net), irq_raiser.clone(), NET_IRQ),
-            ));
-            Some((mmio_devices.len() - 1, net_fd))
-        }
-        None => None,
-    };
+    // The network is optional, and a machine takes N taps: eth<i>
+    // is the i-th --tap. net0 keeps its address and IRQ; each later
+    // nic takes base + i*0x2000 and IRQ 6 + 2*i, thus the attach
+    // slot between them (0xd0002000:7) never moves -- the ABI of
+    // every existing manifest holds. A guest without --tap gets the
+    // block device only.
+    let mut net_poll: Vec<(usize, i32)> = Vec::new();
+    for (i, tap) in args.taps.iter().enumerate() {
+        // Must precede Tap::open (inside Net::new): the TAP fd is
+        // O_ASYNC, and SIGIO's default action is to terminate the
+        // process. A frame can arrive the instant the fd exists.
+        install_sigio_handler();
+        let mut mac = args.mac;
+        mac[5] = mac[5].wrapping_add(i as u8);
+        let net = Net::new(tap, mac).unwrap_or_else(|e| fatal(&format!("open tap {tap:?}: {e}")));
+        let net_fd = net.tap_fd();
+        mmio_devices.push((
+            NET_MMIO_BASE + (i as u64) * 0x2000,
+            MMIO_LEN,
+            MmioTransport::new(Box::new(net), irq_raiser.clone(), NET_IRQ + 2 * i as u32),
+        ));
+        net_poll.push((mmio_devices.len() - 1, net_fd));
+    }
 
     // The console socket. The listener binds before the seccomp
     // filter, thus socket(2) stays outside the allowlist (the canary
@@ -739,7 +741,7 @@ fn main() {
         &mem,
         &mut serial,
         &mut mmio_devices,
-        net_poll,
+        &net_poll,
         console_listener,
         console_client,
         &args.state_dir,
@@ -754,7 +756,7 @@ fn run_loop(
     mem: &vm_memory::GuestMemoryMmap,
     serial: &mut SerialDevice,
     mmio_devices: &mut [(u64, u64, MmioTransport)],
-    net_poll: Option<(usize, i32)>,
+    net_poll: &[(usize, i32)],
     console_listener: Option<std::os::unix::net::UnixListener>,
     console_client: devices::serial::ConsoleClient,
     state_dir: &std::path::Path,
@@ -823,8 +825,8 @@ fn run_loop(
         // what forces the EINTR that lands us here; safe to call
         // unconditionally -- a no-op if nothing is pending or no RX
         // buffers are posted (see mmio.rs::poll_queue and net.rs).
-        if let Some((idx, net_fd)) = net_poll {
-            poll_net_rx(mmio_devices, idx, net_fd, mem);
+        for (idx, net_fd) in net_poll {
+            poll_net_rx(mmio_devices, *idx, *net_fd, mem);
         }
         // Drain host stdin into the serial RX FIFO on every pass. Stdin
         // carries O_ASYNC (see setup_stdin_async), thus a keystroke

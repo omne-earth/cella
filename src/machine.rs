@@ -208,6 +208,11 @@ fn claimed_taps() -> Vec<String> {
             let net = json_field(&s, "net")?.to_string();
             (net != "none").then_some(net)
         })
+        .flat_map(|net| {
+            net.split(',')
+                .map(|t| t.trim().to_string())
+                .collect::<Vec<_>>()
+        })
         .collect()
 }
 
@@ -529,11 +534,13 @@ pub fn create(m: &Manifest) -> Result<(), String> {
     let mut m = m.clone();
     if m.net == "auto" {
         m.net = allocate_tap()?;
-    } else if m.net != "none" && claimed_taps().contains(&m.net) {
-        return Err(format!(
-            "tap {:?} is already claimed by another machine",
-            m.net
-        ));
+    } else if m.net != "none" {
+        let claimed = claimed_taps();
+        for tap in m.net.split(',') {
+            if claimed.contains(&tap.trim().to_string()) {
+                return Err(format!("tap {tap:?} is already claimed by another machine"));
+            }
+        }
     }
     let kernel = kernel_path(&m.kernel);
     let rootfs = rootfs_path(&m.rootfs);
@@ -754,20 +761,34 @@ fn cmdline_for(m: &Manifest) -> String {
         );
     }
     if m.net == "none" {
-        format!(
+        return format!(
             "{base} root=/dev/vda {} virtio_mmio.device=4K@0xd0000000:5",
             m.root
-        )
-    } else {
-        format!(
-            "{base} root=/dev/vda {} virtio_mmio.device=4K@0xd0000000:5 \
-             virtio_mmio.device=4K@0xd0001000:6 \
-             ip={}::{}:255.255.255.0::eth0:off",
-            m.root,
-            tap_addresses(&m.net).0,
-            tap_addresses(&m.net).1
-        )
+        );
     }
+    // One device entry per tap: eth<i> at base + i*0x2000, IRQ
+    // 6 + 2*i (the attach slot between them never moves). The ip=
+    // parameter configures eth0 only; the init of a multi-net image
+    // (the gateway flavor) configures the rest.
+    let taps: Vec<&str> = m.net.split(',').map(str::trim).collect();
+    let mut line = format!(
+        "{base} root=/dev/vda {} virtio_mmio.device=4K@0xd0000000:5",
+        m.root
+    );
+    for (i, _) in taps.iter().enumerate() {
+        line.push_str(&format!(
+            " virtio_mmio.device=4K@{:#x}:{}",
+            0xd000_1000u64 + (i as u64) * 0x2000,
+            6 + 2 * i
+        ));
+    }
+    let first = taps[0];
+    line.push_str(&format!(
+        " ip={}::{}:255.255.255.0::eth0:off",
+        tap_addresses(first).0,
+        tap_addresses(first).1
+    ));
+    line
 }
 
 /// Start the machine: a fresh boot. Refuses a frozen machine, so
@@ -960,7 +981,9 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     cmd.args(["--kernel", kernel.to_str().unwrap()]);
     cmd.args(["--disk", dir.join("disk.img").to_str().unwrap()]);
     if m.net != "none" {
-        cmd.args(["--tap", &m.net]);
+        for tap in m.net.split(',') {
+            cmd.args(["--tap", tap.trim()]);
+        }
     }
     if m.attach != "none" {
         cmd.args(["--attach-ro", &m.attach]);

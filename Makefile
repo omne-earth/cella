@@ -24,7 +24,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 .PHONY: help build install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested setup-tap \
-        boot enter freeze thaw remove demo doctor smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-universe smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
+        boot enter freeze thaw remove demo doctor smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-multinet smoke-universe smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
         clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -210,6 +210,10 @@ smoke-machine: $(CELLA_DEV) ## The lifecycle cycle with a real guest: cella self
 	$(LOG)
 	$(CELLA_DEV) selftest
 
+smoke-multinet: build golden ## A machine takes N taps: two-tap boot, both nics in the guest, host pings eth0, claims exclusive per tap
+	$(LOG)
+	$(SCRIPTS)/test/multinet.sh
+
 smoke-universe: build golden ## The universe family end to end: branch (frozen twin, rock to rock), archive (the latch), inspect (evidence at /rock, byte-identical after)
 	$(LOG)
 	$(SCRIPTS)/test/universe.sh
@@ -223,7 +227,7 @@ smoke-net: build golden ## Guest answers ICMP over the TAP after boot (scripts/t
 	$(LOG)
 	$(SCRIPTS)/test/net.sh
 
-smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-machine smoke-universe probe-inception ## All smoke-* targets + the deep clock probe (skips gracefully without KVM)
+smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-machine smoke-multinet smoke-universe probe-inception ## All smoke-* targets + the deep clock probe (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
