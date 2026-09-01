@@ -690,6 +690,20 @@ fn rootfs_nested_family(
     )?;
     fs::create_dir_all(nroot.join("root/.cella/kernel/canonical")).map_err(|e| e.to_string())?;
     fs::create_dir_all(nroot.join("root/.cella/rootfs/canonical")).map_err(|e| e.to_string())?;
+    // The manifests travel with the goldens: each layer verifies its
+    // inherited artifacts (cella doctor verify) before it boots an
+    // inner machine. Green-field: a golden without a manifest is a
+    // build error, not a heal case.
+    let inner_kernel_manifest = crate::golden::manifest_path(&inner_kernel);
+    let inner_rootfs_manifest = crate::golden::manifest_path(&inner_rootfs);
+    for m in [&inner_kernel_manifest, &inner_rootfs_manifest] {
+        if !m.is_file() {
+            return Err(format!(
+                "{} is absent -- rebuild the golden (cella build) so its manifest exists",
+                m.display()
+            ));
+        }
+    }
     let mut copies = vec![
         (bin, nroot.join("bin/cella"), 0o755),
         (
@@ -698,9 +712,19 @@ fn rootfs_nested_family(
             0o644,
         ),
         (
+            inner_kernel_manifest,
+            nroot.join("root/.cella/kernel/canonical/golden.json"),
+            0o444,
+        ),
+        (
             inner_rootfs,
             nroot.join("root/.cella/rootfs/canonical/rootfs.ext4"),
             0o644,
+        ),
+        (
+            inner_rootfs_manifest,
+            nroot.join("root/.cella/rootfs/canonical/golden.json"),
+            0o444,
         ),
         (init, nroot.join("sbin/init"), 0o755),
     ];

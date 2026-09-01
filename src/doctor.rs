@@ -118,6 +118,15 @@ pub fn check() -> u32 {
         r.fail("tap pool", "no taps -- run: cella doctor fix (a reboot clears the pool; make install enables cella-network.service to recreate it at boot)");
     }
 
+    // The boot unit: without it a reboot silently eats the pool.
+    match run_out("systemctl", &["is-enabled", "cella-network.service"]) {
+        Some(v) if v.trim() == "enabled" => r.ok("boot unit", "cella-network.service enabled"),
+        _ => r.fail(
+            "boot unit",
+            "cella-network.service not enabled -- run: make install (a reboot then keeps the pool)",
+        ),
+    }
+
     // Forwarding: guest egress dies without it.
     match fs::read_to_string("/proc/sys/net/ipv4/ip_forward") {
         Ok(v) if v.trim() == "1" => r.ok("ip_forward", "on"),
