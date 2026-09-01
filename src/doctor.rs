@@ -254,9 +254,48 @@ fn sibling(name: &str) -> String {
     name.to_string()
 }
 
+/// Recompute a machine's layer digests against its manifest, where
+/// a universe operation recorded them. Absent digests are a note:
+/// only branch and archive write them.
+pub fn verify_machine(name: &str) -> u32 {
+    let dir = machine::machine_dir(name);
+    let Ok(raw) = fs::read_to_string(dir.join("manifest.json")) else {
+        println!("  FAIL  {name}: no manifest");
+        return 1;
+    };
+    let mut failed = 0u32;
+    let mut seen = 0u32;
+    for (key, layer) in [("digest_disk", "disk.img"), ("digest_ram", "ram.img")] {
+        let Some(recorded) = crate::machine::manifest_field(&raw, key) else {
+            continue;
+        };
+        seen += 1;
+        match golden::sha3_256_hex(&dir.join(layer)) {
+            Ok(actual) if actual == recorded => {
+                println!("  ok    {name} {layer}: sha3-256 {}", &actual[..16]);
+            }
+            Ok(actual) => {
+                println!(
+                    "  FAIL  {name} {layer}: digest mismatch (manifest {}.., layer {}..)",
+                    &recorded[..16],
+                    &actual[..16]
+                );
+                failed += 1;
+            }
+            Err(e) => {
+                println!("  FAIL  {name} {layer}: {e}");
+                failed += 1;
+            }
+        }
+    }
+    if seen == 0 {
+        println!("  note  {name}: no recorded digests (branch and archive write them)");
+    }
+    failed
+}
+
 /// Recompute the digest of each golden against its manifest. A
-/// target narrows it: `verify kernel canonical`. Machine layers
-/// join when their manifests carry digests (the universe family).
+/// target narrows it: `verify kernel canonical`, `verify <vm>`.
 pub fn verify(target: Option<(&str, &str)>) -> u32 {
     let all = [
         ("kernel", "canonical"),

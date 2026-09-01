@@ -96,10 +96,10 @@ install -D -m 0755 target/release/cella-probe "$HOME/.local/bin/cella-probe"
 # name admits only its own verbs (persona dispatch on argv0); the
 # shakedown branch attaches the confinement per name. cella-network
 # stays a real binary: a file capability binds to an inode.
-for name in cella-machine cella-build cella-doctor cella-vmm; do
+for name in cella-machine cella-build cella-doctor cella-vmm cella-universe; do
     ln -sf cella "$HOME/.local/bin/$name"
 done
-echo "cella: multi-call links: cella-machine cella-build cella-doctor cella-vmm"
+echo "cella: multi-call links: cella-machine cella-build cella-doctor cella-vmm cella-universe"
 sudo setcap 'cap_net_admin+eip' "$HOME/.local/bin/cella-network"
 echo "cella: cella-network installed with cap_net_admin"
 sudo setcap 'cap_net_admin+eip' target/release/cella-network 2>/dev/null || true

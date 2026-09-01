@@ -18,9 +18,10 @@ guarantees hold one nesting level down (`make smoke-nested-boot`,
 host.** Every gate is derived from measurement; no gate uses a tuned
 constant. The full suite (`make test-all`) passes on both machine
 classes with the pinned guest kernel (7.2.2). The virtio transports
-now ride the freeze sidecar (format v7), and the egress-hold surface
--- park, report, release, allow -- is in place. See
-`docs/DEVICE-STATE.md`.
+now ride the freeze sidecar (format v7), the egress-hold surface --
+park, report, release, allow -- is in place (`docs/DEVICE-STATE.md`),
+and the universe family treats machines as artifacts: branch,
+archive, inspect (`docs/LIFECYCLE.md`).
 
 ## The machine lifecycle
 
@@ -31,7 +32,7 @@ manifest, its own disk, and, while frozen, its RAM image and sidecar.
 ```sh
 make install       # host deps + cella -> ~/.local/bin
 cella network setup --taps 4     # the pool, no sudo (install granted the capability)
-cella build kernel canonical     # goldens, built natively (skips when present)
+cella build kernel canonical     # goldens, built natively (skips while inputs match)
 cella build rootfs cella
 cella create m1    # stage a machine (defaults from ~/.cella/config.json)
 cella start m1     # run it: detached, jailed, ready in milliseconds
@@ -39,6 +40,9 @@ cella enter m1     # your terminal on its serial console (detach: Ctrl-])
 cella freeze m1    # the machine becomes files
 cella thaw m1      # the same machine, the same instant
 cella list         # every machine, one line each
+cella branch m1 m2 # copy a still machine: frozen twin, or fresh-bootable
+cella archive m1   # a rock: storage stays, nothing resumes, start refuses
+cella inspect m1   # throwaway appliance; the evidence at /rock, ro + noexec
 cella stop m1 && cella destroy m1
 cella selftest     # the whole cycle proves itself
 cella doctor check # the host judged, one fact per line (fix repairs, verify audits)
@@ -85,7 +89,8 @@ Properties, each deliberate:
   The world-ratchet gate (`make device-state-ac4`) proves the
   sequence against real endpoints.
 - **One-shot thaw.** `finalize_thaw()` deletes `state` before the
-  first `KVM_RUN`. To fork an image, `cp -r` the directory first.
+  first `KVM_RUN`. Forking is a verb: `cella branch` copies a still
+  machine and records the layer digests of the fork instant.
 
 The TSC restore is a direct write to `MSR_IA32_TSC`. That is correct
 only with one vCPU: KVM's TSC-synchronization heuristics exist to
@@ -129,6 +134,7 @@ the `KVM_VCPU_TSC_OFFSET` attribute API.
 src/
   main.rs               the multi-call binary: personas, the run loop, freeze/thaw, verdicts
   doctor.rs             cella doctor: check, fix, verify
+  universe.rs           branch, archive, inspect: machines as artifacts
   golden.rs             golden manifests: sha3-256, write/read (the seed of cella-libs)
   bin/cella-network.rs  the one CAP_NET_ADMIN holder (a real binary: file capability)
   bin/cella-probe/      the diagnostics: wallclock, freeze-thaw-clock, sregs
@@ -161,8 +167,8 @@ scripts/
   build/                kernel/busybox config fragments, the init of each rootfs,
                         kernel-config-check.sh
   test/                 one script per system test: boot, thaw, net, demo,
-                        device-state (the four acceptance gates), nested-boot,
-                        inception, jail, seccomp, machine
+                        device-state (the four acceptance gates), universe,
+                        nested-boot, inception, jail, seccomp, machine
   utils/count_lines.py  source-vs-tests line counting for `make lines`
 security/profiles/<cli>/  seccomp + SELinux placeholders per thin CLI (shakedown fills them)
 selinux/cella.te.example  policy sketch, reference only
@@ -174,14 +180,16 @@ TESTING.md              what each target verifies, and how to reproduce
 Line counts (`make lines`):
 
 ```
-SOURCE ONLY (src/, excluding inline #[cfg(test)])         5848
-SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)         6855
+SOURCE ONLY (src/, excluding inline #[cfg(test)])         8719
+SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)         9801
 ```
 
-For scale: a full Firecracker build is about 57k lines of non-test
-Rust. A block+net extraction of Firecracker lands near 10-18k. cella
-sits below that because it drops PCI, rate limiters, vhost-user, and
-multi-queue -- and adds the lifecycle, the native build, and the
+The count now carries the probes (they moved into src/bin at the
+CLI split). For scale: a full Firecracker build is about 57k lines
+of non-test Rust, and a block+net extraction of Firecracker lands
+near 10-18k. cella sits below that because it drops PCI, rate
+limiters, vhost-user, and multi-queue -- and adds the lifecycle,
+the native build, the universe family, the doctor, and the
 cryogenic freeze in exchange.
 
 ## Build and test
@@ -202,7 +210,9 @@ only to run. `TESTING.md` maps each target to what it proves.
 `cella build <kernel|rootfs> <flavor>`. The verb compiles every
 golden natively into `~/.cella/` from upstream source, inside the
 `cella-build` toolbox that it creates and provisions itself. A golden
-that exists is skipped; `--fresh` rebuilds. There is no shortcut: no
+that exists is skipped only while its recorded input digests still
+match; a changed fragment or init script rebuilds it, and `--fresh`
+rebuilds unconditionally. There is no shortcut: no
 project publishes a bzImage with cella's exact driver set
 (virtio-mmio/blk/net + 8250 built in, no modules, no initrd), and an
 arbitrary rootfs against a from-scratch kernel produces mismatches

@@ -13,5 +13,6 @@ pub mod golden;
 pub mod machine;
 pub mod memory;
 pub mod seccomp;
+pub mod universe;
 pub mod vcpu;
 pub mod warm;

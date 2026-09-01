@@ -63,10 +63,19 @@ pub struct Manifest {
     /// "on" adds cella_diag to the kernel command line: the image
     /// then prints its heartbeat and its diagnostic listings.
     pub diag: String,
+    /// A path to a disk attached read-only as a second virtio-blk
+    /// (the rock of the inspect verb), or "none".
+    pub attach: String,
 }
 
 /// Read one field of a flat JSON object: a quoted string or a bare
 /// number. Returns None when the key is absent.
+/// One field of a raw manifest text, for the readers outside this
+/// module (doctor, the universe family).
+pub fn manifest_field(s: &str, key: &str) -> Option<String> {
+    json_field(s, key).map(str::to_string)
+}
+
 fn json_field<'a>(s: &'a str, key: &str) -> Option<&'a str> {
     let pat = format!("\"{key}\":");
     let i = s.find(&pat)?;
@@ -91,6 +100,7 @@ pub fn defaults() -> Manifest {
         net: "none".into(),
         root: "rw".into(),
         diag: "off".into(),
+        attach: "none".into(),
     };
     let path = home().join("config.json");
     let Ok(s) = fs::read_to_string(&path) else {
@@ -130,8 +140,8 @@ pub fn defaults() -> Manifest {
 impl Manifest {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\n  \"name\": \"{}\",\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\",\n  \"diag\": \"{}\"\n}}\n",
-            self.name, self.kernel, self.rootfs, self.mem_mb, self.net, self.root, self.diag
+            "{{\n  \"name\": \"{}\",\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\",\n  \"diag\": \"{}\",\n  \"attach\": \"{}\"\n}}\n",
+            self.name, self.kernel, self.rootfs, self.mem_mb, self.net, self.root, self.diag, self.attach
         )
     }
 
@@ -155,6 +165,7 @@ impl Manifest {
             root: field(s, "root")?.to_string(),
             // Absent in older manifests: default off.
             diag: json_field(s, "diag").unwrap_or("off").to_string(),
+            attach: json_field(s, "attach").unwrap_or("none").to_string(),
         })
     }
 }
@@ -589,11 +600,28 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
         _ => PathBuf::new(),
     };
     if !fresh && out.is_file() {
-        println!(
-            "cella: {axis} {flavor} already built at {} (use --fresh to rebuild)",
-            out.display()
-        );
-        return Ok(());
+        // Skip only when the recorded inputs still match: a changed
+        // init script or fragment makes the golden stale, and a
+        // stale golden lies quietly (a pegasus inspect booted an
+        // image whose init predated /rock). The manifest carries
+        // the input digests; compare them.
+        match stale_inputs(axis, flavor, &out) {
+            Ok(None) => {
+                println!(
+                    "cella: {axis} {flavor} already built at {} (inputs unchanged; --fresh rebuilds)",
+                    out.display()
+                );
+                return Ok(());
+            }
+            Ok(Some(input)) => {
+                println!(
+                    "cella: {axis} {flavor}: input {input} changed since the build -- rebuilding"
+                );
+            }
+            Err(e) => {
+                println!("cella: {axis} {flavor}: {e} -- rebuilding");
+            }
+        }
     }
     match (axis, flavor) {
         ("kernel", "canonical") => crate::build::kernel_canonical(&kernel_path(flavor)),
@@ -609,6 +637,41 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
         )),
     }?;
     write_golden_manifest(axis, flavor, &out)
+}
+
+/// Stale check: the name of the first build input whose digest no
+/// longer matches the manifest, None when everything matches. A
+/// missing or unreadable manifest is an error (rebuild).
+fn stale_inputs(axis: &str, flavor: &str, out: &Path) -> Result<Option<String>, String> {
+    let mpath = crate::golden::manifest_path(out);
+    let text =
+        fs::read_to_string(&mpath).map_err(|_| format!("no manifest at {}", mpath.display()))?;
+    let _ = flavor;
+    let root = crate::build::repo_root();
+    let b = root.join("scripts/build");
+    let inputs: Vec<std::path::PathBuf> = match axis {
+        "kernel" => vec![
+            b.join("kernel-fragment.config"),
+            b.join("kernel-fragment-nested.config"),
+        ],
+        _ => vec![
+            b.join(format!("rootfs-{flavor}.sh")),
+            b.join("rootfs.sh"),
+            b.join("busybox-fragment.config"),
+        ],
+    };
+    for input in inputs {
+        if !input.is_file() {
+            continue;
+        }
+        let name = input.file_name().unwrap().to_string_lossy().to_string();
+        let recorded = manifest_field(&text, &format!("input_{name}"));
+        let actual = crate::golden::sha3_256_hex(&input)?;
+        if recorded.as_deref() != Some(actual.as_str()) {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
 }
 
 /// The manifest, after every successful build, in one place. The
@@ -669,7 +732,7 @@ fn clear_transients(name: &str) -> Vec<&'static str> {
     cleared
 }
 
-fn is_frozen(name: &str) -> bool {
+pub fn is_frozen(name: &str) -> bool {
     machine_dir(name).join("state").is_file()
 }
 
@@ -680,6 +743,15 @@ fn cmdline_for(m: &Manifest) -> String {
     let mut base = config::default_cmdline();
     if m.diag == "on" {
         base.push_str(" cella_diag");
+    }
+    if m.attach != "none" {
+        // The attached rock is the second virtio-blk (/dev/vdb),
+        // read-only at the device; the inspector runs airgapped.
+        return format!(
+            "{base} root=/dev/vda {} virtio_mmio.device=4K@0xd0000000:5 \
+             virtio_mmio.device=4K@0xd0002000:7",
+            m.root
+        );
     }
     if m.net == "none" {
         format!(
@@ -700,7 +772,27 @@ fn cmdline_for(m: &Manifest) -> String {
 
 /// Start the machine: a fresh boot. Refuses a frozen machine, so
 /// that a sidecar cannot vanish by accident; thaw is the verb for it.
+/// A rock: the manifest latched state=archived (the archive verb).
+/// The latch reads from the raw text, thus a manifest with fields
+/// this struct does not carry still latches.
+pub fn is_archived(name: &str) -> bool {
+    fs::read_to_string(machine_dir(name).join("manifest.json"))
+        .ok()
+        .and_then(|s| json_field(&s, "state").map(|v| v == "archived"))
+        .unwrap_or(false)
+}
+
+fn refuse_rock(name: &str, verb: &str) -> Result<(), String> {
+    if is_archived(name) {
+        return Err(format!(
+            "machine {name:?} is archived (a rock) -- {verb} refuses it; inspect is the verb for a rock"
+        ));
+    }
+    Ok(())
+}
+
 pub fn start(name: &str) -> Result<(), String> {
+    refuse_rock(name, "start")?;
     if is_frozen(name) {
         return Err(format!("machine {name:?} is frozen -- thaw it"));
     }
@@ -712,6 +804,7 @@ pub fn start(name: &str) -> Result<(), String> {
 /// warming and the clock restore, thus the verb returns when the
 /// guest lives again on its frozen clock.
 pub fn thaw(name: &str) -> Result<(), String> {
+    refuse_rock(name, "thaw")?;
     if !is_frozen(name) {
         return Err(format!(
             "machine {name:?} is not frozen -- start it, or freeze it first"
@@ -848,6 +941,14 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     }
     let dir_s = dir.to_str().unwrap().to_string();
     cmd.args(["--bind", &dir_s, &dir_s]);
+    // The attached rock enters the jail read-only: the device is
+    // read-only too, and the mount adds noexec (see the guest init).
+    if m.attach != "none" {
+        if let Some(parent) = Path::new(&m.attach).parent() {
+            let p = parent.to_str().unwrap();
+            cmd.args(["--ro-bind", p, p]);
+        }
+    }
     cmd.args([
         "--ro-bind",
         kernel_dir.to_str().unwrap(),
@@ -860,6 +961,9 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     cmd.args(["--disk", dir.join("disk.img").to_str().unwrap()]);
     if m.net != "none" {
         cmd.args(["--tap", &m.net]);
+    }
+    if m.attach != "none" {
+        cmd.args(["--attach-ro", &m.attach]);
     }
     cmd.args(["--mem-mb", &m.mem_mb.to_string()]);
     cmd.args(["--console", dir.join("console.sock").to_str().unwrap()]);
@@ -1005,6 +1109,7 @@ pub fn connect_console(name: &str) -> Result<std::os::unix::net::UnixStream, Str
 }
 
 pub fn enter(name: &str) -> Result<(), String> {
+    refuse_rock(name, "enter")?;
     use std::io::{Read, Write};
     let mut stream = connect_console(name)?;
     stream.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -1292,13 +1397,24 @@ fn selftest_cycle() -> Result<(), String> {
 
 /// The observable state of a machine, from facts on disk.
 pub fn state_of(name: &str) -> &'static str {
-    if is_running(name) {
+    if is_archived(name) {
+        "archived"
+    } else if is_running(name) {
         "running"
     } else if is_frozen(name) {
         "frozen"
     } else {
         "created"
     }
+}
+
+/// A named digest field from the raw manifest text (the universe
+/// family records them), shortened for a column; "-" when absent.
+pub fn short_digest(name: &str, key: &str) -> String {
+    fs::read_to_string(machine_dir(name).join("manifest.json"))
+        .ok()
+        .and_then(|s| json_field(&s, key).map(|v| v.chars().take(12).collect()))
+        .unwrap_or_else(|| "-".to_string())
 }
 
 /// One line per machine, the arrangement of docker and podman ps.
@@ -1314,8 +1430,8 @@ pub fn list() -> Result<(), String> {
     };
     names.sort();
     println!(
-        "{:<20} {:<9} {:>7} {:>7}  {:<10} {:<5} {:<10} {:<10}",
-        "NAME", "STATE", "PID", "MEM", "NET", "ROOT", "KERNEL", "ROOTFS"
+        "{:<20} {:<9} {:>7} {:>7}  {:<10} {:<5} {:<10} {:<10} {:<12}",
+        "NAME", "STATE", "PID", "MEM", "NET", "ROOT", "KERNEL", "ROOTFS", "DISK-SHA3"
     );
     for name in names {
         let Ok(m) = read_manifest(&name) else {
@@ -1326,7 +1442,7 @@ pub fn list() -> Result<(), String> {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| "-".to_string());
         println!(
-            "{:<20} {:<9} {:>7} {:>6}M  {:<10} {:<5} {:<10} {:<10}",
+            "{:<20} {:<9} {:>7} {:>6}M  {:<10} {:<5} {:<10} {:<10} {:<12}",
             name,
             state_of(&name),
             if is_running(&name) { pid } else { "-".into() },
@@ -1334,7 +1450,8 @@ pub fn list() -> Result<(), String> {
             m.net,
             m.root,
             m.kernel,
-            m.rootfs
+            m.rootfs,
+            short_digest(&name, "digest_disk")
         );
     }
     Ok(())
@@ -1347,6 +1464,14 @@ pub fn info(name: &str) -> Result<(), String> {
     let dir = machine_dir(name);
     println!("name:    {}", m.name);
     println!("state:   {}", state_of(name));
+    // The layer digests, where a universe operation recorded them.
+    if let Ok(raw) = fs::read_to_string(dir.join("manifest.json")) {
+        for key in ["digest_disk", "digest_ram"] {
+            if let Some(v) = json_field(&raw, key) {
+                println!("{key}: {v}");
+            }
+        }
+    }
     if is_frozen(name) {
         if let Ok(md) = fs::metadata(dir.join("state")) {
             if let Ok(t) = md.modified() {
@@ -1421,6 +1546,7 @@ mod tests {
             net: "none".into(),
             root: "rw".into(),
             diag: "off".into(),
+            attach: "none".into(),
         }
     }
 
