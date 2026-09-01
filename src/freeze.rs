@@ -37,10 +37,6 @@ const MAGIC: &[u8; 8] = b"MVMMFRZ1";
 // what makes that assumption safe.
 const FORMAT_VERSION: u32 = 7;
 
-pub struct HostCheck {
-    pub tsc_khz: u32,
-}
-
 pub struct FrozenState {
     pub mem_size: u64,
     /// The nine 16550 registers (see devices::serial). The RX FIFO is
@@ -101,16 +97,16 @@ unsafe fn from_bytes<T: Copy>(bytes: &[u8]) -> T {
 /// that on a mid-freeze crash the invariant "state exists implies RAM is
 /// consistent with it" holds -- the file that might not have made it to
 /// disk yet is the one we're about to write last.
-pub fn write_state(
-    dir: &Path,
-    mem_size: u64,
-    host: &HostCheck,
-    vcpu: &VcpuState,
-    clock: &kvm_clock_data,
-    irqchip: &IrqChipState,
-    serial: &[u8; 9],
-    devices: &[TransportState],
-) -> Result<(), Error> {
+pub fn write_state(dir: &Path, st: &FrozenState) -> Result<(), Error> {
+    let FrozenState {
+        mem_size,
+        serial,
+        tsc_khz,
+        vcpu,
+        clock,
+        irqchip,
+        devices,
+    } = st;
     fs::create_dir_all(dir)?;
     let tmp = state_tmp_path(dir);
     let mut f = OpenOptions::new()
@@ -122,7 +118,7 @@ pub fn write_state(
     f.write_all(MAGIC)?;
     f.write_all(&FORMAT_VERSION.to_le_bytes())?;
     f.write_all(&mem_size.to_le_bytes())?;
-    f.write_all(&host.tsc_khz.to_le_bytes())?;
+    f.write_all(&tsc_khz.to_le_bytes())?;
     // SAFETY: see as_bytes doc comment above; all fields are repr(C) Copy.
     unsafe {
         f.write_all(as_bytes(&vcpu.regs))?;
@@ -442,17 +438,18 @@ mod tests {
             flags: 0,
             ..Default::default()
         };
-        let host = HostCheck { tsc_khz: 2_500_000 };
 
         write_state(
             &dir,
-            256 * 1024 * 1024,
-            &host,
-            &vcpu,
-            &clock,
-            &sample_irqchip(),
-            &[7u8; 9],
-            &sample_devices(),
+            &FrozenState {
+                mem_size: 256 * 1024 * 1024,
+                serial: [7u8; 9],
+                tsc_khz: 2_500_000,
+                vcpu,
+                clock,
+                irqchip: sample_irqchip(),
+                devices: sample_devices(),
+            },
         )
         .unwrap();
         assert!(is_frozen(&dir));
@@ -491,13 +488,15 @@ mod tests {
         let clock = kvm_clock_data::default();
         write_state(
             &dir,
-            64 * 1024 * 1024,
-            &HostCheck { tsc_khz: 1 },
-            &vcpu,
-            &clock,
-            &sample_irqchip(),
-            &[7u8; 9],
-            &sample_devices(),
+            &FrozenState {
+                mem_size: 64 * 1024 * 1024,
+                serial: [7u8; 9],
+                tsc_khz: 1,
+                vcpu,
+                clock,
+                irqchip: sample_irqchip(),
+                devices: sample_devices(),
+            },
         )
         .unwrap();
 
@@ -533,13 +532,15 @@ mod tests {
         let clock = kvm_clock_data::default();
         write_state(
             &dir,
-            64 * 1024 * 1024,
-            &HostCheck { tsc_khz: 1 },
-            &vcpu,
-            &clock,
-            &sample_irqchip(),
-            &[7u8; 9],
-            &sample_devices(),
+            &FrozenState {
+                mem_size: 64 * 1024 * 1024,
+                serial: [7u8; 9],
+                tsc_khz: 1,
+                vcpu,
+                clock,
+                irqchip: sample_irqchip(),
+                devices: sample_devices(),
+            },
         )
         .unwrap();
 

@@ -961,18 +961,17 @@ fn do_freeze(
         vcpu::save_irqchip(vm).unwrap_or_else(|e| fatal(&format!("saving irqchip/PIT: {e:?}")));
     let tsc_khz = vcpu_fd.get_tsc_khz().unwrap_or(0);
 
-    let host_check = freeze::HostCheck { tsc_khz };
-    freeze::write_state(
-        state_dir,
-        mem_size_bytes,
-        &host_check,
-        &vcpu_state,
-        &clock,
-        &irqchip,
-        &serial_regs,
-        device_states,
-    )
-    .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
+    let frozen = freeze::FrozenState {
+        mem_size: mem_size_bytes,
+        serial: serial_regs,
+        tsc_khz,
+        vcpu: vcpu_state,
+        clock,
+        irqchip,
+        devices: device_states.to_vec(),
+    };
+    freeze::write_state(state_dir, &frozen)
+        .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
 
     eprintln!("cella: frozen");
 }
