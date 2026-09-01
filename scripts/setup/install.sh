@@ -67,12 +67,11 @@ cella: install done.
 
 Next, from any directory (no make needed from here on):
 
-  1. The network, once per host boot (the one root verb; the pool
-     feeds `cella create --net auto`, and the manifests are the
-     allocation record). sudo does not search ~/.local/bin, thus the
-     full path:
-       NUMBER_OF_TAPS=4
-       sudo "\$(which cella)" setup net --taps "\$NUMBER_OF_TAPS"
+  1. The network, once per host boot -- no sudo: cella-network
+     carries cap_net_admin from this install (the pool feeds
+     `cella create --net auto`, and the manifests are the
+     allocation record):
+       cella-network setup --taps 4
 
   2. Prove the lifecycle end to end:
        cella selftest
@@ -88,6 +87,13 @@ EOT
 # make install calls this script).
 cargo build --release
 install -D -m 0755 target/release/cella "$HOME/.local/bin/cella"
+# The thin CLIs. cella-network is the one CAP_NET_ADMIN holder: the
+# file capability makes every later invocation sudo-free -- this
+# setcap is the root moment, once, here.
+install -D -m 0755 target/release/cella-network "$HOME/.local/bin/cella-network"
+sudo setcap 'cap_net_admin+eip' "$HOME/.local/bin/cella-network"
+echo "cella: cella-network installed with cap_net_admin"
+sudo setcap 'cap_net_admin+eip' target/release/cella-network 2>/dev/null || true
 case ":$PATH:" in
 *":$HOME/.local/bin:"*) echo "cella: ~/.local/bin is already on PATH" ;;
 *)

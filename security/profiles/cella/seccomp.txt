@@ -1,0 +1,4 @@
+# seccomp profile for cella
+#
+# Placeholder. The path is the contract; the shakedown branch
+# writes the contents (see TASKS.md, thin CLI split).

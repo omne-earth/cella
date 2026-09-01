@@ -109,26 +109,29 @@ pub fn check() -> u32 {
                 .unwrap_or(false);
             match (mac == want_mac, addressed) {
                 (true, true) => r.ok(&tap, &format!("{host_ip}/24, mac {mac}")),
-                (_, false) => r.fail(&tap, &format!("missing {host_ip} -- run: sudo cella setup net")),
+                (_, false) => r.fail(&tap, &format!("missing {host_ip} -- run: cella doctor fix")),
                 (false, true) => r.note(&tap, &format!("mac {mac}, not the convention {want_mac} (predates it, or hand-made); a recreation will differ")),
             }
         }
     }
     if taps == 0 {
-        r.fail("tap pool", "no taps -- run: sudo cella setup net --taps 4");
+        r.fail("tap pool", "no taps -- run: cella doctor fix");
     }
 
     // Forwarding: guest egress dies without it.
     match fs::read_to_string("/proc/sys/net/ipv4/ip_forward") {
         Ok(v) if v.trim() == "1" => r.ok("ip_forward", "on"),
-        _ => r.fail("ip_forward", "off -- run: sudo cella setup net"),
+        _ => r.fail("ip_forward", "off -- run: cella doctor fix"),
     }
 
     // The nft tables need root to inspect: state the fact, no guess.
     if unsafe { libc::geteuid() } == 0 {
         match run_out("nft", &["list", "table", "inet", "cella_nat"]) {
             Some(_) => r.ok("nat", "table inet cella_nat present"),
-            None => r.fail("nat", "table inet cella_nat absent -- run: cella setup net"),
+            None => r.fail(
+                "nat",
+                "table inet cella_nat absent -- run: cella doctor fix",
+            ),
         }
     } else {
         r.note(
@@ -181,17 +184,42 @@ pub fn check() -> u32 {
     r.failed
 }
 
-/// Repair what this uid can; print the exact command for the rest.
-/// Today every repair either belongs to the build verb (which heals
-/// itself on the next call) or needs root -- thus fix reports, and
-/// escalates nothing.
+/// Repair what fix can, then re-check. Net facts (the tap pool,
+/// ip_forward, the NAT) go to cella-network, which carries
+/// CAP_NET_ADMIN as a file capability -- no sudo in the path, the
+/// root moment happened at install time. Everything else prints its
+/// command; doctor escalates nothing.
 pub fn fix() -> u32 {
     let failed = check();
-    if failed > 0 {
-        println!();
-        println!("cella doctor: the commands above repair each FAIL; doctor escalates nothing");
+    if failed == 0 {
+        return 0;
     }
-    failed
+    println!();
+    let net_bin = sibling("cella-network");
+    println!("cella doctor: fix -- running {net_bin} setup");
+    let ran = std::process::Command::new(&net_bin)
+        .args(["setup"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ran {
+        println!("cella doctor: {net_bin} failed -- run: make install (grants it cap_net_admin)");
+    }
+    println!();
+    println!("cella doctor: re-check");
+    check()
+}
+
+/// A sibling thin CLI: beside the current binary when present (an
+/// installation, or target/release), else by PATH.
+fn sibling(name: &str) -> String {
+    if let Ok(me) = std::env::current_exe() {
+        let p = me.parent().unwrap().join(name);
+        if p.is_file() {
+            return p.to_string_lossy().to_string();
+        }
+    }
+    name.to_string()
 }
 
 /// Recompute the digest of each golden against its manifest. A

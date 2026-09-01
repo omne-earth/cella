@@ -287,9 +287,9 @@ kernel-config-check: ## Resolve kernel-fragment.config against defconfig and rep
 	$(LOG)
 	$(SCRIPTS)/build/kernel-config-check.sh
 
-setup-tap: build ## Provision the tap pool + NAT via the root verb (TAPS controls the pool size)
+setup-tap: build ## Provision the tap pool + NAT via cella-network (no sudo; make install granted the capability)
 	$(LOG)
-	sudo $(CELLA_DEV) setup net --taps $(TAPS)
+	target/release/cella-network setup --taps $(TAPS)
 
 # --- Everything -----------------------------------------------------
 

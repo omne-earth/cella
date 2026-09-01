@@ -306,18 +306,89 @@ fn create_persistent_tap(name: &str, owner: libc::uid_t) -> Result<(), String> {
     Ok(())
 }
 
+/// True when the effective capability set carries CAP_NET_ADMIN
+/// (bit 12 of CapEff in /proc/self/status). Root always does; the
+/// cella-network binary does through its file capability.
+fn have_net_admin() -> bool {
+    let Ok(status) = fs::read_to_string("/proc/self/status") else {
+        return false;
+    };
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("CapEff:"))
+        .and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
+        .map(|caps| caps & (1 << 12) != 0)
+        .unwrap_or(false)
+}
+
+/// Give the spawned ip and nft CAP_NET_ADMIN. The file capability
+/// puts it in the permitted set only; an ambient raise also demands
+/// it in the process inheritable set, which the invoking shell never
+/// carries. Therefore: capset the inheritable bit first (legal, the
+/// bit is in permitted), then raise it into the ambient set. Root
+/// needs none of this; a failure surfaces when the tools then fail.
+fn raise_ambient_net_admin() {
+    const PR_CAP_AMBIENT: libc::c_int = 47;
+    const PR_CAP_AMBIENT_RAISE: libc::c_ulong = 2;
+    const CAP_NET_ADMIN: u32 = 12;
+    const V3: u32 = 0x2008_0522; // _LINUX_CAPABILITY_VERSION_3
+
+    #[repr(C)]
+    struct CapHeader {
+        version: u32,
+        pid: libc::c_int,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct CapData {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+
+    let mut hdr = CapHeader {
+        version: V3,
+        pid: 0,
+    };
+    let mut data = [CapData::default(); 2];
+    // SAFETY: valid pointers to the V3 header and its two data slots.
+    unsafe {
+        if libc::syscall(libc::SYS_capget, &mut hdr, data.as_mut_ptr()) != 0 {
+            return;
+        }
+        data[0].inheritable |= 1 << CAP_NET_ADMIN;
+        if libc::syscall(libc::SYS_capset, &hdr, data.as_ptr()) != 0 {
+            return;
+        }
+        libc::prctl(
+            PR_CAP_AMBIENT,
+            PR_CAP_AMBIENT_RAISE,
+            CAP_NET_ADMIN as libc::c_ulong,
+            0,
+            0,
+        );
+    }
+}
+
 pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
     // SAFETY: geteuid has no failure mode.
-    if unsafe { libc::geteuid() } != 0 {
+    let root = unsafe { libc::geteuid() } == 0;
+    if !root && !have_net_admin() {
         return Err(
-            "setup net creates TAP devices (CAP_NET_ADMIN) -- run: sudo cella setup net".into(),
+            "setup net creates TAP devices and needs CAP_NET_ADMIN -- run: cella-network setup \
+             (make install grants it the capability), or run this verb as root"
+                .into(),
         );
+    }
+    if !root {
+        raise_ambient_net_admin();
     }
     let owner: libc::uid_t = std::env::var("SUDO_UID")
         .ok()
         .and_then(|v| v.parse().ok())
-        // SAFETY: geteuid has no failure mode.
-        .unwrap_or_else(|| unsafe { libc::geteuid() });
+        // SAFETY: getuid has no failure mode. The real uid is the
+        // invoking user under the file-capability path.
+        .unwrap_or_else(|| unsafe { libc::getuid() });
     let ip_bin = find_program("ip");
     let ip = |args: &[&str]| -> Result<(), String> {
         let out = std::process::Command::new(&ip_bin)
@@ -335,11 +406,25 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
     };
     for n in first..first + taps {
         let tap = format!("tap{n}");
+        let (_, host) = tap_addresses(&tap);
         if std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
-            println!("cella: {tap} already exists, leaving it alone");
+            // Converge, do not skip: an interrupted setup leaves a tap
+            // without its address or MAC, and a second run must heal
+            // it. Every call below is idempotent ("File exists" on the
+            // address is success).
+            let _ = ip(&["link", "set", &tap, "down"]);
+            let _ = ip(&[
+                "link",
+                "set",
+                &tap,
+                "address",
+                &format!("02:ce:11:a0:00:{n:02x}"),
+            ]);
+            let _ = ip(&["addr", "replace", &format!("{host}/24"), "dev", &tap]);
+            ip(&["link", "set", &tap, "up"])?;
+            println!("cella: {tap} already exists, converged ({host}/24)");
             continue;
         }
-        let (_, host) = tap_addresses(&tap);
         create_persistent_tap(&tap, owner)?;
         // A deterministic MAC, by convention. A recreated tap then
         // carries the same address, and a thawed guest with a cached
@@ -361,7 +446,7 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
     // runs; the nft accept below covers hosts without it.
     let _ = std::fs::write("/proc/sys/net/ipv4/ip_forward", "1");
     let fw = find_program("firewall-cmd");
-    if Path::new(&fw).is_absolute() {
+    if root && Path::new(&fw).is_absolute() {
         for n in first..first + taps {
             let tap = format!("tap{n}");
             let _ = std::process::Command::new(&fw)
