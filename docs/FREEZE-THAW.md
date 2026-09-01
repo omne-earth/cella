@@ -7,8 +7,8 @@ and what the guest can observe.
 
 A freeze must not exist for the guest. The guest stops, and the guest
 continues. Time, timers, register state, and entropy continue from the
-point of the stop. We call this the cryogenic principle. The probes in
-`probes/` measure it, and the gates in the probes enforce it.
+point of the stop. We call this the cryogenic principle. The probes
+(`cella probe ...`) measure it, and their gates enforce it.
 
 ## Is time seamless for the guest?
 
@@ -83,7 +83,7 @@ flowchart LR
     C1 -->|"write"| SC
     subgraph state["state dir"]
         RAM["ram.img (guest RAM, MAP_SHARED)"]
-        SC["state (sidecar, format v5)"]
+        SC["state (sidecar, format v7)"]
     end
     RAM -->|"map"| C2["cella, second process<br/>(thaw, then continue)"]
     SC -->|"restore, then delete"| C2

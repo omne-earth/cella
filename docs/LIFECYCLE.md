@@ -1,8 +1,11 @@
 # The machine lifecycle
 
-cella is the guest manager. One binary owns the verbs, the state is
-files, and no daemon exists. The motto: rootless, daemonless, and
-seccomp, SELinux, and jail confinement per VM.
+cella is the guest manager. One multi-call binary owns the verbs
+under thin-CLI names (persona dispatch on argv0: cella-machine,
+cella-build, cella-doctor, cella-vmm; cella-network and cella-probe
+are real separate binaries), the state is files, and no daemon
+exists. The motto: rootless, daemonless, and seccomp, SELinux, and
+jail confinement per VM.
 
 ## The security boundary
 
@@ -58,7 +61,7 @@ the probe is the instrument, not the product.
 
 | Layer   | Scope   | What it removes | Status |
 |---------|---------|-----------------|--------|
-| rootless | everything | No privilege to lose: the one CAP_NET_ADMIN moment is the network setup, out of band | enforced |
+| rootless | everything | No privilege to lose: CAP_NET_ADMIN lives in the cella-network binary as a file capability, granted once at install | enforced |
 | bwrap jail | per VM | The filesystem, except the machine directory, the golden kernel, /dev/kvm, and the TAP; the pid, ipc, uts, user, and cgroup namespaces | enforced |
 | seccomp | per VMM process | Every syscall outside the allowlist (~26 entries, each commented); socket(2) stays the canary | enforced |
 | SELinux | per domain | Lateral movement between machine directories and device types | example policy only |
@@ -66,15 +69,17 @@ the probe is the instrument, not the product.
 ### The network privilege
 
 Creating and addressing a TAP needs CAP_NET_ADMIN, thus the VMM never
-does it. The setup provisions a pool of persistent taps and the NAT
-once, with sudo, out of band; `create` then allocates a free tap from
-the pool into the manifest, rootless. The verb: `sudo $(which cella)
-setup net --taps N`, the one verb that asks for privilege. Each pool
-tap owns a subnet: tap<n> serves 192.168.<200+n>.0/24, the host at .1
-and the guest at .2, thus concurrent networked machines do not
-collide. A later step can
-evaluate user-mode networking (passt), which would remove the
-privileged moment entirely at the cost of a new integration.
+does it. cella-network is the one holder: install.sh grants the
+binary the capability as a file capability (setcap, the single root
+moment, once). `cella-network setup --taps N` provisions the pool,
+the deterministic MACs, the addresses, ip_forward, and the NAT --
+no sudo, and the run converges: an interrupted setup heals on the
+next call. `create` then allocates a free tap from the pool into
+the manifest, rootless. TUNSETPERSIST is kernel-lifetime, thus
+install.sh also enables cella-network.service, a oneshot that
+recreates the pool at boot. Each pool tap owns a subnet: tap<n>
+serves 192.168.<200+n>.0/24, the host at .1 and the guest at .2,
+thus concurrent networked machines do not collide.
 
 ## The verbs
 
@@ -98,6 +103,9 @@ stateDiagram-v2
 | thaw    | Resumes a frozen machine | Rust only |
 | enter   | Attaches the terminal to the serial console. An exit of the guest shell detaches | Rust only |
 | destroy | Deletes the machine and its artifacts, once and for all | Rust only |
+| doctor  | check: the host facts, one line each. fix: repairs what the uid can (the pool via cella-network, absent goldens via build), deletes nothing. verify: recomputes each golden digest against its manifest | Rust only |
+| probe   | The cryogenic diagnostics (cella-probe): wallclock, freeze-thaw-clock, sregs | Rust only |
+| network | The pool (cella-network): the one CAP_NET_ADMIN holder | file capability |
 
 The difference between stop and freeze is intent. Freeze preserves the
 in-flight reality of the guest, and time stays cryogenic across the
@@ -111,7 +119,9 @@ is its manifest and its disk, nothing else.
 $HOME/.cella/
   config.json                    the defaults of create; flags override it
   kernel/<flavor>/bzImage        golden kernels (build)
+  kernel/<flavor>/golden.json    the manifest: sha3-256, sources, inputs (mode 444)
   rootfs/<flavor>/rootfs.ext4    golden root filesystems (build)
+  rootfs/<flavor>/golden.json    the manifest, same rule
   machines/<name>/
     manifest.json                the machine: flavor, memory, net, root mode, state
     disk.img                     the machine's own disk (a copy at create)
@@ -128,8 +138,12 @@ is the removal of exactly one directory. `create` fixes the machine's
 configuration (flavors, memory, network, root mode) in the manifest;
 `start` takes a name and nothing else.
 
-`build` runs when `create` misses a golden artifact, and it runs
-ad-hoc: `cella build kernel <flavor>`.
+`build` runs ad-hoc (`cella build kernel <flavor>`), skips a golden
+that exists, and rebuilds on `--fresh`. Every build writes
+golden.json beside its artifact -- the digest of the artifact and
+of the inputs that shaped it, born with the artifact, read-only.
+Verification belongs to doctor: build makes, doctor judges, and
+doctor deletes nothing.
 
 The defaults of `create`: kernel `canonical`, rootfs `cella` -- the
 interactive mvp image. `~/.cella/config.json` overrides any of the
@@ -198,10 +212,16 @@ and after, and the results land in the documents. Sequence:
 Each step is a commit series with green batteries on both machines
 before the next step begins.
 
-Status (2026-08-31): all five steps are done. The verbs run --
-build (native, all six flavors), create, start, enter, freeze, thaw,
-stop, destroy, list, info, selftest, and the root verb setup net --
-and the make targets are thin wrappers over them. dist/, the assets
-scripts, and tap.sh are gone; the tests and the probes read the
-golden paths under CELLA_HOME. The guest init scripts and the kernel
-fragments stay in the repository as the build inputs.
+Status (2026-08-31): all five steps are done, and the restructure
+followed. The verbs run -- build (native, all six flavors, with
+manifests), create, start, enter, freeze, thaw, stop, destroy,
+list, info, selftest, doctor, probe, and network -- and the make
+targets are thin wrappers over them. The thin-CLI names exist as
+personas of the one binary (cella-machine, cella-build,
+cella-doctor, cella-vmm), with cella-network and cella-probe as
+real binaries; the jail runs the machine under the cella-vmm name.
+The security-profile paths per CLI live under security/profiles/;
+their contents come with the shakedown work. dist/, the assets
+scripts, tap.sh, and the probes/ crates are gone; the diagnostics
+are cella-probe subcommands, and no production path compiles
+anything at run time.

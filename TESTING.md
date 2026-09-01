@@ -55,6 +55,9 @@ Or all at once: `make smoke` (or `make test-all` for everything).
 | `make smoke-boot` | **yes** | a real bzImage boots under real KVM all the way to a running init -- GDT/page-table/boot_params, virtio-mmio device negotiation, and a successful root mount, not just an early kernel banner | `scripts/test/boot.sh` |
 | `make smoke-thaw` | **yes** | full lifecycle: boot, `SIGUSR1` freeze, sidecar file exists with no leftover `.tmp`, re-invoking the same command line thaws instead of re-booting, `state` is gone afterward (one-shot enforcement) | `scripts/test/thaw.sh` |
 | `make smoke-net` | **yes** | guest answers ICMP over the TAP after boot -- best-effort, depends on the test rootfs configuring networking from the `ip=` kernel parameter, which is unverified (see the script's own caveat) | `scripts/test/net.sh` |
+| `make smoke-device-state` | **yes** | the four device-state acceptance gates: the disk survives the thaw (rw root), the network survives the thaw, a parked egress request completes after the thaw, and the world-ratchet -- the verdict external, against real endpoints | `scripts/test/device-state.sh` |
+| `make doctor` | no | the host facts (one line each, nonzero on FAIL) and every golden digest against its manifest | `cella doctor check` + `cella doctor verify` |
+| `make probe-wallclock` / `probe-freeze-thaw-clock` / `probe-sregs` | **yes** (sregs: no guest) | the cryogenic clock gates, through the installable `cella-probe` binary -- no cargo at run time | `cella probe <name>` |
 
 ## Why the KVM-dependent tests are separate, not skipped-by-default unit tests
 

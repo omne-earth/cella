@@ -32,7 +32,7 @@ The test passes there at a depth of three hypervisor layers.
 
 ## Artifacts
 
-The canonical dist/bzImage and dist/rootfs.ext4 are proof artifacts.
+The canonical goldens under ~/.cella are proof artifacts, each sworn by its golden.json manifest.
 The nested feature does not change them: the inner guest boots them
 unmodified. The nested artifacts carry the -nested suffix, and their
 own targets build them.
