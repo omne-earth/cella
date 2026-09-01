@@ -71,15 +71,33 @@ echo "  start, thaw, and enter refuse the rock"
 
 say "step 5: inspect the source -- the evidence at /rock, read-only, noexec"
 "$BIN" stop u1 >/dev/null
-DIGEST_BEFORE=$(sha3sum "$CELLA_HOME/machines/u1/disk.img" 2>/dev/null || sha256sum "$CELLA_HOME/machines/u1/disk.img")
-(printf 'grep -a . /rock/u.txt; echo rock-rea"d"\n'; sleep 3; printf 'touch /rock/x 2>&1 | head -1\n'; sleep 2) \
-    | timeout 30 "$BIN" inspect u1 >/dev/null
-CON="$CELLA_HOME/machines/u1-inspector/console.log"
-# The inspector is destroyed on detach; its console log went with it.
+DIGEST_BEFORE=$(sha256sum "$CELLA_HOME/machines/u1/disk.img")
+ICON="$CELLA_HOME/machines/u1-inspector/console.log"
+SAVED=$(mktemp)
+# The inspector dies on detach and its console goes with it: watch
+# the console live, and keep a copy for the assertions.
+# The leading sleep lets the appliance boot to its shell: bytes
+# typed during the boot land in the serial RX before bash exists.
+(sleep 6; printf 'cat /rock/u.txt | grep -a universe && echo rock-rea"d"\n'; sleep 4; \
+ printf 'touch /rock/x 2>&1 | grep -a . && echo write-denie"d"\n'; sleep 4) \
+    | timeout 60 "$BIN" inspect u1 >/dev/null &
+INSPECT_PID=$!
+deadline=$((SECONDS + 45))
+while kill -0 $INSPECT_PID 2>/dev/null; do
+    [ -f "$ICON" ] && cp "$ICON" "$SAVED" 2>/dev/null || true
+    [ $SECONDS -lt $deadline ] || break
+    sleep 1
+done
+wait $INSPECT_PID 2>/dev/null || true
+grep -aq "evidence mounted at /rock" "$SAVED" || { echo "FAIL: /rock did not mount in the inspector"; exit 1; }
+grep -aq "rock-read" "$SAVED" || { echo "FAIL: the evidence did not read back through /rock"; exit 1; }
+grep -aq "write-denied" "$SAVED" || { echo "FAIL: a write to /rock did not fail loudly"; exit 1; }
+rm -f "$SAVED"
 [ -d "$CELLA_HOME/machines/u1-inspector" ] && { echo "FAIL: the inspector survived the detach"; exit 1; }
-DIGEST_AFTER=$(sha3sum "$CELLA_HOME/machines/u1/disk.img" 2>/dev/null || sha256sum "$CELLA_HOME/machines/u1/disk.img")
+DIGEST_AFTER=$(sha256sum "$CELLA_HOME/machines/u1/disk.img")
 [ "$DIGEST_BEFORE" = "$DIGEST_AFTER" ] || { echo "FAIL: the inspection changed the evidence"; exit 1; }
-echo "  the inspector came, read, was destroyed; the evidence is byte-identical"
+echo "  /rock mounted, the evidence read back, a write failed, the inspector died,"
+echo "  and the evidence is byte-identical"
 
 say "step 6: branch the rock -- the latch carries"
 "$BIN" branch u2 u3 | grep -q "rock" || { echo "FAIL: the rock branch did not report a rock"; exit 1; }
