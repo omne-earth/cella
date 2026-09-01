@@ -473,6 +473,66 @@ pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String
     Ok(())
 }
 
+/// The gateway rootfs: the canonical tree with the gateway init --
+/// the appliance between an agent and the world (see TASKS.md and
+/// docs/LIFECYCLE.md). No bash, no diagnostics beyond a heartbeat:
+/// the appliance forwards, and a busybox shell serves diagnosis.
+pub fn rootfs_gateway(golden: &Path, canonical_golden: &Path) -> Result<(), String> {
+    let root = repo_root();
+    let init = root.join("scripts/build/rootfs-gateway.sh");
+    if !init.is_file() {
+        return Err(format!(
+            "{} missing -- run the build from the repository checkout",
+            init.display()
+        ));
+    }
+    let rbuild = root.join("target/rootfs-build");
+    let rootdir = rbuild.join("root");
+    if !rootdir.is_dir() {
+        println!("cella: rootfs gateway: the canonical tree is absent, building it first");
+        rootfs_canonical(canonical_golden)?;
+    }
+    println!("cella: rootfs gateway: assembling");
+    let groot = rbuild.join("root-gateway");
+    let _ = fs::remove_dir_all(&groot);
+    run(
+        "copy the root",
+        "cp",
+        &["-a", rootdir.to_str().unwrap(), groot.to_str().unwrap()],
+        None,
+    )?;
+    fs::copy(&init, groot.join("sbin/init")).map_err(|e| e.to_string())?;
+    let mut perm = fs::metadata(groot.join("sbin/init"))
+        .map_err(|e| e.to_string())?
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perm, 0o755);
+    fs::set_permissions(groot.join("sbin/init"), perm).map_err(|e| e.to_string())?;
+
+    let img = rbuild.join("rootfs-gateway.ext4");
+    let _ = fs::remove_file(&img);
+    let f = fs::File::create(&img).map_err(|e| e.to_string())?;
+    f.set_len(16 * 1024 * 1024).map_err(|e| e.to_string())?;
+    drop(f);
+    run_in_toolbox_quiet(
+        "mkfs",
+        &rbuild,
+        &[
+            "mkfs.ext4",
+            "-q",
+            "-F",
+            "-d",
+            groot.to_str().unwrap(),
+            img.to_str().unwrap(),
+        ],
+    )?;
+    fs::create_dir_all(golden.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = golden.with_extension("tmp");
+    fs::copy(&img, &tmp).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
+    println!("cella: golden rootfs gateway -> {}", golden.display());
+    Ok(())
+}
+
 /// The nested kernel: the canonical fragment plus the KVM host
 /// stack, from the same pinned source, in a copied clean tree. The
 /// canonical tree stays as the canonical cache.

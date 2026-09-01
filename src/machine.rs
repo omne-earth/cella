@@ -386,6 +386,78 @@ fn raise_ambient_net_admin() {
     }
 }
 
+/// The pair wiring of the gateway ladder: a host bridge with no
+/// address (pure L2) joins the agent tap pair<n>a and the gateway
+/// tap pair<n>g, and a host route sends the agent subnet
+/// (10.77.<n>.0/24) toward the world side of the gateway on the
+/// pool tap named by --via. The host NAT already masquerades every
+/// forwarded subnet on its way out.
+pub fn setup_pair(id: u32, via: &str) -> Result<(), String> {
+    // SAFETY: geteuid has no failure mode.
+    let root = unsafe { libc::geteuid() } == 0;
+    if !root && !have_net_admin() {
+        return Err(
+            "pair wiring needs CAP_NET_ADMIN -- run: cella-network pair (make install grants \
+             the capability), or run as root"
+                .into(),
+        );
+    }
+    if !root {
+        raise_ambient_net_admin();
+    }
+    let owner: libc::uid_t = std::env::var("SUDO_UID")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        // SAFETY: getuid has no failure mode.
+        .unwrap_or_else(|| unsafe { libc::getuid() });
+    let n: u32 = via
+        .strip_prefix("tap")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| format!("--via wants a pool tap (tap<n>), not {via:?}"))?;
+    let ip_bin = find_program("ip");
+    let ip = |args: &[&str]| -> Result<(), String> {
+        let out = std::process::Command::new(&ip_bin)
+            .args(args)
+            .output()
+            .map_err(|e| format!("running ip: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "ip {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(())
+    };
+    let br = format!("brp{id}");
+    if !std::path::Path::new(&format!("/sys/class/net/{br}")).exists() {
+        ip(&["link", "add", "name", &br, "type", "bridge"])?;
+    }
+    for suffix in ["a", "g"] {
+        let tap = format!("pair{id}{suffix}");
+        if !std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
+            create_persistent_tap(&tap, owner)?;
+        }
+        ip(&["link", "set", &tap, "master", &br])?;
+        ip(&["link", "set", &tap, "up"])?;
+    }
+    ip(&["link", "set", &br, "up"])?;
+    // The route to the agent subnet goes through the world side of
+    // the gateway: the guest address of the via tap, by convention.
+    let gw_world = format!("192.168.{}.2", 200 + n);
+    ip(&[
+        "route",
+        "replace",
+        &format!("10.77.{id}.0/24"),
+        "via",
+        &gw_world,
+    ])?;
+    println!(
+        "cella: pair {id}: brp{id} joins pair{id}a and pair{id}g; 10.77.{id}.0/24 via {gw_world} ({via})"
+    );
+    Ok(())
+}
+
 pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
     // SAFETY: geteuid has no failure mode.
     let root = unsafe { libc::geteuid() } == 0;
@@ -637,6 +709,9 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
         ("rootfs", "cella") => {
             crate::build::rootfs_cella(&rootfs_path(flavor), &rootfs_path("canonical"))
         }
+        ("rootfs", "gateway") => {
+            crate::build::rootfs_gateway(&rootfs_path(flavor), &rootfs_path("canonical"))
+        }
         ("rootfs", "nested") => crate::build::rootfs_nested(&rootfs_path(flavor)),
         ("rootfs", "inception") => crate::build::rootfs_inception(&rootfs_path(flavor)),
         _ => Err(format!(
@@ -782,13 +857,34 @@ fn cmdline_for(m: &Manifest) -> String {
             6 + 2 * i
         ));
     }
+    // The first tap configures eth0. A pool tap uses the pool
+    // convention; an agent-side pair tap (pair<n>a) uses the pair
+    // convention, with the gateway as the route to everything.
     let first = taps[0];
-    line.push_str(&format!(
-        " ip={}::{}:255.255.255.0::eth0:off",
-        tap_addresses(first).0,
-        tap_addresses(first).1
-    ));
+    if let Some(n) = pair_id(first, 'a') {
+        line.push_str(&format!(
+            " ip=10.77.{n}.2::10.77.{n}.1:255.255.255.0::eth0:off"
+        ));
+    } else {
+        line.push_str(&format!(
+            " ip={}::{}:255.255.255.0::eth0:off",
+            tap_addresses(first).0,
+            tap_addresses(first).1
+        ));
+    }
+    // A gateway machine carries a pair<n>g tap: hand the id to the
+    // image init, which addresses eth1 and turns forwarding on.
+    for tap in &taps {
+        if let Some(n) = pair_id(tap, 'g') {
+            line.push_str(&format!(" cella_pair={n}"));
+        }
+    }
     line
+}
+
+/// The id of a pair tap (pair<n>a or pair<n>g), by side.
+fn pair_id(tap: &str, side: char) -> Option<u32> {
+    tap.strip_prefix("pair")?.strip_suffix(side)?.parse().ok()
 }
 
 /// Start the machine: a fresh boot. Refuses a frozen machine, so

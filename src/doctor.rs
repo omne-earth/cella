@@ -209,6 +209,7 @@ pub fn check() -> u32 {
         ("kernel", "canonical"),
         ("rootfs", "canonical"),
         ("rootfs", "cella"),
+        ("rootfs", "gateway"),
     ] {
         let p = if axis == "kernel" {
             machine::kernel_path(flavor)
@@ -276,6 +277,7 @@ pub fn fix() -> u32 {
         ("kernel", "canonical"),
         ("rootfs", "canonical"),
         ("rootfs", "cella"),
+        ("rootfs", "gateway"),
     ] {
         let p = if axis == "kernel" {
             machine::kernel_path(flavor)
@@ -357,6 +359,7 @@ pub fn verify(target: Option<(&str, &str)>) -> u32 {
         ("kernel", "nested"),
         ("rootfs", "canonical"),
         ("rootfs", "cella"),
+        ("rootfs", "gateway"),
         ("rootfs", "nested"),
         ("rootfs", "inception"),
     ];

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# The time-gateway ladder, first rungs: pair wiring, the gateway
+# appliance forwards, and the pair freezes and thaws together. The
+# agent reaches the world only through the gateway; the pair-freeze
+# order is agent first, thaw order gateway first (the world side
+# stands before the agent wakes).
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+BIN=target/release/cella
+NET_BIN="$HOME/.local/bin/cella-network"
+[ -x "$NET_BIN" ] || NET_BIN=target/release/cella-network
+[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
+"$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella golden:rootfs:gateway || exit 0
+ip link show tap1 >/dev/null 2>&1 || { echo "SKIP: tap1 missing -- run: cella doctor fix"; exit 0; }
+
+say() { echo; echo "==> $1"; }
+
+say "step 1: wire the pair (bridge, two taps, the route to the agent subnet)"
+if ! "$NET_BIN" pair --id 0 --via tap1; then
+    echo "SKIP: pair wiring failed (cap_net_admin -- run: make install)"; exit 0
+fi
+
+REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
+export CELLA_HOME=$(mktemp -d /tmp/cella-gateway.XXXXXX)
+mkdir -p "$CELLA_HOME/kernel/canonical" "$CELLA_HOME/rootfs/cella" "$CELLA_HOME/rootfs/gateway"
+cp "$REAL_HOME/kernel/canonical/bzImage" "$CELLA_HOME/kernel/canonical/"
+cp "$REAL_HOME/rootfs/cella/rootfs.ext4" "$CELLA_HOME/rootfs/cella/"
+cp "$REAL_HOME/rootfs/gateway/rootfs.ext4" "$CELLA_HOME/rootfs/gateway/"
+
+teardown() { for m in gw ag; do "$BIN" stop $m >/dev/null 2>&1 || true; done; rm -rf "$CELLA_HOME"; }
+trap teardown EXIT
+type_in() { local vm="$1"; shift; (printf '%s\n' "$1"; sleep 2) | timeout 20 "$BIN" enter "$vm" >/dev/null; }
+wait_con() {
+    local con="$CELLA_HOME/machines/$1/console.log" deadline=$((SECONDS + 20))
+    while [ $SECONDS -lt $deadline ]; do
+        grep -aq "$2" "$con" && return 0
+        sleep 1
+    done
+    return 1
+}
+
+say "step 2: the gateway appliance, world side tap1, agent side pair0g"
+"$BIN" create gw --net tap1,pair0g --rootfs gateway >/dev/null
+"$BIN" start gw >/dev/null
+wait_con gw "forwarding on" || { echo "FAIL: the gateway did not bring its agent side up"; exit 1; }
+echo "  gateway up: 10.77.0.1 on the agent side, forwarding on"
+
+say "step 3: the agent, behind the gateway only"
+"$BIN" create ag --net pair0a >/dev/null
+"$BIN" start ag >/dev/null
+sleep 4
+type_in ag 'ping -c 1 -W 5 10.77.0.1 >/dev/null && echo pair-o"k"'
+wait_con ag "pair-ok" || { echo "FAIL: the agent cannot reach the gateway over the pair"; exit 1; }
+echo "  agent -> gateway over the L2 pair"
+
+say "step 4: the agent reaches the host, through the gateway"
+type_in ag 'ping -c 1 -W 5 192.168.201.1 >/dev/null && echo world-o"k"'
+wait_con ag "world-ok" || { echo "FAIL: the gateway does not forward to the world"; exit 1; }
+echo "  agent -> gateway -> host: the appliance forwards"
+
+say "step 5: the pair freezes together (agent first), thaws together (gateway first)"
+"$BIN" freeze ag >/dev/null
+"$BIN" freeze gw >/dev/null
+"$BIN" thaw gw >/dev/null
+wait_con gw "forwarding on" >/dev/null 2>&1 || true
+"$BIN" thaw ag >/dev/null
+sleep 2
+type_in ag 'ping -c 1 -W 5 192.168.201.1 >/dev/null && echo world-agai"n"'
+wait_con ag "world-again" || { echo "FAIL: the pair did not survive the freeze"; exit 1; }
+echo "  the pair froze and thawed; the agent still reaches the world"
+
+echo
+echo "PASS: the gateway ladder -- pair wiring, forwarding, pair freeze"
+for m in ag gw; do "$BIN" stop $m >/dev/null; "$BIN" destroy $m >/dev/null; done

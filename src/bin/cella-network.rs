@@ -16,10 +16,34 @@ fn main() {
     let mut from = 0u32;
     let mut it = args.iter();
     match it.next().map(|s| s.as_str()) {
+        Some("pair") => {
+            let mut id = None;
+            let mut via = None;
+            let mut pit = args[1..].iter();
+            while let Some(a) = pit.next() {
+                match a.as_str() {
+                    "--id" => id = pit.next().and_then(|v| v.parse().ok()),
+                    "--via" => via = pit.next().cloned(),
+                    other => {
+                        eprintln!("cella-network: unknown flag {other:?}");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            let (Some(id), Some(via)) = (id, via) else {
+                eprintln!("usage: cella-network pair --id N --via tap<n>");
+                std::process::exit(2);
+            };
+            if let Err(e) = machine::setup_pair(id, &via) {
+                eprintln!("cella-network: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
         Some("setup") | None => {}
         Some("--help") | Some("-h") => {
             println!("cella-network -- the tap pool, without sudo");
-            println!("usage: cella-network setup [--taps N] [--from N]");
+            println!("usage: cella-network setup [--taps N] [--from N] | pair --id N --via tap<n>");
             println!("needs cap_net_admin (make install grants it) or root");
             std::process::exit(0);
         }
