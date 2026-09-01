@@ -62,7 +62,7 @@ if sudo nft list chain ip filter DOCKER-USER &>/dev/null; then
     fi
 fi
 
-cat <<EOT
+cat <<'EOT'
 cella: install done.
 
 Next, from any directory (no make needed from here on):
