@@ -41,10 +41,12 @@ guest:
 
 Two qualifications:
 
-1. The guest experiences its own resume. The first cycle after the thaw
-   runs in real time. On nested KVM, 2.5 ms to 4 ms of outer-hypervisor
-   work lands inside that cycle. On bare metal the same value is zero
-   within the noise.
+1. The guest experiences its own resume. The first cycle after the
+   thaw runs in real time. The warming stub moves the wake-up cost
+   into host time on every layer; without it (thaw mode "ept"),
+   2.5 ms to 4 ms of outer-hypervisor work lands inside that cycle
+   on nested KVM. On bare metal the value is zero within the noise
+   in either mode.
 2. "Seamless" holds at the resolution that we can verify. The host-side
    pairing instrumentation proves the sub-millisecond continuity. No
    measurement from inside the guest can prove it. From inside, the
@@ -54,8 +56,10 @@ Two qualifications:
 ## Architecture
 
 Guest RAM is one MAP_SHARED file (`ram.img`). The RAM file is the
-freeze image. A sidecar file (`state`) holds the vCPU state, the
-irqchip and PIT state, the kvmclock value, and the format version.
+freeze image. A sidecar file (`state`, format v7) holds the vCPU
+state, the irqchip and PIT state, the kvmclock value, the serial
+registers, one block per virtio transport (with any held egress
+frames), and the format version.
 `finalize_thaw` deletes the sidecar after a successful thaw, thus a
 sidecar thaws one time only.
 
@@ -247,76 +251,28 @@ translation layer, and the measurement confirms it: -0.128 ms, zero
 within the noise. With the warming stub the same zero holds on the
 nested machine, and one nesting level deeper on both machines.
 
-## Next steps: virtio state
+## Virtio state (landed)
 
-The freeze does not save the virtio device state. This is the known
-gap in the current design, and it is the next work item.
+The freeze did not save the virtio device state, and the gap showed
+in the field (2026-08-30, bare metal): after a thaw, a shell write
+entered the ext4 journal, and the commit waited on a virtio-blk
+request that a reset transport never processed -- the shell in the
+D state in do_get_write_access, jbd2 in
+jbd2_journal_commit_transaction, serial interrupts still arriving.
+The guest keeps its driver state in RAM, the freeze preserves RAM,
+and the thaw built new transports at reset state: the two sides
+disagreed. The smoke tests and the clock probes cannot see this,
+because the heartbeat needs no virtio.
 
-The guest keeps its driver state in RAM, and the freeze preserves RAM.
-After the thaw, the drivers therefore believe that both devices are
-configured and live: status DRIVER_OK, queue addresses programmed,
-ring indices advanced. But the thaw constructs new MmioTransport
-objects, and their state is the reset state: status 0, no queue ready,
-and a next-available index of 0. The two sides disagree.
-
-The gap is no longer theoretical: the interactive demo detected it in
-the field (2026-08-30, bare metal). After a thaw, the shell of the
-guest appended to its history file, the write entered the ext4
-journal, and the journal commit waited on a virtio-blk request that
-the reset transport never processed. The in-guest diagnostics showed
-the shell in the D state in do_get_write_access, and jbd2 in
-jbd2_journal_commit_transaction, while the serial interrupts kept
-arriving. `make demo` ran its guest with ROOT=ro until this work
-landed. The sidecar (format v7) now carries the transport state, the
-thaw restores it before the first KVM_RUN, and the demo and the AC1
-gate (`make device-state-ac1`) run on a rw root. The design lives in
+Sidecar format v7 closed it: one block per transport -- the status
+register, the queue select, the interrupt status, the negotiated
+features, and per queue the ready flag, the size, the ring
+addresses, and the next-available and next-used indices (the
+private progress counters RAM does not hold) -- plus any held
+egress frames. The thaw restores each transport before the first
+KVM_RUN, and the demo runs on a rw root. The design, the egress
+hold, and the acceptance gates (`make smoke-device-state`) live in
 docs/DEVICE-STATE.md.
-
-The smoke tests and the clock probes do not detect this, because the
-heartbeat needs no virtio. The guest reads /proc and writes to the
-serial console only. The first post-thaw disk request, and the first
-post-thaw packet, meet a device that does not process its rings. The
-request stays in the available ring, no interrupt arrives, and the
-guest task blocks.
-
-The state to save is small, and it lives in the transport, not in the
-device:
-
-- The device status register.
-- For each queue: the ready flag, the size, the descriptor, available,
-  and used ring addresses, and the next-available index. The rings
-  themselves live in guest RAM, and the freeze already preserves them.
-  The index is the private progress counter of the device, and RAM
-  does not hold it.
-- The interrupt status register.
-
-An in-flight request needs no save: the freeze stops the vCPU first,
-and the run loop completes each request that it starts, thus the rings
-are quiet at the point of the save.
-
-The verification follows the pattern of the clock probes. A test must
-perform I/O after the thaw, not after the boot:
-
-- Extend the network test: ping the guest after a thaw.
-- Add a disk check: the guest reads and writes a file after a thaw,
-  and it reports the result over the serial console.
-
-```mermaid
-flowchart LR
-    subgraph saved["saved today"]
-        RAM2["guest RAM (driver state, rings)"]
-        VCPU["vCPU, MSRs, xstate"]
-        IRQ["irqchip, PIT"]
-        CLK["kvmclock, TSC"]
-    end
-    subgraph lost["lost today (rebuilt at reset state)"]
-        ST["device status"]
-        QS["queue ready, size, addresses"]
-        NA["next-available index"]
-        IS["interrupt status"]
-    end
-    lost -->|"add to the sidecar (format v6)"| SC2["sidecar"]
-```
 
 ## Reproduce
 

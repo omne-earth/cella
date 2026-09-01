@@ -1,10 +1,12 @@
 # Device state across freeze and thaw
 
-DRAFT. This document designs the last missing piece of the cryogenic
-principle: the virtio devices. The clocks, the vCPU, the interrupt
-hardware, the serial registers, and the RNG state already continue
-across a thaw. The virtio transports do not, and the guest wedges on
-its first post-thaw disk touch.
+This document designs the last piece of the cryogenic principle:
+the virtio devices. The design is delivered -- sidecar format v7
+carries the transports, and the acceptance table below records the
+state of each criterion. Before it, the clocks, the vCPU, the
+interrupt hardware, the serial registers, and the RNG state
+continued across a thaw; the virtio transports did not, and the
+guest wedged on its first post-thaw disk touch.
 
 ## The gap, measured
 

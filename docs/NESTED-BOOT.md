@@ -40,8 +40,8 @@ own targets build them.
 | Artifact               | Content                                            | Built by       |
 |------------------------|----------------------------------------------------|----------------|
 | kernel nested golden   | canonical fragment + a KVM host stack + namespaces for the inner jail | make golden-nested |
-| rootfs nested golden   | canonical root + static cella and bwrap on the path + the canonical inner goldens at /root/.cella + the nested init | make golden-nested |
-| static cella           | crt-static build from the toolbox                  | make build-static |
+| rootfs nested golden   | canonical root + static cella and bwrap on the path + the canonical inner goldens with their golden.json manifests at /root/.cella + the nested init | make golden-nested |
+| static binaries        | crt-static cella and cella-probe from the toolbox, one cargo invocation | the rootfs nested/inception builds |
 
 The nested kernel builds from the same pinned source, in a copied
 clean tree. The canonical build tree stays as the canonical cache.
@@ -121,9 +121,9 @@ make smoke-nested-boot-www
 ## The clock probe one layer deep (probe-inception)
 
 `make probe-inception` boots the outer guest with
-rootfs-inception.ext4. The init runs the static freeze and thaw clock
-probe against an inner cella, and the verdict arrives through two
-serial layers. The probe found a real fault on its first run: the
+rootfs-inception.ext4. The init runs the static cella-probe
+(freeze-thaw-clock) against an inner cella, and the verdict arrives
+through two serial layers. The probe found a real fault on its first run: the
 seccomp filter of cella lacked clock_gettime, because the vDSO serves
 that call on a host and refuses it inside a guest without
 PVCLOCK_TSC_STABLE_BIT.
