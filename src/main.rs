@@ -10,7 +10,9 @@
 //! plumbing that ties memory.rs / boot/x86_64.rs / vcpu.rs / devices/ /
 //! freeze.rs / seccomp.rs together.
 
-use cella::{boot, config, devices, doctor, freeze, machine, memory, seccomp, vcpu, warm};
+use cella::{
+    boot, config, devices, doctor, freeze, machine, memory, seccomp, universe, vcpu, warm,
+};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +32,11 @@ const NET_MMIO_BASE: u64 = 0xd000_1000;
 const MMIO_LEN: u64 = 0x1000;
 const BLOCK_IRQ: u32 = 5;
 const NET_IRQ: u32 = 6;
+// The attached disk of the inspect verb: a second virtio-blk,
+// read-only at the device (see docs/LIFECYCLE.md, the universe
+// family).
+const ATTACH_MMIO_BASE: u64 = 0xd000_2000;
+const ATTACH_IRQ: u32 = 7;
 
 static FREEZE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static HOLD_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -56,6 +63,9 @@ struct Args {
     state_dir: PathBuf,
     disk: PathBuf,
     disk_ro: bool,
+    /// A second disk, read-only at the device, always: the rock of
+    /// the inspect verb. No flag makes it writable.
+    attach_ro: Option<PathBuf>,
     tap: Option<String>,
     mac: [u8; 6],
     kernel: Option<PathBuf>,
@@ -68,6 +78,7 @@ fn parse_args() -> Args {
     let mut state_dir = None;
     let mut disk = None;
     let mut disk_ro = false;
+    let mut attach_ro = None;
     let mut tap = None;
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
@@ -86,6 +97,7 @@ fn parse_args() -> Args {
             "--state-dir" => state_dir = Some(PathBuf::from(next())),
             "--disk" => disk = Some(PathBuf::from(next())),
             "--disk-ro" => disk_ro = true,
+            "--attach-ro" => attach_ro = Some(PathBuf::from(next())),
             "--tap" => tap = Some(next()),
             "--mac" => mac = parse_mac(&next()),
             "--kernel" => kernel = Some(PathBuf::from(next())),
@@ -97,7 +109,7 @@ fn parse_args() -> Args {
                     .unwrap_or_else(|_| usage_error("--mem-mb must be a number"))
             }
             "-h" | "--help" => usage_error(
-                "cella --state-dir DIR --disk PATH [--tap NAME] [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
+                "cella --state-dir DIR --disk PATH [--attach-ro PATH] [--tap NAME] [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
             ),
             other => usage_error(&format!("unknown argument: {other}")),
         }
@@ -107,6 +119,7 @@ fn parse_args() -> Args {
         state_dir: state_dir.unwrap_or_else(|| usage_error("--state-dir is required")),
         disk: disk.unwrap_or_else(|| usage_error("--disk is required")),
         disk_ro,
+        attach_ro,
         tap,
         mac,
         kernel,
@@ -231,6 +244,18 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             _ => Err("usage: cella info <name>".to_string()),
         },
         "selftest" => machine::selftest(),
+        "branch" => match args {
+            [src, dst] => universe::branch(src, dst),
+            _ => Err("usage: cella branch <existing-vm> <new-vm>".to_string()),
+        },
+        "archive" => match args {
+            [vm] => universe::archive(vm),
+            _ => Err("usage: cella archive <vm>".to_string()),
+        },
+        "inspect" => match args {
+            [vm] => universe::inspect(vm),
+            _ => Err("usage: cella inspect <vm>".to_string()),
+        },
         // The thin CLIs, through the dispatcher: cella <name> ...
         // execs the sibling cella-<name>, thus the user surface is
         // one word while the binaries keep their own confinement.
@@ -246,8 +271,9 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
                 Some("fix") => doctor::fix(),
                 Some("verify") => match &args[1..] {
                     [] => doctor::verify(None),
+                    [vm] => doctor::verify_machine(vm),
                     [axis, flavor] => doctor::verify(Some((axis, flavor))),
-                    _ => usage_error("usage: cella doctor verify [kernel|rootfs <flavor>]"),
+                    _ => usage_error("usage: cella doctor verify [<vm> | kernel|rootfs <flavor>]"),
                 },
                 _ => usage_error("usage: cella doctor [check|fix|verify]"),
             };
@@ -332,6 +358,7 @@ fn persona() -> String {
         .unwrap_or_else(|| "cella".to_string())
 }
 
+const UNIVERSE_VERBS: &[&str] = &["branch", "archive", "inspect"];
 const MACHINE_VERBS: &[&str] = &[
     "create", "start", "stop", "enter", "freeze", "thaw", "destroy", "list", "info", "selftest",
 ];
@@ -349,6 +376,18 @@ fn main() {
             usage_error(&format!(
                 "cella-machine does not own the verb {first:?} -- its verbs: {}",
                 MACHINE_VERBS.join(", ")
+            ));
+        }
+        "cella-universe" => {
+            let Some(first) = argv.first() else {
+                usage_error("usage: cella-universe <branch|archive|inspect> ...")
+            };
+            if UNIVERSE_VERBS.contains(&first.as_str()) {
+                run_verb(first.as_str(), &argv[1..]);
+            }
+            usage_error(&format!(
+                "cella-universe does not own the verb {first:?} -- its verbs: {}",
+                UNIVERSE_VERBS.join(", ")
             ));
         }
         "cella-build" => run_verb("build", &argv),
@@ -381,6 +420,9 @@ fn main() {
                 | "doctor"
                 | "probe"
                 | "network"
+                | "branch"
+                | "archive"
+                | "inspect"
                 | "help"
                 | "--help"
                 | "-h"
@@ -487,6 +529,17 @@ fn main() {
         MMIO_LEN,
         MmioTransport::new(Box::new(block), irq_raiser.clone(), BLOCK_IRQ),
     )];
+    if let Some(path) = &args.attach_ro {
+        // Read-only at the device: the guest sees VIRTIO_BLK_F_RO,
+        // and the backend refuses writes regardless.
+        let attached = Block::new(path, true)
+            .unwrap_or_else(|e| fatal(&format!("open attached disk {path:?}: {e}")));
+        mmio_devices.push((
+            ATTACH_MMIO_BASE,
+            MMIO_LEN,
+            MmioTransport::new(Box::new(attached), irq_raiser.clone(), ATTACH_IRQ),
+        ));
+    }
     // The network is optional. A guest without --tap gets the block
     // device only, and the kernel command line then must name one
     // virtio_mmio device, not two. The nested smoke test runs the inner

@@ -7,6 +7,16 @@
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t tmpfs tmpfs /tmp
+# The inspect verb attaches a machine's disk as /dev/vdb, read-only
+# at the device. The mount adds the execution deny, and norecovery
+# keeps a dirty journal (a frozen source) from any replay attempt:
+# the view is the crash-consistent instant.
+if [ -b /dev/vdb ]; then
+    mkdir -p /rock
+    mount -o ro,noexec,nosuid,nodev,norecovery /dev/vdb /rock \
+        && echo "cella-rootfs: evidence mounted at /rock (ro, noexec)" \
+        || echo "cella-rootfs: /dev/vdb present but the mount failed"
+fi
 echo "cella-rootfs: init running (pid $$)"
 # The serial console is also the shell of the user. The heartbeat and
 # the diagnostic listings therefore print only when the kernel command
