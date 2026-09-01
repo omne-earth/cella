@@ -2,8 +2,9 @@
 
 cella is the guest manager. One multi-call binary owns the verbs
 under thin-CLI names (persona dispatch on argv0: cella-machine,
-cella-build, cella-doctor, cella-vmm; cella-network and cella-probe
-are real separate binaries), the state is files, and no daemon
+cella-universe, cella-build, cella-doctor, cella-vmm; cella-network
+and cella-probe are real separate binaries), the state is files,
+and no daemon
 exists. The motto: rootless, daemonless, and seccomp, SELinux, and
 jail confinement per VM.
 
@@ -63,7 +64,7 @@ the probe is the instrument, not the product.
 |---------|---------|-----------------|--------|
 | rootless | everything | No privilege to lose: CAP_NET_ADMIN lives in the cella-network binary as a file capability, granted once at install | enforced |
 | bwrap jail | per VM | The filesystem, except the machine directory, the golden kernel, /dev/kvm, and the TAP; the pid, ipc, uts, user, and cgroup namespaces | enforced |
-| seccomp | per VMM process | Every syscall outside the allowlist (~26 entries, each commented); socket(2) stays the canary | enforced |
+| seccomp | per VMM process | Every syscall outside the allowlist (~35 entries, each commented); socket(2) stays the canary | enforced |
 | SELinux | per domain | Lateral movement between machine directories and device types | example policy only |
 
 ### The network privilege
@@ -103,7 +104,10 @@ stateDiagram-v2
 | thaw    | Resumes a frozen machine | Rust only |
 | enter   | Attaches the terminal to the serial console. An exit of the guest shell detaches | Rust only |
 | destroy | Deletes the machine and its artifacts, once and for all | Rust only |
-| doctor  | check: the host facts, one line each. fix: repairs what the uid can (the pool via cella-network, absent goldens via build), deletes nothing. verify: recomputes each golden digest against its manifest | Rust only |
+| branch  | Copies a still machine: a frozen source yields a frozen twin, a stopped source a fresh-bootable copy, a rock a rock. Records the layer digests | Rust only |
+| archive | Turns a still machine into a rock: storage layers stay, runtime state goes, the manifest latches | Rust only |
+| inspect | Attaches the disk of a still machine to a throwaway appliance, read-only; the detach destroys the appliance | Rust only |
+| doctor  | check: the host facts, one line each. fix: repairs what the uid can (the pool via cella-network, absent goldens via build), deletes nothing. verify: recomputes each golden digest against its manifest, and the recorded layer digests of a machine (verify <vm>) | Rust only |
 | probe   | The cryogenic diagnostics (cella-probe): wallclock, freeze-thaw-clock, sregs | Rust only |
 | network | The pool (cella-network): the one CAP_NET_ADMIN holder | file capability |
 
@@ -121,28 +125,36 @@ of each storage layer it touches into the manifest of the machine
 it produces; `list` shows a short disk digest, `info` the full
 set, and `doctor verify <vm>` recomputes them.
 
-- **branch <existing-vm> <new-vm>** -- both names mandatory. The
-  source must not run: a frozen source copies to a frozen twin
-  (each sidecar thaws once; the twins share the CRNG state of the
-  fork instant, deliberately -- divergence comes from the world,
-  never a reseed), and a stopped source copies to a fresh-bootable
-  machine. The copy's manifest carries `net none` always: the
+One rule spans the family: running is the only state a universe
+verb refuses.
+
+- **branch <existing-vm> <new-vm>** -- both names mandatory. A
+  frozen source copies to a frozen twin (each sidecar thaws once;
+  the twins share the CRNG state of the fork instant, deliberately
+  -- divergence comes from the world, never a reseed). A stopped
+  source copies to a fresh-bootable machine. A rock copies to a
+  rock: the archived latch carries, because nothing resurrects by
+  side effect. The copy's manifest carries `net none` always: the
   network identity of the source lives in its RAM, and a tap is a
   deliberate re-attachment, not an inheritance.
-- **archive <vm>** -- the machine becomes a rock: the storage
-  layers stay (disk.img, and ram.img where present), the runtime
-  state goes (the sidecar: irqchip, vCPU, in-flight registers),
-  and the manifest latches `state: archived`. An archived machine
-  cannot be started by accident: start, thaw, and enter refuse it
-  by name. Un-archiving, if it ever exists, is its own verb.
-- **inspect <vm>** -- attach the rock as evidence, never as a
-  machine: a temporary appliance named `<vm>-inspector` boots the
-  stock rootfs, and the rock's disk attaches as an external second
-  virtio-blk device, read-only at the device. The guest init
-  mounts it at /rock with ro,noexec,nosuid,nodev -- the rock's
-  content cannot execute, on top of not being bootable and not
-  being writable. The terminal attaches; a detach destroys the
-  inspector. The rock never changes.
+- **archive <vm>** -- a stopped or a frozen machine becomes a
+  rock: the storage layers stay (disk.img, and ram.img where
+  present), the runtime state goes (the sidecar: irqchip, vCPU,
+  in-flight registers -- archiving a frozen machine deliberately
+  discards its instant), and the manifest latches
+  `state: archived`. A rock cannot be started by accident: start,
+  thaw, and enter refuse it by name. Un-archiving, if it ever
+  exists, is its own verb.
+- **inspect <vm>** -- attach the disk of any still machine
+  (archived, stopped, or frozen) as evidence, never as a machine:
+  a temporary appliance named `<vm>-inspector` boots the stock
+  rootfs, and the disk attaches as an external second virtio-blk,
+  read-only at the device. The guest init mounts it at /rock with
+  ro,noexec,nosuid,nodev,norecovery -- the content cannot execute,
+  a dirty journal (a frozen source) replays nowhere, and the view
+  of a frozen source is its crash-consistent instant. The terminal
+  attaches; a detach destroys the inspector. The source never
+  changes: a frozen source stays thaw-able, a rock stays a rock.
 
 ram.img inspection stays host-side (the file is ordinary); a real
 tool earns its place later.
@@ -157,12 +169,16 @@ $HOME/.cella/
   rootfs/<flavor>/rootfs.ext4    golden root filesystems (build)
   rootfs/<flavor>/golden.json    the manifest, same rule
   machines/<name>/
-    manifest.json                the machine: flavor, memory, net, root mode, state
+    manifest.json                the machine: flavors, memory, net, root mode,
+                                 and, from the universe verbs, the layer digests
+                                 and the archived latch
     disk.img                     the machine's own disk (a copy at create)
     ram.img                      guest RAM, present from the first start
     state                        the freeze sidecar, present only while frozen
     pid                          the VMM pid, present only while running
     console.sock                 the serial console, present only while running
+    console.log                  the console transcript, append-only
+    vmm.log                      the stderr of the VMM (operator instrumentation)
 ```
 
 A directory is a machine. The manifest is per machine, thus every
@@ -172,8 +188,11 @@ is the removal of exactly one directory. `create` fixes the machine's
 configuration (flavors, memory, network, root mode) in the manifest;
 `start` takes a name and nothing else.
 
-`build` runs ad-hoc (`cella build kernel <flavor>`), skips a golden
-that exists, and rebuilds on `--fresh`. Every build writes
+`build` runs ad-hoc (`cella build kernel <flavor>`). It skips a
+golden that exists only while the recorded input digests still
+match; a changed init script or fragment rebuilds, and names the
+input that changed. `--fresh` rebuilds unconditionally. Every build
+writes
 golden.json beside its artifact -- the digest of the artifact and
 of the inputs that shaped it, born with the artifact, read-only.
 Verification belongs to doctor: build makes, doctor judges, and
@@ -203,7 +222,7 @@ toolbox. The repository carries the build inputs, not the artifacts.
 | rootfs | canonical | busybox + the heartbeat init; the proof rootfs |
 | rootfs | cella     | + a shell on the serial console; diagnostics only when the command line asks |
 | rootfs | nested    | + a static cella and the canonical inner assets |
-| rootfs | inception | nested + the static clock probe |
+| rootfs | inception | nested + the static cella-probe |
 
 ## Process management, daemonless
 
@@ -248,10 +267,11 @@ before the next step begins.
 
 Status (2026-08-31): all five steps are done, and the restructure
 followed. The verbs run -- build (native, all six flavors, with
-manifests), create, start, enter, freeze, thaw, stop, destroy,
-list, info, selftest, doctor, probe, and network -- and the make
-targets are thin wrappers over them. The thin-CLI names exist as
-personas of the one binary (cella-machine, cella-build,
+manifests, and the input-staleness check), create, start, enter,
+freeze, thaw, stop, destroy, list, info, selftest, branch, archive,
+inspect, doctor, probe, and network -- and the make targets are
+thin wrappers over them. The thin-CLI names exist as personas of
+the one binary (cella-machine, cella-universe, cella-build,
 cella-doctor, cella-vmm), with cella-network and cella-probe as
 real binaries; the jail runs the machine under the cella-vmm name.
 The security-profile paths per CLI live under security/profiles/;
