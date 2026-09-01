@@ -295,7 +295,9 @@ pub fn verify(target: Option<(&str, &str)>) -> u32 {
             continue;
         };
         let Some(recorded) = golden::field(&text, "sha3_256") else {
-            println!("  FAIL  {axis} {flavor}: manifest carries no sha3_256");
+            println!(
+                "  FAIL  {axis} {flavor}: manifest carries no sha3_256 -- rebuild deliberately: cella build {axis} {flavor} --fresh"
+            );
             failed += 1;
             continue;
         };
@@ -305,7 +307,8 @@ pub fn verify(target: Option<(&str, &str)>) -> u32 {
             }
             Ok(actual) => {
                 println!(
-                    "  FAIL  {axis} {flavor}: digest mismatch (manifest {}.., artifact {}..)",
+                    "  FAIL  {axis} {flavor}: digest mismatch (manifest {}.., artifact {}..) \
+                     -- doctor deletes nothing; rebuild deliberately: cella build {axis} {flavor} --fresh",
                     &recorded[..16],
                     &actual[..16]
                 );
