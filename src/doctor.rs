@@ -214,6 +214,29 @@ pub fn fix() -> u32 {
     if !ran {
         println!("cella doctor: {net_bin} failed -- run: make install (grants it cap_net_admin)");
     }
+    // The goldens: building needs no root, thus fix builds what is
+    // absent or unmanifested. The kernel compile takes minutes; the
+    // build says what it does while it does it.
+    for (axis, flavor) in [
+        ("kernel", "canonical"),
+        ("rootfs", "canonical"),
+        ("rootfs", "cella"),
+    ] {
+        let p = if axis == "kernel" {
+            machine::kernel_path(flavor)
+        } else {
+            machine::rootfs_path(flavor)
+        };
+        if p.is_file() && golden::manifest_path(&p).is_file() {
+            continue;
+        }
+        println!("cella doctor: fix -- building {axis} {flavor} (minutes for the kernel)");
+        // Green-field: an artifact without a manifest rebuilds fresh,
+        // so that the manifest is born with the artifact it states.
+        if let Err(e) = machine::build_flags(axis, flavor, true) {
+            println!("cella doctor: build {axis} {flavor} failed: {e}");
+        }
+    }
     println!();
     println!("cella doctor: re-check");
     check()
