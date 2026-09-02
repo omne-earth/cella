@@ -221,43 +221,6 @@ requires a decision, nothing stands, and the mouth closes.
       denials beside the audit log (the debugger exists before
       the lane that generates the denials).
 
-- [ ] 1.6.7 The documents state the tightened law, and the
-      retired phases make "Not in scope" the permanent scope
-      statement. The law: no frame leaves undecided at any layer,
-      no allow outlives its decision (there is nothing for it to
-      outlive), the ARP sentence dies, and every failure of the
-      apply is stillness. The scope: cella judges every frame,
-      both directions, at its own seam -- named, held, decided
-      externally, witnessed. Permanently outside cella, named at
-      the proto seam where a judge builds them: the appliance
-      pair, TCP termination, TLS against a pair CA, DNS-in-frame
-      and every world-side service, ownership of peer patience,
-      and the timeline rewrite. NOT outside: ingress judgment
-      (1.6.9 builds the ear's customs at this seam) and UDP
-      judgment (shipped; UDP death was terminator territory and
-      retires with it). The temporary-backend language dies: the
-      never-guess rebind is the architecture, not scaffolding.
-      The residuals, named once, plainly: a resident can modulate
-      its compute and I/O shadow on the host (host-local,
-      listener-required, silenced by the freeze); an open
-      machine's ingress delivers freely until 1.6.9 holds it;
-      frames that arrive during a freeze are lost at the tap (no
-      process listens; the protocols above retransmit); the
-      peer-patience bound on multi-cycle exchanges is a permanent
-      boundary, the judge's to manage; the field machine is dark
-      to the world, not to its host's logbook (vmm.log carries
-      the park lines); the pool's neighbor pins assume the
-      default guest MAC (a custom --mac on a pool tap breaks the
-      convention, stated); and the canonical kernel's quietness
-      is chosen (ipv6.disable=1), never an exemption -- chatter
-      that exists still parks. NETWORK-MODEL's phases section
-      retires; DEVICE-STATE's acceptance rows speak AC3's
-      stand-in and AC5's real-world leg (1.6.6d).
-      The pass runs once, after the mechanisms (1.6.9-11):
-      the documents describe the phase that ships, and the
-      residual list drops the entries those items retire. The
-      "aperture" wording in AC5 is replaced with plain speech,
-      and the sweep hunts any siblings of it.
 - [ ] 1.6.12 IPv6 leaves the canonical kernel fragment.
       ipv6.disable=1 in DEFAULT_BASE_ARGS silences the stack at
       boot; necessity says the stack itself goes -- the guest
@@ -335,6 +298,48 @@ requires a decision, nothing stands, and the mouth closes.
       moment the shakedown completes, every host, no
       permissive-forever dev exception.
 
+- [ ] 1.6.7 The documents state the tightened law, and the
+      retired phases make "Not in scope" the permanent scope
+      statement. The law: no frame leaves undecided at any layer,
+      no allow outlives its decision (there is nothing for it to
+      outlive), the ARP sentence dies, and every failure of the
+      apply is stillness. The scope: cella judges every frame,
+      both directions, at its own seam -- named, held, decided
+      externally, witnessed. Permanently outside cella, named at
+      the proto seam where a judge builds them: the appliance
+      pair, TCP termination, TLS against a pair CA, DNS-in-frame
+      and every world-side service, ownership of peer patience,
+      and the timeline rewrite. NOT outside: ingress judgment
+      (1.6.9 builds the ear's customs at this seam) and UDP
+      judgment (shipped; UDP death was terminator territory and
+      retires with it). The temporary-backend language dies: the
+      never-guess rebind is the architecture, not scaffolding.
+      The residuals, named once, plainly: a resident can modulate
+      its compute and I/O shadow on the host (host-local,
+      listener-required, silenced by the freeze); an open
+      machine's ingress delivers freely until 1.6.9 holds it;
+      frames that arrive during a freeze are lost at the tap (no
+      process listens; the protocols above retransmit); the
+      peer-patience bound on multi-cycle exchanges is a permanent
+      boundary, the judge's to manage; the field machine is dark
+      to the world, not to its host's logbook (vmm.log carries
+      the park lines); the pool's neighbor pins assume the
+      default guest MAC (a custom --mac on a pool tap breaks the
+      convention, stated); and the canonical kernel's quietness
+      is chosen (ipv6.disable=1), never an exemption -- chatter
+      that exists still parks. NETWORK-MODEL's phases section
+      retires; DEVICE-STATE's acceptance rows speak AC3's
+      stand-in and AC5's real-world leg (1.6.6d).
+      The pass runs once, after the mechanisms (1.6.9-11):
+      the documents describe the phase that ships, and the
+      residual list drops the entries those items retire. The
+      "aperture" wording in AC5 is replaced with plain speech,
+      and the sweep hunts any siblings of it.
+      The pass runs after every mechanism -- the border work,
+      the fragment, the split, and the shakedown -- and
+      immediately before the battery: the documents describe
+      what ships, and the battery certifies what the documents
+      describe, once each.
 - [ ] 1.6.8 Full battery both machines on the finished phase --
       the regression close runs last, after the ear's customs
       (1.6.9 changes every network gate's choreography again),
