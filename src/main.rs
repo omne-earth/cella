@@ -506,23 +506,6 @@ fn main() {
         dump_ledger(&PathBuf::from(path));
     }
 
-    // Append one Decision to a verdict file, by id (hex). A
-    // temporary tool: bash cannot write protobuf, and the
-    // cella-gateway CLI of phase 1.3 replaces this flag with the
-    // real release verb.
-    if std::env::args().nth(1).as_deref() == Some("--write-decision") {
-        let path = std::env::args()
-            .nth(2)
-            .unwrap_or_else(|| usage_error("--write-decision needs a verdict file path"));
-        let id_hex = std::env::args()
-            .nth(3)
-            .unwrap_or_else(|| usage_error("--write-decision needs an id (hex)"));
-        let verb = std::env::args()
-            .nth(4)
-            .unwrap_or_else(|| usage_error("--write-decision needs allow or refuse"));
-        write_decision(&PathBuf::from(path), &id_hex, &verb);
-    }
-
     let args = parse_args();
     let frozen = freeze::is_frozen(&args.state_dir);
     // The chronicle of held operations (see docs/NETWORK-MODEL.md,
@@ -1458,37 +1441,6 @@ fn dump_ledger(path: &PathBuf) -> ! {
             None => println!("(empty event)"),
         }
     }
-    std::process::exit(0);
-}
-
-/// Append one Decision to a verdict file, by id (hex): a temporary
-/// tool for the gates, until the cella-gateway CLI of phase 1.3
-/// replaces it with the real release verb.
-fn write_decision(path: &std::path::Path, id_hex: &str, verb: &str) -> ! {
-    if !id_hex.len().is_multiple_of(2) {
-        usage_error("--write-decision id must be an even number of hex digits");
-    }
-    let id: Vec<u8> = (0..id_hex.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&id_hex[i..i + 2], 16)
-                .unwrap_or_else(|_| usage_error("--write-decision id must be hex"))
-        })
-        .collect();
-    let decision = match verb {
-        "allow" => proto::decision::Decision::Release(proto::Release { allow_flow: true }),
-        "refuse" => proto::decision::Decision::Refusal(proto::Refusal {
-            why: "refused by the test's stand-in engine".to_string(),
-        }),
-        _ => usage_error("--write-decision verb must be allow or refuse"),
-    };
-    let msg = proto::Message {
-        body: Some(proto::message::Body::Decision(proto::Decision {
-            id,
-            decision: Some(decision),
-        })),
-    };
-    ledger::append(path, &msg).unwrap_or_else(|e| fatal(&format!("writing the decision: {e}")));
     std::process::exit(0);
 }
 

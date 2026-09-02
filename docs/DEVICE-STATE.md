@@ -98,9 +98,9 @@ operations did -- parked, released, lapsed, when and to where --
 written as history, never read back as truth.
 The concrete surface, in order:
 
-1. The valve closes once (SIGUSR2 today; born closed with the
-   appliance later), and it never reopens: a machine whose
-   chronicle exists parks across every thaw, with no re-arm.
+1. The valve closes once (`cella gateway <vm> close`; born closed
+   with the appliance later), and it never reopens: a machine
+   whose chronicle exists parks across every thaw, with no re-arm.
 2. A park mints the operation id (v7-shaped, the guest frame in
    the timestamp bits), appends Parked to the chronicle at
    machines/<name>/network/ledger, and writes a report line.
@@ -108,13 +108,13 @@ The concrete surface, in order:
    freezes itself -- park is freeze. Held frames ride the sidecar;
    the operation records ride the chronicle.
 4. Decisions are framed proto messages in the verdict file, one
-   per operation id (--write-decision until the cella-gateway
-   CLI). The thaw applies them strictly in park order: a release
+   per operation id, written by `cella gateway <vm> release|refuse
+   <id>`. The thaw applies them strictly in park order: a release
    delivers and completes, and may install a pass entry
    (allow_flow); a refusal lapses the operation; an operation
-   behind an undecided predecessor stays held. SIGWINCH applies
-   the same file against a running machine (the transient case,
-   and the tests).
+   behind an undecided predecessor stays held. Against a running
+   machine the verb kicks the VMM and the decisions apply at once
+   (the signals underneath are the wire, never the surface).
 
 Therefore the save is a copy of registers, indices, and the held
 egress frames; no drain step exists beyond them.

@@ -135,8 +135,8 @@ ac3)
 		exit 0
 	fi
 
-	say "step 3: egress hold on, then the same fetch -- the park is the freeze"
-	kill -USR2 "$VMM_PID"
+	say "step 3: the valve closes, then the same fetch -- the park is the freeze"
+	"$BIN" gateway "$VM" close >/dev/null
 	sleep 1
 	type_in 'wget -q -O /dev/null $U && echo held-o"k" &'
 	STATE="$CELLA_HOME/machines/$VM/state"
@@ -178,7 +178,7 @@ ac3)
 		done
 		grep -aq "held-ok" "$CON" && break
 		for id in $(open_ids); do
-			"$BIN" --write-decision "$VERDICT" "$id" allow
+			"$BIN" gateway "$VM" release "$id" >/dev/null
 		done
 		"$BIN" thaw "$VM" >/dev/null
 		sleep 2
@@ -229,8 +229,8 @@ ac4)
 
 	curl -s -o /dev/null "http://$HOST_IP:8080/" || { echo "FAIL: the stand-in endpoint died after the pre-check"; exit 1; }
 
-	say "step 3: egress hold on; the same request parks, reports, and freezes"
-	kill -USR2 "$VMM_PID"
+	say "step 3: the valve closes; the same request parks, reports, and freezes"
+	"$BIN" gateway "$VM" close >/dev/null
 	sleep 1
 	type_in 'wget -q -O /dev/null $H:8080 && echo rel-o"k" &'
 	STATE="$CELLA_HOME/machines/$VM/state"
@@ -246,9 +246,9 @@ ac4)
 	say "step 4: the engine renders release with allow, by id; the thaw applies"
 	LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
 	VERDICT="$CELLA_HOME/machines/$VM/verdict"
-	ID_REL=$("$BIN" --dump-ledger "$LEDGER" | sed -n "s/^parked id=\([0-9a-f]*\) .*port=8080.*/\1/p" | tail -1)
-	[ -n "$ID_REL" ] || { echo "FAIL: no parked operation in the ledger for :8080"; exit 1; }
-	"$BIN" --write-decision "$VERDICT" "$ID_REL" allow
+	ID_REL=$("$BIN" gateway "$VM" show | grep "$HOST_IP:8080" | awk "{print \$1}")
+	[ -n "$ID_REL" ] || { echo "FAIL: show lists no held operation for :8080"; exit 1; }
+	"$BIN" gateway "$VM" release "$ID_REL" >/dev/null
 	"$BIN" thaw "$VM" >/dev/null
 	wait_for "rel-ok" || {
 		echo "FAIL: the released request did not complete"
@@ -285,9 +285,9 @@ ac4)
 	echo "  the endpoint at :9090 now exists"
 
 	say "step 7: the engine decides by id; the thaw lands the same request"
-	ID_W=$("$BIN" --dump-ledger "$LEDGER" | sed -n "s/^parked id=\\([0-9a-f]*\\) .*port=9090.*/\\1/p" | tail -1)
-	[ -n "$ID_W" ] || { echo "FAIL: no parked operation in the ledger for :9090"; exit 1; }
-	"$BIN" --write-decision "$VERDICT" "$ID_W" allow
+	ID_W=$("$BIN" gateway "$VM" show | grep "$HOST_IP:9090" | awk "{print \$1}")
+	[ -n "$ID_W" ] || { echo "FAIL: show lists no held operation for :9090"; exit 1; }
+	"$BIN" gateway "$VM" release "$ID_W" >/dev/null
 	"$BIN" thaw "$VM" >/dev/null
 	wait_for "world-ok" || { echo "FAIL: the parked request did not land after the thaw"; exit 1; }
 	echo "  the request completed against the new endpoint; the guest saw no failure"

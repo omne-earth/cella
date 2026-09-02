@@ -4,8 +4,8 @@
 #
 # Part A: hold, one fetch parks, the ledger holds one operation with
 # an id and both clocks; freeze and thaw leave it still held, not
-# delivered; a release by id (--write-decision, a temporary tool
-# until the cella-gateway CLI of 1.3) completes the fetch, and the
+# delivered; a release by id (the cella gateway verb) completes
+# the fetch, and the
 # ledger shows the same id parked and released -- never a phantom.
 #
 # Part B: two operations park in order; a decision for the second
@@ -70,8 +70,8 @@ say "step 1: create and start a machine on $TAP"
 sleep 6
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 
-say "step 2: egress hold on"
-kill -USR2 "$VMM_PID"
+say "step 2: the valve closes, through the verb"
+"$BIN" gateway "$VM" close >/dev/null
 sleep 1
 
 say "step 3: one fetch parks -- and the park is the freeze (one-shot)"
@@ -112,9 +112,7 @@ echo "$DUMP" | grep -q "^released " && { echo "FAIL: something released without 
 echo "  the ledger still shows only the parked operation; thaw delivered nothing"
 
 say "step 6: release by id -- the fetch completes, and the ledger records it"
-VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
-"$BIN" --write-decision "$VERDICT" "$ID_A" allow
-kill -WINCH "$VMM_PID"
+"$BIN" gateway "$VM" release "$ID_A" >/dev/null
 wait_for "fetch-a-done" || { echo "FAIL: the released fetch did not complete"; exit 1; }
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
 echo "$DUMP" | sed "s/^/  /"
@@ -141,7 +139,6 @@ type_in 'wget -q -O /dev/null $H:8082 && echo fetch-d-don"e" &'
 wait_frozen || { echo "FAIL: D did not park-and-freeze"; exit 1; }
 "$BIN" thaw "$VM" >/dev/null
 sleep 2
-VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
 ID_C=$(id_of "$DUMP" "port=8081")
 ID_D=$(id_of "$DUMP" "port=8082")
@@ -149,8 +146,7 @@ ID_D=$(id_of "$DUMP" "port=8082")
 echo "  C=$ID_C D=$ID_D"
 
 say "step 8: decide D first -- nothing delivers, D's predecessor C is undecided"
-"$BIN" --write-decision "$VERDICT" "$ID_D" allow
-kill -WINCH "$VMM_PID"
+"$BIN" gateway "$VM" release "$ID_D" >/dev/null
 sleep 2
 not_yet "fetch-d-done" || { echo "FAIL: D delivered before its predecessor C resolved"; exit 1; }
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
@@ -158,8 +154,7 @@ echo "$DUMP" | grep -q "^released id=$ID_D " && { echo "FAIL: the ledger release
 echo "  neither C nor D delivered; D's decision waits"
 
 say "step 9: decide C -- both deliver, in park order"
-"$BIN" --write-decision "$VERDICT" "$ID_C" allow
-kill -WINCH "$VMM_PID"
+"$BIN" gateway "$VM" release "$ID_C" >/dev/null
 wait_for "fetch-c-done" || { echo "FAIL: C did not deliver once decided"; exit 1; }
 wait_for "fetch-d-done" || { echo "FAIL: D did not deliver once its predecessor C resolved"; exit 1; }
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
