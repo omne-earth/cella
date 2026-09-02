@@ -89,7 +89,7 @@ wait_frozen() {
 }
 wait_frozen || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
 [ -s "$LEDGER" ] || { echo "FAIL: no ledger file at $LEDGER"; exit 1; }
-echo "  parked, and frozen by its own hand"
+echo "  parked; the machine froze itself (one-shot)"
 
 say "step 4: the ledger holds one operation, with an id and both clocks"
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
@@ -111,7 +111,7 @@ DUMP=$("$BIN" --dump-ledger "$LEDGER")
 echo "$DUMP" | grep -q "^released " && { echo "FAIL: something released without a decision"; exit 1; }
 echo "  the ledger still shows only the parked operation; thaw delivered nothing"
 
-say "step 6: release by id -- the fetch completes, the ledger closes the book"
+say "step 6: release by id -- the fetch completes, and the ledger records it"
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 "$BIN" --write-decision "$VERDICT" "$ID_A" allow
 kill -WINCH "$VMM_PID"

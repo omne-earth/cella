@@ -97,7 +97,7 @@ and it rebuilds them without the machine watching.
 is an appliance service (the machine resolves against its
 appliance in-frame; the appliance resolves upstream over TCP, and
 every resolution becomes a parkable operation on a name), NTP is
-dead by decree (time comes from the frame), and QUIC falls back to
+dead by design (time comes from the frame), and QUIC falls back to
 TCP -- into the terminating membrane instead of around it. ICMP
 dies with UDP; diagnosis is host-side.
 

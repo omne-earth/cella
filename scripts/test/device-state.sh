@@ -148,7 +148,7 @@ ac3)
 	grep -aq "held-ok" "$CON" && { echo "FAIL: the request left the machine while held"; exit 1; }
 	grep -aq "held egress frame" "$CELLA_HOME/machines/$VM/vmm.log" \
 		|| { echo "FAIL: the freeze holds no egress frame"; exit 1; }
-	echo "  parked, and frozen by its own hand, frames in the sidecar"
+	echo "  parked; the machine froze itself (one-shot); frames in the sidecar"
 
 	say "step 4: the engine loop -- decide while it sleeps, thaw, repeat"
 	# The fetch resolves a name first: the DNS operation parks and
@@ -241,7 +241,7 @@ ac4)
 	done
 	grep -aq "parked egress to $HOST_IP:8080" "$VMM" || { echo "FAIL: no park report for :8080"; exit 1; }
 	grep -aq "rel-ok" "$CON" && { echo "FAIL: the request passed without a verdict"; exit 1; }
-	echo "  parked, reported, and frozen by its own hand"
+	echo "  parked, reported; the machine froze itself (one-shot)"
 
 	say "step 4: the engine renders release with allow, by id; the thaw applies"
 	LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
