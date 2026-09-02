@@ -238,7 +238,7 @@ requires a decision, nothing stands, and the mouth closes.
       of the invoking process, the harvest file's name, and the
       Audit variant's field number in the Message envelope.
 
-- [ ] 1.6.12 IPv6 leaves the canonical kernel fragment.
+- [x] 1.6.12 IPv6 leaves the canonical kernel fragment.
       ipv6.disable=1 in DEFAULT_BASE_ARGS silences the stack at
       boot; necessity says the stack itself goes -- the guest
       carries no code nobody chose. Costs a rebuild of every

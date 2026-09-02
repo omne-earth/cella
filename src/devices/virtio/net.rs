@@ -197,16 +197,12 @@ impl Net {
             self.deliver_queue.pop_front();
         }
         let mut buf = vec![0u8; MAX_FRAME];
-        loop {
-            let n = match self.tap.read_frame(&mut buf) {
-                Ok(n) => n,
-                Err(_) => break,
-            };
+        while let Ok(n) = self.tap.read_frame(&mut buf) {
             match self.valve {
                 // Closed: nothing goes in. The TAP drains (the
                 // host must not see backpressure from a dark
                 // machine) and every frame discards.
-                ValveState::Closed => continue,
+                ValveState::Closed => {}
                 ValveState::Open => self.park_inbound(&buf[..n]),
             }
         }

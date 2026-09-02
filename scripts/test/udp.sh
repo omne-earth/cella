@@ -110,6 +110,13 @@ say "step 1: born closed -- the guest's own datagram dies at the tap (negative)"
 "$BIN" start "$VM" >/dev/null
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 sleep 4
+# The guest carries no IPv6 stack (1.6.12): the fragment killed
+# CONFIG_IPV6 -- the code is absent, not silenced. ipv6.disable=1
+# stays on the command line as the floor for foreign kernels.
+type_in 'test -d /proc/sys/net/ipv6 && echo v6-aliv"e" || echo v6-dea"d"'
+wait_con "v6-dead" || { echo "FAIL: the guest did not report on IPv6"; exit 1; }
+grep -aq "v6-alive" "$CON" && { echo "FAIL: the guest carries an IPv6 stack"; exit 1; }
+echo "  /proc/sys/net/ipv6 does not exist: the stack is gone, not muted"
 type_in "echo cp > /dev/udp/$HOST_IP/$UDP_PORT"
 type_in "echo sent-close\"d\""
 wait_con "sent-closed" || { echo "FAIL: the guest shell did not run the send"; exit 1; }
