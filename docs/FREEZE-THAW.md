@@ -93,6 +93,107 @@ flowchart LR
     SC -->|"restore, then delete"| C2
 ```
 
+## The two automata
+
+The machine and its valve are two deterministic automata with two
+independent controllers (designed 2026-09-02 with the
+total-membrane ruling; the code converges on it).
+
+The machine automaton is time: running and frozen, driven by the
+machine controller (cella freeze, thaw, start, stop). The freeze
+verb works from every running state; against a frozen machine it
+refuses (the machine is already files).
+
+The valve automaton is the border: closed and open, driven by the
+gateway controller (cella gateway open, close, release, refuse,
+show). It is born closed at create, and it changes state on the
+gateway verbs alone: a machine state never opens it, never closes
+it, and never resets it. The verbs work in every machine state --
+frozen included -- because the border does not consult time. The
+posture holds until the opposite verb, across any number of
+freezes and thaws.
+
+Neither automaton writes the other's state. They touch at exactly
+two points, one wire in each direction:
+
+1. **The park.** Valve open, an egress frame arrives: the valve
+   emits one input -- freeze -- into the machine automaton. The
+   only wire from the border to time.
+2. **The thaw apply.** The thaw edge executes the judgments the
+   gateway controller staged. The only wire from time to the
+   border, and the only place a decision ever moves anything: a
+   staged decision that cannot apply (its operation blocked,
+   unmatched, or unknown) stays staged and moves nothing. Every
+   failure of the apply is stillness -- delivery requires an
+   applied decision, and the only exit without delivery is an
+   explicit refusal.
+
+```mermaid
+stateDiagram-v2
+    state "machine automaton (cella)" as M {
+        R: running
+        F: frozen
+        [*] --> R: start
+        R --> F: cella freeze, or the park
+        F --> R: cella thaw, applies what can apply
+    }
+    state "valve automaton (cella-gateway)" as V {
+        C: closed
+        O: open
+        [*] --> C: born closed at create
+        C --> O: cella gateway open
+        O --> C: cella gateway close
+    }
+```
+
+The transition tables, with the outputs:
+
+| Machine | Input | Next | Output |
+|---|---|---|---|
+| running | freeze | frozen | the sidecar |
+| running | park (from the valve) | frozen | ledger flush, then the sidecar -- the park is the freeze |
+| frozen | decision(id) | frozen | staged in the verdict file; nothing moves |
+| frozen | thaw | running | the staged decisions that can apply, apply in park order -- deliver or lapse; the rest stay staged, and their operations stay held |
+| frozen | freeze | frozen | refused: the machine is already files |
+
+| Valve | Input | Next | Output |
+|---|---|---|---|
+| closed | egress | closed | the frame drops and completes |
+| closed | ingress | closed | the frame discards |
+| closed | open | open | -- |
+| open | egress | open | park: one input crosses to the machine automaton -- the freeze |
+| open | ingress | open | deliver to the guest |
+| open | close | closed | -- |
+
+Two arrivals the tables do not govern, stated rather than
+implied. Ingress under an open valve delivers freely: the hold
+covers egress alone, the accepted asymmetry of this phase, until
+the appliance owns the inbound side. And a frame that arrives
+while the machine is frozen is lost at the tap -- no process
+listens, the protocols above retransmit, and the appliance later
+holds such arrivals instead of losing them.
+
+Why the posture persists across a thaw: the world answers at
+network speed, and a released request's response lands moments
+after the thaw edge delivered it. A valve that reset to closed at
+thaw would discard that response every time, by construction --
+the answer to a judged crossing would die in the gap between the
+thaw and a re-open that no controller can win by racing an RTT.
+The posture is therefore the border's business alone. Openness
+was never permission: the next unjudged egress parks and freezes
+the machine exactly as before, whatever the posture's age.
+
+Everything else is independence. Undecided holds are carried
+state: no edge of either automaton consumes them except the thaw
+apply, thus they ride through any number of epochs, visible in
+show. Closed is closed at every age: the egress self-loop drops
+and completes identically at second zero and at hour nine, and
+drops change no state, thus recording them is pure observation --
+twins stay twins with or without a counter. And under the total
+membrane the open valve holds no traffic privilege: every egress
+frame to an undecided operation is the machine's last act of the
+epoch.
+
 ## The freeze sequence
 
 Two triggers reach the same freeze path:
