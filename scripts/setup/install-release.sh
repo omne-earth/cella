@@ -117,22 +117,32 @@ sudo setcap 'cap_net_admin+eip' target/release/cella-network 2>/dev/null || true
 # reboot deletes the pool. This oneshot recreates it. The unit runs
 # as root at boot (file capabilities matter only for the runtime
 # path); SUDO_UID pins the tap owner to the installing user.
-sudo tee /etc/systemd/system/cella-network.service >/dev/null <<UNIT
+# The pool at boot: a systemd USER unit with linger, not a system
+# unit. A system service runs in init_t with no exec type on the
+# installed binary, and SELinux denies both the exec from the
+# user's home and the witness's append on the root book -- the
+# fail-closed witness then kills the pool at every boot (the AVCs
+# of 2026-09-02). The user manager runs the unit as the operator
+# in the operator's own domain: the exec, the witness, and the
+# file capability all hold. The shakedown's join revisits this
+# when the installed binaries gain their SELinux types.
+mkdir -p "$HOME/.config/systemd/user"
+tee "$HOME/.config/systemd/user/cella-network.service" >/dev/null <<UNIT
 [Unit]
 Description=cella tap pool (cella-network setup)
 After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=oneshot
-Environment=SUDO_UID=$(id -u)
-ExecStart=$HOME/.local/bin/cella-network setup --taps 4
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/cella-network setup --taps 4
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 UNIT
-sudo systemctl daemon-reload
-sudo systemctl enable cella-network.service >/dev/null 2>&1
+systemctl --user daemon-reload
+systemctl --user enable cella-network.service >/dev/null 2>&1
+sudo loginctl enable-linger "$USER"
 echo "cella: cella-network.service enabled -- the pool survives a reboot"
 case ":$PATH:" in
 *":$HOME/.local/bin:"*) echo "cella: ~/.local/bin is already on PATH" ;;
