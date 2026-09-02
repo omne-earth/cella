@@ -33,7 +33,12 @@ teardown() {
     kill $SRV1 $SRV2 2>/dev/null || true
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
-    rm -rf "$CELLA_HOME" "$WWW"
+    if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then
+        echo "kept: $CELLA_HOME"
+        rm -rf "$WWW"
+    else
+        rm -rf "$CELLA_HOME" "$WWW"
+    fi
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
@@ -62,7 +67,29 @@ wait_frozen() {
         sleep 0.2
     done
 }
-first_held() { "$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p' | head -1; }
+first_held() { "$BIN" gateway "$VM" show outgoing | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p' | head -1; }
+# The ear's live wire: release every held incoming operation -- mail
+# moves without a thaw. The guest's own ARP reply is mail now, and
+# without it the guest never gets far enough to send its next frame.
+pump_mail() {
+    for id in $("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+        "$BIN" gateway "$VM" release "$id" >/dev/null || true
+    done
+}
+wait_frozen_mail() {
+    local deadline=$((SECONDS + 25))
+    until [ -f "$STATE" ]; do
+        pump_mail
+        [ $SECONDS -lt $deadline ] || return 1
+        sleep 0.5
+    done
+    local pid
+    pid=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
+    while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do
+        [ $SECONDS -lt $deadline ] || return 1
+        sleep 0.2
+    done
+}
 
 say "step 1: create (born closed), start, open the valve through the verb"
 "$BIN" create "$VM" --net "$TAP" >/dev/null
@@ -91,7 +118,7 @@ sleep 2
 echo "  released by prefix, staged, applied at the thaw; the book records it"
 
 say "step 4: the next operation, refused -- it lapses, and never delivers"
-wait_frozen || { echo "FAIL: the fetch's next frame did not park and freeze (valve persistence)"; exit 1; }
+wait_frozen_mail || { echo "FAIL: the fetch's next frame did not park and freeze (valve persistence)"; exit 1; }
 ID_B=$(first_held)
 [ -n "$ID_B" ] || { echo "FAIL: show lists no second operation"; exit 1; }
 "$BIN" gateway "$VM" refuse "${ID_B:0:16}" --why "not part of this world" >/dev/null

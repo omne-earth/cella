@@ -864,6 +864,15 @@ fn run_loop(
             // "The two automata").
             apply_valve_record(state_dir, mmio_devices);
             apply_ingress_verdicts(state_dir, mmio_devices, mem);
+            // The live path's own flush: resolve_ingress's Released
+            // or Lapsed event exists only in memory until this
+            // writes it, and the loop's other flush waits on the
+            // next vcpu_fd.run() -- which blocks indefinitely against
+            // an idle guest that a refusal (rightly) never wakes.
+            if flush_ledger(mmio_devices, ledger_path) {
+                eprintln!("cella: parked -- the machine freezes (one-shot)");
+                FREEZE_REQUESTED.store(true, Ordering::SeqCst);
+            }
         }
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
             let device_states: Vec<_> = mmio_devices

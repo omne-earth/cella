@@ -29,7 +29,7 @@ VM=devstate
 teardown() {
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
-    rm -rf "$CELLA_HOME"
+    if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then echo "kept: $CELLA_HOME"; else rm -rf "$CELLA_HOME"; fi
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
@@ -50,9 +50,15 @@ held_ids() { "$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\
 # The stand-in engine: while the given pid runs, release every held
 # operation of the frozen machine and thaw it -- every frame is a
 # fresh decision under the total membrane.
+pump_mail() {
+    for id in $("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+        "$BIN" gateway "$VM" release "$id" >/dev/null
+    done
+}
 pump_while() { # pid
     local cycles=0
     while kill -0 "$1" 2>/dev/null; do
+        pump_mail
         if [ -f "$STATE" ]; then
             local vp
             vp=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
@@ -213,7 +219,14 @@ ac3)
 		deadline=$((SECONDS + 20))
 		until [ -f "$STATE" ] || grep -aq "held-ok" "$CON"; do
 			[ $SECONDS -lt $deadline ] || { echo "FAIL: neither a freeze nor a completion arrived (cycle $cycles)"; exit 1; }
-			sleep 1
+			# The HTTP response's mail (the ARP reply, the SYN-ACK,
+			# the response bytes) arrives here: pump it every half
+			# second, or the guest's own real time in this window
+			# outruns the pump and it retries instead of landing.
+			for id in $("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+				"$BIN" gateway "$VM" release "$id" >/dev/null
+			done
+			sleep 0.5
 		done
 		grep -aq "held-ok" "$CON" && break
 		# The sidecar lands before the old VMM exits: wait it out.
@@ -368,7 +381,13 @@ ac5)
 		deadline=$((SECONDS + 25))
 		until [ -f "$STATE" ] || grep -aq "world-real" "$CON"; do
 			[ $SECONDS -lt $deadline ] || { echo "FAIL: neither a freeze nor a completion arrived (cycle $cycles)"; exit 1; }
-			sleep 1
+			# Same as AC3: pump the response's mail continuously, or
+			# the real world's reply misses the window and the guest
+			# retries instead of landing.
+			for id in $("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+				"$BIN" gateway "$VM" release "$id" >/dev/null
+			done
+			sleep 0.5
 		done
 		grep -aq "world-real" "$CON" && break
 		vp=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)

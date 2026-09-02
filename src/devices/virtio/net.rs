@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use virtio_queue::{Queue, QueueOwnedT, QueueT};
+use virtio_queue::{Queue, QueueT};
 use vm_memory::{Bytes, GuestMemoryMmap};
 
 use super::tap::Tap;

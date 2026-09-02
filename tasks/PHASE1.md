@@ -181,7 +181,18 @@ requires a decision, nothing stands, and the mouth closes.
       a package by its shipping label. The looking is itself
       recorded: an Inspected event lands in the chronicle. Until
       the terminator, an encrypted payload renders as the sealed
-      envelope it is.
+      envelope it is. Rulings (2026-09-02): the verb gets its own
+      gate, smoke-inspection, in the aggregate, and the gate is
+      CLI operations alone -- park, inspect, show, refuse,
+      thaw -- nothing else (the name stays grep-distinct from
+      the universe verb's inspect inside smoke-universe). One
+      ruling stays open for the implementor to ask before
+      building: where inspect reads (the ledger is a chronicle,
+      never the store, and no second store may appear beside it;
+      the frames live in the vessel -- the sidecar when frozen,
+      the VMM's memory when running -- thus the look is either
+      frozen-only, or a request to the holder: kick, one-shot
+      ephemeral dump, nothing at rest). Ask the operator.
 - [ ] 1.6.11 The witnessed border (ruled 2026-09-02, sharpened
       2026-09-02): every verb is an event, no exception -- show
       and inspect included; every human action is as auditable as

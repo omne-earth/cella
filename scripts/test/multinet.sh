@@ -19,7 +19,10 @@ mkdir -p "$CELLA_HOME/kernel/canonical" "$CELLA_HOME/rootfs/cella"
 cp "$REAL_HOME/kernel/canonical/bzImage" "$CELLA_HOME/kernel/canonical/"
 cp "$REAL_HOME/rootfs/cella/rootfs.ext4" "$CELLA_HOME/rootfs/cella/"
 
-teardown() { "$BIN" stop mn >/dev/null 2>&1 || true; rm -rf "$CELLA_HOME"; }
+teardown() {
+    "$BIN" stop mn >/dev/null 2>&1 || true
+    if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then echo "kept: $CELLA_HOME"; else rm -rf "$CELLA_HOME"; fi
+}
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
 CON="$CELLA_HOME/machines/mn/console.log"
@@ -33,11 +36,20 @@ wait_for() {
     return 1
 }
 M="$CELLA_HOME/machines/mn"
+# The ear's live wire: release every held incoming operation -- mail
+# moves without a thaw. Against a frozen machine the release stages
+# and the next thaw applies it.
+pump_mail() {
+    for id in $("$BIN" gateway mn show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+        "$BIN" gateway mn release "$id" >/dev/null
+    done
+}
 # The stand-in engine: while the given pid runs, release every held
 # operation of the frozen machine and thaw it (see ping.sh).
 pump_while() { # pid
     local cycles=0
     while kill -0 "$1" 2>/dev/null; do
+        pump_mail
         if [ -f "$M/state" ]; then
             pid=$(cat "$M/pid" 2>/dev/null || true)
             [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { sleep 0.2; continue; }
@@ -67,10 +79,15 @@ say "step 3: open -- every egress parks, and the engine lands a reply on eth0"
 "$BIN" gateway mn open >/dev/null
 sleep 1
 ping -c 1 -W 3 192.168.201.2 >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
+# The knock parks incoming and never freezes the machine (the
+# world's knock is not the resident's deed); release it live, and
+# the guest's own reply parks in the egress lane -- that park is the
+# freeze.
 deadline=$((SECONDS + 20))
 until [ -f "$M/state" ]; do
     [ $SECONDS -lt $deadline ] || { echo "FAIL: the first egress did not park and freeze"; exit 1; }
-    sleep 1
+    pump_mail
+    sleep 0.5
 done
 ping -c 20 -i 1 -W 25 192.168.201.2 >/dev/null 2>&1 & P3=$!
 pump_while "$P3"

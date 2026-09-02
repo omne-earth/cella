@@ -37,35 +37,63 @@ if grep -q cella_nested_mode=www /proc/cmdline || [ -f /etc/cella-www ]; then
         --mem-mb 64 --net tap1 || echo "cella-nested: FAIL: create failed"
     echo "cella-nested: starting the inner machine (jailed)"
     cella start inner || echo "cella-nested: FAIL: start failed"
+    # Relay the inner console now, in the background: the ear's ratchet
+    # below can run many cycles against a nested VM, and the observer
+    # must see the inner guest's own boot line without waiting on the
+    # ICMP engine to finish first.
+    tail -f /tmp/cella/machines/inner/console.log &
     # Born closed: this init is the inner machine's engine. Open the
     # valve, ping (the inner reply parks and the inner machine
     # freezes itself), release every held operation, thaw, and ping
-    # again -- one decision at a time, one level down.
+    # again -- one decision at a time, one level down. The ping runs
+    # in the background with its own patience: a nested freeze/thaw
+    # round trip can run longer than any single ICMP timeout, and a
+    # ping that gives up before its own reply lands never sees it --
+    # the next ping is then one cycle behind forever. The pump below
+    # decides without regard to any one attempt.
     cella gateway inner open
+    ping -c 20 -i 1 -W 10 192.168.201.2 >/dev/null 2>&1 &
+    PPID_ICMP=$!
     n=0
-    while [ $n -lt 60 ]; do
-        if ping -c 1 -W 1 192.168.201.2 >/dev/null 2>&1; then
-            echo "cella-nested: inner answered ICMP"
+    while kill -0 "$PPID_ICMP" 2>/dev/null; do
+        n=$((n+1))
+        if [ $n -gt 60 ]; then
+            kill "$PPID_ICMP" 2>/dev/null
             break
         fi
-        if [ -f /tmp/cella/machines/inner/state ]; then
+        # The ear's live wire: the ping is a knock at the inner
+        # machine's own inbound lane -- it parks and does not
+        # freeze the inner machine. Release it live while inner
+        # runs, and its own reply parks egress and freezes.
+        for id in $(cella gateway inner show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+            cella gateway inner release "$id"
+        done
+        ipid=$(cat /tmp/cella/machines/inner/pid 2>/dev/null || true)
+        if [ -n "$ipid" ] && kill -0 "$ipid" 2>/dev/null; then
+            : # the sidecar lands before the old VMM exits; try again next pass
+        elif [ -f /tmp/cella/machines/inner/state ]; then
             echo "cella-nested: the inner machine froze on its reply -- deciding"
             for id in $(cella gateway inner show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
                 cella gateway inner release "$id"
             done
             cella thaw inner
         fi
-        n=$((n+1)); sleep 1
+        sleep 1
     done
-    [ $n -ge 60 ] && echo "cella-nested: FAIL: no ICMP reply from the inner guest"
+    if wait "$PPID_ICMP"; then
+        echo "cella-nested: inner answered ICMP"
+    else
+        echo "cella-nested: FAIL: no ICMP reply from the inner guest"
+    fi
 else
     echo "cella-nested: creating the inner machine (block only)"
     cella create inner --kernel canonical --rootfs canonical \
         --mem-mb 64 --net none || echo "cella-nested: FAIL: create failed"
     echo "cella-nested: starting the inner machine (jailed)"
     cella start inner || echo "cella-nested: FAIL: start failed"
+    # Relay the inner console, for the outer observer.
+    tail -f /tmp/cella/machines/inner/console.log &
 fi
-# Relay the inner console to this console, for the outer observer.
-tail -f /tmp/cella/machines/inner/console.log
-# tail returns only on an error; keep the serial readable.
+# The relay above runs in the background; keep this init alive as
+# pid 1 for as long as the outer guest lives.
 while true; do sleep 1; done

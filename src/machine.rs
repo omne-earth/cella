@@ -460,8 +460,12 @@ pub fn setup_pair(id: u32, via: &str) -> Result<(), String> {
         }
         ip(&["link", "set", &tap, "master", &br])?;
         ip(&["link", "set", &tap, "up"])?;
+        // IPv4 alone, like the pool: the host's IPv6 chatter on a
+        // pair leg is mail no engine asked for.
+        let _ = std::fs::write(format!("/proc/sys/net/ipv6/conf/{tap}/disable_ipv6"), "1");
     }
     ip(&["link", "set", &br, "up"])?;
+    let _ = std::fs::write(format!("/proc/sys/net/ipv6/conf/{br}/disable_ipv6"), "1");
     // The route to the agent subnet goes through the world side of
     // the gateway: the guest address of the via tap, by convention.
     let gw_world = format!("192.168.{}.2", 200 + n);
@@ -523,6 +527,15 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
         // its release the host's probe window has closed
         // (arp_accept=0 drops the late reply). The host must not
         // need to ask.
+        // The pool speaks IPv4 alone. The host's own stacks emit
+        // IPv6 multicast and IGMP onto every up interface, and
+        // under the ear each emission parks as mail that some
+        // engine must decide -- chatter with no purpose on a tap
+        // whose guests carry ipv6.disable=1 themselves. Silence
+        // the source (CAP_NET_ADMIN owns the net sysctls).
+        let quiet = |t: &str| {
+            let _ = std::fs::write(format!("/proc/sys/net/ipv6/conf/{t}/disable_ipv6"), "1");
+        };
         let neigh = |t: &str, g: &str| {
             let _ = ip(&[
                 "neigh",
@@ -551,6 +564,7 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
             ]);
             let _ = ip(&["addr", "replace", &format!("{host}/24"), "dev", &tap]);
             ip(&["link", "set", &tap, "up"])?;
+            quiet(&tap);
             neigh(&tap, &guest);
             println!("cella: {tap} already exists, converged ({host}/24)");
             continue;
@@ -569,6 +583,7 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
         ])?;
         ip(&["addr", "add", &format!("{host}/24"), "dev", &tap])?;
         ip(&["link", "set", &tap, "up"])?;
+        quiet(&tap);
         neigh(&tap, &guest);
         println!("cella: created {tap} owned by uid {owner}, host side {host}/24");
     }

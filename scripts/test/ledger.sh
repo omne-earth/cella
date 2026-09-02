@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The ledger backend's gate. See docs/NETWORK-MODEL.md, "The control
-# plane", and .claude/TASKS.md phase 1.
+# plane", and tasks/PHASE1.md phase 1.
 #
 # Part A: under the total membrane a fetch's first egress is the
 # guest's ARP -- it parks as an L2 operation with an id and both
@@ -42,7 +42,12 @@ teardown() {
     kill $SRV1 $SRV2 $SRV3 2>/dev/null || true
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
-    rm -rf "$CELLA_HOME" "$WWW"
+    if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then
+        echo "kept: $CELLA_HOME"
+        rm -rf "$WWW"
+    else
+        rm -rf "$CELLA_HOME" "$WWW"
+    fi
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
@@ -96,13 +101,33 @@ wait_frozen() {
     done
 }
 wait_frozen || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
+# The ear's live wire: release every held incoming operation -- mail
+# moves without a thaw.
+pump_mail() {
+    for id in $("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+        "$BIN" gateway "$VM" release "$id" >/dev/null || true
+    done
+}
+# Pump mail every half second until the machine self-freezes on its
+# own next egress park, or the window closes. A single end-of-window
+# pump can miss the reply by up to its own sleep: the guest's real
+# clock runs while this window is open (freezes alone are timeless),
+# and a miss here reads to the guest as a dead peer worth retrying --
+# the retry, not a stall, is what a coarse pump produces.
+pump_while_running() { # seconds
+    local deadline=$((SECONDS + $1))
+    until [ -f "$STATE" ] || [ $SECONDS -ge $deadline ]; do
+        pump_mail
+        sleep 0.5
+    done
+}
 [ -s "$LEDGER" ] || { echo "FAIL: no ledger file at $LEDGER"; exit 1; }
 echo "  parked; the machine froze itself (one-shot)"
 
 say "step 4: the ledger holds one L2 operation, with an id and both clocks"
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
 echo "$DUMP" | sed "s/^/  /"
-COUNT=$(echo "$DUMP" | grep -c "^parked ")
+COUNT=$(echo "$DUMP" | grep -c "^parked .*dir=outgoing")
 [ "$COUNT" = "1" ] || { echo "FAIL: expected exactly one parked operation (the ARP; retransmits join), got $COUNT"; exit 1; }
 echo "$DUMP" | grep -qE "^parked id=[0-9a-f]{32} " || { echo "FAIL: no well-formed id on the operation"; exit 1; }
 echo "$DUMP" | grep -q "l2=arp" || { echo "FAIL: the first operation is not the ARP at its primitive name"; exit 1; }
@@ -132,7 +157,10 @@ until grep -aq "fetch-a-done" "$CON"; do
         "$BIN" gateway "$VM" release "$id" >/dev/null
     done
     "$BIN" thaw "$VM" >/dev/null
-    sleep 3
+    # The ARP's reply (and any other mail) is not a decision this
+    # loop staged for a thaw -- it is the ear's own live wire, and
+    # the guest needs it moved before its next frame can exist.
+    pump_while_running 6
 done
 "$BIN" --dump-ledger "$LEDGER" | grep -q "^parked .*ip=$HOST_IP port=8080" || { echo "FAIL: the SYN never parked refined to its destination"; exit 1; }
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
@@ -157,7 +185,7 @@ for _ in 1 2 3 4; do
         "$BIN" gateway "$VM" release "$id" >/dev/null
     done
     "$BIN" thaw "$VM" >/dev/null 2>&1 || true
-    sleep 2
+    pump_while_running 3
 done
 # Both new fetches park in one typed line: two operations, one
 # batch, one self-freeze. The chronicle exists, thus the valve is

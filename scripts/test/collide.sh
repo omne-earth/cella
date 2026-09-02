@@ -36,7 +36,11 @@ teardown() {
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
     p=$(cat "$M/pid" 2>/dev/null || true)
     [ -n "$p" ] && kill -9 "$p" 2>/dev/null || true
-    rm -rf "$CELLA_HOME"
+    if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then
+        echo "kept: $CELLA_HOME"
+    else
+        rm -rf "$CELLA_HOME"
+    fi
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
@@ -53,6 +57,13 @@ wait_frozen() {
         sleep 0.2
     done
 }
+# The ear's live wire: release every held incoming operation -- mail
+# moves without a thaw.
+pump_mail() {
+    for id in $("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+        "$BIN" gateway "$VM" release "$id" >/dev/null
+    done
+}
 
 say "step 1: one real operation parks and freezes"
 "$BIN" create "$VM" --net "$TAP" >/dev/null
@@ -60,9 +71,14 @@ say "step 1: one real operation parks and freezes"
 sleep 4
 "$BIN" gateway "$VM" open >/dev/null
 sleep 1
+# A host ping no longer freezes the machine: it parks incoming (the
+# world's knock is not the resident's deed). Release it live, and
+# the guest's own reply parks in the egress lane -- that park is the
+# freeze.
 ping -c 3 -W 2 "$GUEST_IP" >/dev/null 2>&1 || true
+pump_mail
 wait_frozen || { echo "FAIL: nothing parked and froze"; exit 1; }
-ID_REAL=$("$BIN" --dump-ledger "$LEDGER" | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p' | head -1)
+ID_REAL=$("$BIN" --dump-ledger "$LEDGER" | grep '^parked .*dir=outgoing' | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p' | tail -1)
 [ -n "$ID_REAL" ] || { echo "FAIL: no parked operation in the chronicle"; exit 1; }
 echo "  held: $ID_REAL"
 
@@ -71,29 +87,37 @@ python3 - "$LEDGER" "$ID_REAL" <<'EOF'
 import sys
 path, rid = sys.argv[1], sys.argv[2]
 raw = open(path, "rb").read()
-# The first frame: a varint length, then the message bytes.
-i, shift, length = 0, 0, 0
-while True:
-    b = raw[i]; length |= (b & 0x7F) << shift; i += 1; shift += 7
-    if not b & 0x80: break
-frame = raw[: i + length]
 old = bytes.fromhex(rid)
-assert old in frame, "the id bytes are not in the first frame"
+# The ear's mail parks and resolves before the real operation does
+# now, thus its Parked frame is not first in the file: scan every
+# varint-length-prefixed frame and take the one carrying this id.
+pos, frame = 0, None
+while pos < len(raw):
+    i, shift, length = pos, 0, 0
+    while True:
+        b = raw[i]; length |= (b & 0x7F) << shift; i += 1; shift += 7
+        if not b & 0x80: break
+    candidate = raw[pos : i + length]
+    if old in candidate:
+        frame = candidate
+        break
+    pos = i + length
+assert frame is not None, "the id bytes are not in any frame"
 twin = bytearray(old); twin[-1] ^= 0xFF
 open(path, "ab").write(frame.replace(old, bytes(twin)))
 print("  planted twin id:", bytes(twin).hex())
 EOF
 ID_TWIN=$(printf '%s' "$ID_REAL" | python3 -c 'import sys; s=bytearray(bytes.fromhex(sys.stdin.read())); s[-1]^=0xFF; print(s.hex())')
-COUNT=$("$BIN" --dump-ledger "$LEDGER" | grep -c "^parked ")
+COUNT=$("$BIN" --dump-ledger "$LEDGER" | grep -c "^parked .*dir=outgoing")
 [ "$COUNT" = "2" ] || { echo "FAIL: the surgery did not take (parked=$COUNT)"; exit 1; }
 
 say "step 3: the thaw over the collision -- the matcher never guesses"
 "$BIN" thaw "$VM" >/dev/null
 sleep 2
 grep -aq "no unambiguous open operation at thaw" "$M/vmm.log" || { echo "FAIL: the rebind matched through an ambiguity"; exit 1; }
-ID_FRESH=$("$BIN" --dump-ledger "$LEDGER" | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p' | tail -1)
+ID_FRESH=$("$BIN" --dump-ledger "$LEDGER" | grep '^parked .*dir=outgoing' | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p' | tail -1)
 [ "$ID_FRESH" != "$ID_REAL" ] && [ "$ID_FRESH" != "$ID_TWIN" ] || { echo "FAIL: no fresh id was minted"; exit 1; }
-"$BIN" --dump-ledger "$LEDGER" | grep -q "^released " && { echo "FAIL: an ambiguous frame delivered"; exit 1; }
+"$BIN" --dump-ledger "$LEDGER" | grep -qE "^released id=($ID_REAL|$ID_TWIN) " && { echo "FAIL: an ambiguous frame delivered"; exit 1; }
 "$BIN" gateway "$VM" show | grep -q "^${ID_FRESH:0:16}.*held" || { echo "FAIL: the re-minted operation is not held"; exit 1; }
 echo "  re-minted $ID_FRESH; every ambiguous frame stays held; none delivered"
 
@@ -106,7 +130,7 @@ sleep 2
 D=$("$BIN" --dump-ledger "$LEDGER")
 echo "$D" | grep -q "^lapsed id=$ID_REAL " || { echo "FAIL: the chronicle did not close $ID_REAL"; exit 1; }
 echo "$D" | grep -q "^lapsed id=$ID_TWIN " || { echo "FAIL: the chronicle did not close $ID_TWIN"; exit 1; }
-echo "$D" | grep -q "^released " && { echo "FAIL: something delivered during the bookkeeping"; exit 1; }
+echo "$D" | grep -qE "^released id=($ID_REAL|$ID_TWIN) " && { echo "FAIL: something delivered during the bookkeeping"; exit 1; }
 echo "  both stale ids lapsed by the book; nothing delivered"
 
 echo

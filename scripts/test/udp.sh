@@ -36,7 +36,11 @@ teardown() {
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
     [ -n "$LISTEN_PID" ] && kill "$LISTEN_PID" 2>/dev/null || true
-    rm -rf "$CELLA_HOME"
+    if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then
+        echo "kept: $CELLA_HOME"
+    else
+        rm -rf "$CELLA_HOME"
+    fi
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }

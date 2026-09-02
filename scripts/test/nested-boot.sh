@@ -47,7 +47,7 @@ VM=outer
 teardown() {
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
-    rm -rf "$CELLA_HOME"
+    if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then echo "kept: $CELLA_HOME"; else rm -rf "$CELLA_HOME"; fi
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
@@ -70,9 +70,15 @@ wait_frozen() {
 }
 # The stand-in engine: while the given pid runs, release every held
 # operation of the frozen outer machine and thaw it.
+pump_mail() {
+    for id in $("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+        "$BIN" gateway "$VM" release "$id" >/dev/null
+    done
+}
 pump_while() { # pid
     local cycles=0
     while kill -0 "$1" 2>/dev/null; do
+        pump_mail
         if [ -f "$STATE" ]; then
             pid=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
             [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { sleep 0.2; continue; }
@@ -124,12 +130,20 @@ if [ "$MODE" != airgapped ]; then
     [ -f "$STATE" ] && { echo "FAIL: a closed machine froze on inbound traffic"; exit 1; }
     echo "  no reply, no freeze: dark"
 
-    say "step 4: open -- every egress parks and freezes; the engine lands a reply (negative + positive)"
+    say "step 4: open -- the knock parks in the inbound lane, and the outer machine keeps running"
     "$BIN" gateway "$VM" open >/dev/null
     sleep 1
     ping -c 1 -W 3 "$OUTER_IP" >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
-    wait_frozen || { echo "FAIL: the parked egress did not freeze the outer machine"; exit 1; }
-    "$BIN" gateway "$VM" show | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show lists nothing held"; exit 1; }
+    [ -f "$STATE" ] && { echo "FAIL: the outer machine froze on inbound -- the world's knock is not the resident's deed"; exit 1; }
+    "$BIN" gateway "$VM" show incoming | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show incoming lists no held knock"; exit 1; }
+    echo "  the knock is held incoming; no freeze"
+
+    say "step 4b: the released knock reaches the guest; the reply parks, and that park is the freeze"
+    ID_K=$("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p' | head -1)
+    "$BIN" gateway "$VM" release "$ID_K" | grep -q "applies now" || { echo "FAIL: the incoming release did not apply live"; exit 1; }
+    wait_frozen || { echo "FAIL: the guest's reply did not park and freeze"; exit 1; }
+    "$BIN" gateway "$VM" show outgoing | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show outgoing lists no held reply"; exit 1; }
+    echo "  mail moved live; the resident's own deed froze the machine"
     ping -c 20 -i 1 -W 30 "$OUTER_IP" >/dev/null 2>&1 & P4=$!
     pump_while "$P4"
     wait "$P4" || { echo "FAIL: no ICMP reply landed while the engine decided"; exit 1; }

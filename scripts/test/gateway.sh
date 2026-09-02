@@ -28,7 +28,10 @@ cp "$REAL_HOME/kernel/canonical/bzImage" "$CELLA_HOME/kernel/canonical/"
 cp "$REAL_HOME/rootfs/cella/rootfs.ext4" "$CELLA_HOME/rootfs/cella/"
 cp "$REAL_HOME/rootfs/gateway/rootfs.ext4" "$CELLA_HOME/rootfs/gateway/"
 
-teardown() { for m in gw ag; do "$BIN" stop $m >/dev/null 2>&1 || true; done; rm -rf "$CELLA_HOME"; }
+teardown() {
+    for m in gw ag; do "$BIN" stop $m >/dev/null 2>&1 || true; done
+    if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then echo "kept: $CELLA_HOME"; else rm -rf "$CELLA_HOME"; fi
+}
 trap teardown EXIT
 type_in() { local vm="$1"; shift; (printf '%s\n' "$1"; sleep 2) | timeout 20 "$BIN" enter "$vm" >/dev/null; }
 wait_con() {
@@ -62,6 +65,12 @@ pump() { # marker cycles
         cycles=$((cycles + 1))
         [ $cycles -le "$budget" ] || return 1
         for m in ag gw; do
+            # The ear's live wire: release incoming mail while the
+            # member runs -- mail moves without a thaw, and each hop
+            # needs its own replies released before it forwards on.
+            for id in $("$BIN" gateway $m show incoming | sed -n "s/^\([0-9a-f]\{32\}\) .*held\$/\1/p"); do
+                "$BIN" gateway $m release "$id" >/dev/null
+            done
             [ -f "$CELLA_HOME/machines/$m/state" ] || continue
             # The sidecar lands before the old VMM exits: wait out
             # the gap, or the thaw refuses a machine still running.
@@ -72,16 +81,19 @@ pump() { # marker cycles
             done
             "$BIN" thaw $m >/dev/null
         done
-        sleep 2
+        # A stride of half a second: one echo's round trip crosses
+        # two machines -- three freezes and four mail moves -- and
+        # the reply must land inside the ping's own patience.
+        sleep 0.5
     done
 }
 type_in ag 'ping -c20 -W60 10.77.0.1 >/dev/null && echo pair-o"k"'
-pump "pair-ok" 45 || { echo "FAIL: the agent cannot reach the gateway over the pair"; exit 1; }
+pump "pair-ok" 180 || { echo "FAIL: the agent cannot reach the gateway over the pair"; exit 1; }
 echo "  agent -> gateway over the L2 pair, one decision at a time"
 
 say "step 4: the agent reaches the host, through the gateway"
 type_in ag 'ping -c20 -W60 192.168.201.1 >/dev/null && echo world-o"k"'
-pump "world-ok" 45 || { echo "FAIL: the gateway does not forward to the world"; exit 1; }
+pump "world-ok" 180 || { echo "FAIL: the gateway does not forward to the world"; exit 1; }
 echo "  agent -> gateway -> host: the appliance forwards, every hop decided"
 
 say "step 5: the pair freezes together (agent first), thaws together (gateway first)"
@@ -102,7 +114,7 @@ sleep 2
 # a member is frozen is lost at the tap: the repeating ping gives
 # the chain fresh echoes until one crossing survives every hop.
 type_in ag 'ping -c20 -W60 192.168.201.1 >/dev/null && echo world-agai"n"'
-pump "world-again" 45 || { echo "FAIL: the pair did not survive the freeze"; exit 1; }
+pump "world-again" 180 || { echo "FAIL: the pair did not survive the freeze"; exit 1; }
 echo "  the pair froze and thawed; the agent reaches the world again, re-decided"
 
 echo
