@@ -347,9 +347,10 @@ requires a decision, nothing stands, and the mouth closes.
       anything else kills the process. SELinux goes ENFORCING the
       moment the shakedown completes, every host, no
       permissive-forever dev exception.
-      The lanes, one subtask each -- authorship parallelizes in
-      isolated worktrees, the batteries serialize at each merge,
-      the reviewer merges one lane at a time:
+      The lanes, one subtask each -- authorship parallelizes on
+      Sonnet subagents in isolated worktrees, the batteries
+      serialize at each merge, the reviewer merges one lane at a
+      time:
       - [ ] 1.6.14a Identity and the jail, one fused lane (the
             subuid mapping lives inside the bwrap invocation --
             the same edit surface). Each machine runs as its own
