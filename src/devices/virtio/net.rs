@@ -132,7 +132,7 @@ impl Net {
     fn drain_rx(&mut self, mem: &GuestMemoryMmap, queue: &mut Queue) -> bool {
         let mut used_any = false;
         let mut buf = vec![0u8; MAX_FRAME];
-        // The coconut: nothing goes in. The TAP drains (the host must
+        // Closed: nothing goes in. The TAP drains (the host must
         // not see backpressure from a dark machine) and every frame
         // discards; the guest's posted buffers stay posted.
         if self.valve == ValveState::Closed {
@@ -197,7 +197,7 @@ impl Net {
                 len += take;
             }
             match self.valve {
-                // The coconut: nothing goes out. The frame drops and
+                // Closed: nothing goes out. The frame drops and
                 // completes (the guest owns its buffer back); no
                 // park, no ledger, no freeze.
                 ValveState::Closed => {

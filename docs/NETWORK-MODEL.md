@@ -55,7 +55,7 @@ principle doing the persistence. The sidecar carries no payload
 blocks; the ledger (below) is a chronicle, never the store.
 
 The valve has two postures, and no third: closed and open. A
-machine is born closed -- the coconut. Nothing goes in or out: no
+machine is born closed. Nothing goes in or out: no
 park, no ledger, no freeze. The machine runs dark, and its own
 calls fail at the tap. `cella gateway open` turns the tap into the
 membrane, never into a free flow: every egress frame -- an
@@ -64,8 +64,8 @@ decision, and the first parked batch stops the machine. The VMM
 completes the TX batch in hand (the batch bounds the holds per
 instant, and the ring size is its ceiling), flushes the ledger,
 and freezes before the guest runs again: the park is the freeze.
-`close` returns the coconut and stops even the flows a decision
-allowed. The posture lives in the manifest, thus it survives stop,
+`close` closes the machine again and blocks even the flows a
+decision allowed. The posture lives in the manifest, thus it survives stop,
 thaw, and restart; the verbs change it live through a Valve
 message. No unmanaged posture exists on any interface: the raw
 flag interface opens into the membrane like every other path.
@@ -131,7 +131,7 @@ CAP_NET_ADMIN and the wiring verbs, nothing else):
   entry.
 - `refuse <id>` -- lapse one operation, with its why; the park
   order advances.
-- `open` / `close` -- the valve. Closed is the coconut: nothing
+- `open` / `close` -- the valve. Closed: nothing
   goes in or out. Open is the membrane: egress parks for
   decisions. No posture forwards freely.
 

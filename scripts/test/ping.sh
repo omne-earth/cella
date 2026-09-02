@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # smoke-ping: the valve, end to end. A machine is born closed (the
-# coconut): a host ping fails. Open turns the tap into the membrane:
+# closed): a host ping fails. Open turns the tap into the membrane:
 # the guest's echo reply parks, and the park is the freeze. A release
 # and a thaw let the reply flow, and the next ping answers. Close
-# returns the coconut: ping fails again. Fail, freeze, release,
+# closes the machine: ping fails again. Fail, freeze, release,
 # reply, fail -> PASS. See docs/NETWORK-MODEL.md.
 set -euo pipefail
 
@@ -42,7 +42,7 @@ wait_frozen() {
     done
 }
 
-say "step 1: born closed -- the coconut answers nothing"
+say "step 1: born closed -- the machine answers nothing"
 "$BIN" create "$VM" --net "$TAP" >/dev/null
 grep -q '"valve": "closed"' "$CELLA_HOME/machines/$VM/manifest.json" || { echo "FAIL: the manifest is not born closed"; exit 1; }
 "$BIN" start "$VM" >/dev/null
@@ -70,7 +70,7 @@ sleep 2
 ping -c 2 -W 3 "$GUEST_IP" >/dev/null || { echo "FAIL: no reply after the release"; exit 1; }
 echo "  released: the pass entry stands, and pings answer"
 
-say "step 4: close -- the coconut again"
+say "step 4: close -- the machine is closed again"
 "$BIN" gateway "$VM" close >/dev/null
 sleep 1
 ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a closed machine answered a ping"; exit 1; }

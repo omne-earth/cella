@@ -93,7 +93,7 @@ message Refusal {
   string why = 1;
 }
 
-// The posture of the valve. Closed is the coconut: nothing goes
+// The posture of the valve. Closed: nothing goes
 // in or out. Open is the membrane: egress parks for decisions.
 // No posture forwards freely.
 message Valve {

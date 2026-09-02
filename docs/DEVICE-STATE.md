@@ -101,7 +101,7 @@ written as history, never read back as truth.
 
 The concrete surface, in order:
 
-1. A machine is born closed -- the coconut: nothing in or out, no
+1. A machine is born closed: nothing in or out, no
    parking, no freeze. `cella gateway <vm> open` arms the
    membrane; `close` returns the dark. The posture rides the
    manifest and survives every thaw.

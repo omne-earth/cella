@@ -69,7 +69,7 @@ struct Args {
     attach_ro: Option<PathBuf>,
     /// The taps, in order: eth0 is the first. --tap repeats.
     taps: Vec<String>,
-    /// The valve posture: closed (the coconut) or open (the
+    /// The valve posture: closed or open (the
     /// membrane). The raw flag interface defaults open -- managed,
     /// like everything; the verbs pass the manifest's posture.
     valve: devices::virtio::ValveState,

@@ -7,7 +7,7 @@ use virtio_queue::Queue;
 use vm_memory::GuestMemoryMmap;
 
 /// The posture of a machine's network (see docs/NETWORK-MODEL.md,
-/// "The valve"). Closed is a coconut: nothing goes in or out, no
+/// "The valve"). Closed: nothing goes in or out, no
 /// parking, no ledger, no freeze -- the machine runs dark. Open is
 /// the membrane: ARP passes (without L2 resolution nothing could
 /// deliver), pass entries pass, and every other egress frame --

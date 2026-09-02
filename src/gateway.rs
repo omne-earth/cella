@@ -232,7 +232,7 @@ fn set_posture(vm: &str, v: proto::valve::V, word: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// close: the coconut. Nothing goes in or out -- no parking, no
+/// close: the closed machine. Nothing goes in or out -- no parking, no
 /// ledger, no freeze; the machine runs dark.
 pub fn close(vm: &str) -> Result<(), String> {
     set_posture(vm, proto::valve::V::Closed, "closed")

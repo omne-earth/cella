@@ -39,7 +39,7 @@ make init          # once per host: deps, toolbox, tap0, goldens
 make golden        # the canonical goldens (no-op if init already did it)
 make smoke-boot    # boots a real kernel all the way to init
 make smoke-thaw    # boot -> freeze -> thaw -> verify
-make smoke-ping    # the valve end to end: coconut, membrane, release, dark again
+make smoke-ping    # the valve end to end: closed, open, release, closed again
 ```
 
 Or all at once: `make smoke` (or `make test-all` for everything).

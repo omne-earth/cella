@@ -66,7 +66,7 @@ pub struct Manifest {
     /// A path to a disk attached read-only as a second virtio-blk
     /// (the rock of the inspect verb), or "none".
     pub attach: String,
-    /// The valve posture: "closed" (the coconut, the birth state)
+    /// The valve posture: "closed" (the birth state)
     /// or "open" (the membrane). The verbs flip it; create never
     /// takes it as a flag.
     pub valve: String,

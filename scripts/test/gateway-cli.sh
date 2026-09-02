@@ -96,7 +96,7 @@ grep -aq "fetch-b-done" "$CON" && { echo "FAIL: a refused operation delivered"; 
 "$BIN" gateway "$VM" show --all | grep -q "lapsed (not part of this world)" || { echo "FAIL: the book does not record the lapse and its why"; exit 1; }
 echo "  refused; nothing delivered; the book records the lapse"
 
-say "step 5: close -- the coconut kills even the allowed flow"
+say "step 5: close -- the machine blocks even the previously allowed flow"
 "$BIN" gateway "$VM" close >/dev/null
 sleep 1
 type_in 'wget -q -T 4 -O /dev/null $H:8080 && echo fetch-c-don"e" &'
