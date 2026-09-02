@@ -287,6 +287,29 @@ requires a decision, nothing stands, and the mouth closes.
       framed files and a signal -- a protocol, never an API --
       and the 1.6.14 profile proves it: write on verdict, valve,
       and audit alone; read on ledger and pid; no exec.
+      Groomed 2026-09-02, final: cella becomes a pure shim -- a
+      launcher that owns zero verbs and execs the persona binary
+      named by the first argument; the interface stays intact,
+      and only the backend plumbing changes. Cross-persona needs
+      do not exist: the commons move to cella-libs by the
+      observation rule -- the spawn machinery has two genuine
+      users (machine's start, universe's inspect) and joins
+      proto, the ledger framing, the golden digests, the
+      home-resolution path fn, and the sidecar READER (second
+      sighting recorded at 1.6.10: the vmm writes it, the
+      gateway's inspect reads it). The only execs are boundaries
+      by nature: the shim into the personas, and cella-machine
+      into cella-vmm (a separate process by design). Sibling and
+      flavor resolution: a persona finds its siblings beside its
+      own binary, same flavor -- -debug pairs with -debug (the
+      probe's rule, generalized); the field shim never execs a
+      lab binary. The static gates move with the split, in the
+      same commit: test-witness counts one door per persona
+      binary (the shim owns none), and test-one-door's grep
+      follows net.rs into the vmm crate. Layout:
+      crates/<persona> and crates/cella-libs; the workspace root
+      keeps the smoke profile; the install scripts, CELLA_DEV,
+      and the Makefile paths follow.
 
 - [ ] 1.6.14 The shakedown (ruled 2026-09-02): the three
       confinement layers go from built to tightened, per persona,
