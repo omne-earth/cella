@@ -51,6 +51,21 @@ fn main() {
             }
             return;
         }
+        Some("own") => {
+            // The spawn's live wire (1.6.14a): re-own one pool tap to
+            // the starting machine's sub-uid, so only that machine
+            // can attach it.
+            let (Some(tap), Some(uid)) = (args.get(1), args.get(2).and_then(|v| v.parse().ok()))
+            else {
+                eprintln!("usage: cella-network own <tap> <uid>");
+                std::process::exit(2);
+            };
+            if let Err(e) = machine::own_tap(tap, uid) {
+                eprintln!("cella-network: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
         Some("setup") | None => {}
         Some("--help") | Some("-h") => {
             println!("cella-network -- the tap pool, without sudo");

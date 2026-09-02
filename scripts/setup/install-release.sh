@@ -37,6 +37,18 @@ PACKAGES=(
 echo "cella: installing packages: ${PACKAGES[*]}"
 sudo dnf install -y "${PACKAGES[@]}"
 
+# The identity slice (1.6.14a): each machine runs as its own
+# sub-user; the spawn maps it from a range delegated to $USER, and
+# grants the machine directory by POSIX ACL. shadow-utils carries
+# newuidmap/newgidmap; acl carries setfacl.
+sudo dnf install -y shadow-utils acl
+if ! grep -q "^$USER:" /etc/subuid 2>/dev/null || ! grep -q "^$USER:" /etc/subgid 2>/dev/null; then
+    echo "cella: delegating sub-id range 524288-589823 to $USER"
+    sudo usermod --add-subuids 524288-589823 --add-subgids 524288-589823 "$USER"
+else
+    echo "cella: sub-id range already delegated to $USER"
+fi
+
 if [ ! -e /dev/kvm ]; then
     echo "cella: /dev/kvm not present -- enable virtualization in BIOS/UEFI" \
          "and confirm kvm_intel/kvm_amd is loaded (lsmod | grep kvm)" >&2

@@ -351,7 +351,7 @@ requires a decision, nothing stands, and the mouth closes.
       Sonnet subagents in isolated worktrees, the batteries
       serialize at each merge, the reviewer merges one lane at a
       time:
-      - [ ] 1.6.14a Identity and the jail, one fused lane (the
+      - [x] 1.6.14a Identity and the jail, one fused lane (the
             subuid mapping lives inside the bwrap invocation --
             the same edit surface). Each machine runs as its own
             sub-user; the spawn maps it; the bwrap profile goes
@@ -383,6 +383,67 @@ requires a decision, nothing stands, and the mouth closes.
             not dependency. Lane gate: a book with one edited
             entry fails verification loudly, and an intact book
             verifies end to end.
+      - [ ] 1.6.14e The rootless network (ruled 2026-09-02): the
+            file capability dies. A tap fd works regardless of
+            which namespace the tap lives in; privilege is only
+            needed to plant a tap in the host's netns, and cella
+            only does that because the pool predates the
+            question. The podman-rootless shape, done cella's
+            way: agent-side pairs and bridges become cella-network
+            pumping frames fd-to-fd between machines' taps -- a
+            userspace wire, zero privilege, membrane semantics
+            untouched (park, decide, release live in the VMM,
+            not the wire); the world-side tap sits in a
+            cella-owned netns and cella-network translates L4 to
+            ordinary sockets, pasta-shaped but written here, not
+            vendored (passt is ~20k lines; the TCB thesis does
+            not buy it). ARP terminates at the translator as the
+            neighbor pins already assume. Retires: setup/pair/own
+            as host-netns verbs, nftables NAT, ip_forward, the
+            setcap root moment at install -- no delegated
+            capability anywhere in the system, and cella-network
+            jails like everyone else. Runs after the four lanes
+            merge (it rewrites what lane b's allowlist must
+            cover for cella-network; the seccomp list re-shrinks
+            with it). Its own gates: the full network battery
+            over the userspace wire, and a getcap sweep proving
+            no file capability remains.
+            LOAD-BEARING (ruled 2026-09-02): this task carries
+            the one-root-moment claim -- after it, cella grants
+            itself nothing (no capability, no setuid, no
+            privileged daemon, no firewall hooks), and the only
+            sudo in the whole story is make install-release's
+            host-provisioning block (packages, the kvm group,
+            the sub-id delegation where the distro has not
+            already granted it). Fresh clone -> install -> make
+            smoke PASS touches sudo once, at install, spent on
+            the host rather than on cella. The claim gets its
+            own gate (the install path invokes sudo only inside
+            the package block; everything after runs as the
+            plain user) and its own README sentence at the
+            1.6.7 doc pass -- the strongest form of the
+            deploy-in-an-hour thesis.
+      - [ ] 1.6.14f The broker shim (ruled 2026-09-02): the one
+            door to privilege. The shim stays unjailed and stops
+            exec'ing: it forks, the persona child runs jailed,
+            and a socketpair carries a fixed per-persona request
+            set that dies with the verb -- no daemon, no standing
+            socket, no standing allow. Requests name objects,
+            never authorities: gateway asks "kick <vm>" and the
+            shim reads the pid file itself; machine asks "map",
+            and the shim maps its own direct descendant; build
+            asks "build <axis> <flavor>" and the shim runs the
+            fixed toolbox command under a pinned, cella-owned
+            XDG session. The broker table is compile-time, the
+            same shape as persona_for(), and a persona invoked
+            directly (without the shim) loses its
+            namespace-crossing acts by construction -- the shim
+            is the one door, statically gateable like
+            write_egress. End state: 8 of 9 bwrap-jailed
+            (cella-network joins after 1.6.14e), the shim the
+            lone unjailed door, all nine under seccomp and
+            SELinux. Runs after e (the broker's table is written
+            against the final privilege reality).
       Convergence: every worktree branches from the same
       post-split commit. The reviewer merges serially onto
       feat/gateway in the order a, c, d, b -- identity first (the
@@ -401,41 +462,61 @@ requires a decision, nothing stands, and the mouth closes.
 
 - [ ] 1.6.7 The documents state the tightened law, and the
       retired phases make "Not in scope" the permanent scope
-      statement. The law: no frame leaves undecided at any layer,
-      no allow outlives its decision (there is nothing for it to
-      outlive), the ARP sentence dies, and every failure of the
-      apply is stillness. The scope: cella judges every frame,
-      both directions, at its own seam -- named, held, decided
-      externally, witnessed. Permanently outside cella, named at
-      the proto seam where a judge builds them: the appliance
-      pair, TCP termination, TLS against a pair CA, DNS-in-frame
-      and every world-side service, ownership of peer patience,
-      and the timeline rewrite. NOT outside: ingress judgment
-      (1.6.9 builds the ear's customs at this seam) and UDP
-      judgment (shipped; UDP death was terminator territory and
-      retires with it). The temporary-backend language dies: the
-      never-guess rebind is the architecture, not scaffolding.
-      The residuals, named once, plainly: a resident can modulate
-      its compute and I/O shadow on the host (host-local,
-      listener-required, silenced by the freeze); an open
-      machine's ingress delivers freely until 1.6.9 holds it;
-      frames that arrive during a freeze are lost at the tap (no
-      process listens; the protocols above retransmit); the
-      peer-patience bound on multi-cycle exchanges is a permanent
-      boundary, the judge's to manage; the field machine is dark
-      to the world, not to its host's logbook (vmm.log carries
-      the park lines); the pool's neighbor pins assume the
-      default guest MAC (a custom --mac on a pool tap breaks the
-      convention, stated); and the canonical kernel's quietness
-      is chosen (ipv6.disable=1), never an exemption -- chatter
-      that exists still parks. NETWORK-MODEL's phases section
-      retires; DEVICE-STATE's acceptance rows speak AC3's
-      stand-in and AC5's real-world leg (1.6.6d).
-      The pass runs once, after the mechanisms (1.6.9-11):
-      the documents describe the phase that ships, and the
-      residual list drops the entries those items retire. The
-      "aperture" wording in AC5 is replaced with plain speech,
-      and the sweep hunts any siblings of it.
+      statement. One pass, itemized:
+      - [ ] The law, stated: no frame leaves undecided at any
+            layer, no allow outlives its decision (there is
+            nothing for it to outlive), the ARP sentence dies,
+            and every failure of the apply is stillness.
+      - [ ] The scope, stated: cella judges every frame, both
+            directions, at its own seam -- named, held, decided
+            externally, witnessed.
+      - [ ] Permanently outside cella, named at the proto seam
+            where a judge builds them: the appliance pair, TCP
+            termination, TLS against a pair CA, DNS-in-frame and
+            every world-side service, ownership of peer patience,
+            and the timeline rewrite. NOT outside: ingress
+            judgment (the ear's customs, shipped) and UDP
+            judgment (shipped; UDP death was terminator territory
+            and retires with it).
+      - [ ] The temporary-backend language dies: the never-guess
+            rebind is the architecture, not scaffolding.
+      - [ ] The residuals, named once, plainly: a resident can
+            modulate its compute and I/O shadow on the host
+            (host-local, listener-required, silenced by the
+            freeze); frames that arrive during a freeze are lost
+            at the tap (no process listens; the protocols above
+            retransmit); the peer-patience bound on multi-cycle
+            exchanges is a permanent boundary, the judge's to
+            manage; the field machine is dark to the world, not
+            to its host's logbook (vmm.log carries the park
+            lines); the pool's neighbor pins assume the default
+            guest MAC (a custom --mac on a pool tap breaks the
+            convention, stated); the canonical kernel's quietness
+            is chosen (ipv6.disable=1), never an exemption --
+            chatter that exists still parks. Entries the shipped
+            mechanisms retired (the open-ingress residual) drop.
+      - [ ] The security boundary, post-shakedown (ruled
+            2026-09-02): cella-network is the one persona with no
+            bwrap jail -- a user namespace severs host-netns
+            capabilities by kernel design, and non-setuid bwrap
+            refuses ambient capabilities outright -- so it is
+            confined by its seccomp allowlist and its SELinux
+            domain instead, stated as data in its profile file
+            and in LIFECYCLE's boundary table. The tap's
+            ownership follows the machine: at start, the spawn
+            calls the file-capability cella-network to re-own the
+            tap to the machine's own sub-uid (TUNSETOWNER), so
+            only that machine can attach it.
+      - [ ] The identity slice, documented: per-machine sub-users
+            from the delegated /etc/subuid range, the host
+            prerequisites (subuid/subgid delegation, setfacl, a
+            traversable path to CELLA_HOME) laid by the install
+            scripts and checked/fixed by doctor.
+      - [ ] NETWORK-MODEL's phases section retires; DEVICE-STATE's
+            acceptance rows speak AC3's stand-in and AC5's
+            real-world leg (1.6.6d).
+      - [ ] The "aperture" wording in AC5 is replaced with plain
+            speech, and the sweep hunts any siblings of it.
       The pass runs after every mechanism -- the border work,
       the fragment, the split, and the shakedown -- and
       immediately before the battery: the documents describe

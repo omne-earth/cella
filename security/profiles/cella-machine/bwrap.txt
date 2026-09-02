@@ -1,0 +1,39 @@
+# bwrap profile for cella-machine (1.6.14a): the orchestrator verb
+# process (create, start, stop, freeze, thaw, destroy, list, info,
+# enter, selftest). Its own confinement nests one level above the
+# VMM's: this jail wraps the orchestrator, and start/thaw spawn a
+# second, tighter bwrap inside it for the VMM (security/profiles/
+# cella-vmm/bwrap.txt) -- the same nesting docs/LIFECYCLE.md shows
+# for a guest that hosts guests, one level down.
+#
+# The dynamic part (CELLA_HOME, resolved at run time) is not named
+# here as a literal path -- a profile names hosts paths, and the
+# home directory moves per install and per test sandbox. The
+# consumer resolves cella_libs::machine::home() and its three
+# subdirectories (machines/, kernel/, rootfs/) as extra binds.
+#
+# Not wired, ruled 2026-09-02: start and thaw call newuidmap and
+# newgidmap -- setuid-root helpers -- and bwrap mounts every bind
+# nosuid inside a user namespace, so the identity mapping dies
+# inside any self-jail. The orchestrator's walls are its seccomp
+# allowlist (lane b) and its SELinux domain (lane c). The
+# directives below stay as data: the bind set a jail would need,
+# should the wall ever move.
+
+unshare-user
+unshare-pid
+unshare-ipc
+unshare-uts
+unshare-cgroup
+
+dev-bind /dev/kvm
+dev-bind /dev/net/tun
+
+ro-bind /lib
+ro-bind /usr/lib
+ro-bind /lib64
+ro-bind /usr/bin/bwrap
+
+proc
+tmpfs-tmp
+new-session

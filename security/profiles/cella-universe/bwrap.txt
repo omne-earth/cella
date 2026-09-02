@@ -1,0 +1,28 @@
+# bwrap profile for cella-universe (1.6.14a): branch, archive,
+# inspect -- machines as artifacts. inspect attaches the disk of a
+# still machine to a throwaway appliance (a VMM run), thus this
+# profile needs /dev/kvm too. The home tree is read-write: branch
+# and archive create and mutate machine directories and goldens.
+#
+# Not wired, ruled 2026-09-02: inspect starts its throwaway
+# appliance through machine::start, whose spawn calls newuidmap --
+# setuid dies under bwrap's nosuid user namespace -- so a
+# self-jailed universe loses sight. Universe's walls are its
+# seccomp allowlist (lane b) and its SELinux domain (lane c). The
+# directives below stay as data.
+
+unshare-user
+unshare-pid
+unshare-ipc
+unshare-uts
+unshare-cgroup
+
+ro-bind /lib
+ro-bind /usr/lib
+ro-bind /lib64
+
+dev-bind /dev/kvm
+
+proc
+tmpfs-tmp
+new-session

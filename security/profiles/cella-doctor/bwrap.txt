@@ -1,0 +1,30 @@
+# bwrap profile for cella-doctor (1.6.14a): check reads host facts,
+# fix repairs what the uid can, verify audits the goldens and the
+# machines, harvest files AVC denials beside the audit book (lane
+# c's SELinux work). It needs the whole home tree read-write (fix
+# writes goldens and manifests), /proc for host facts, and
+# /sys/class/net read-only for the tap pool census.
+#
+# Not wired, ruled 2026-09-02: fix execs cella-build, whose
+# rootless podman needs newuidmap -- setuid dies under bwrap's
+# nosuid user namespace -- so a self-jailed doctor loses its
+# repair verb. Doctor's walls are its seccomp allowlist (lane b)
+# and its SELinux domain (lane c). The directives below stay as
+# data.
+
+unshare-user
+unshare-pid
+unshare-ipc
+unshare-uts
+unshare-cgroup
+
+ro-bind /lib
+ro-bind /usr/lib
+ro-bind /lib64
+ro-bind /sys/class/net
+
+dev-bind /dev/kvm
+
+proc
+tmpfs-tmp
+new-session

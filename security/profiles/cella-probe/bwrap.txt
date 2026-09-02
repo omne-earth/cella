@@ -1,0 +1,27 @@
+# bwrap profile for cella-probe (1.6.14a): the calibration persona
+# -- the smallest bind set in the lane, used to prove the profile
+# format and cella_libs::jail::apply() before the larger personas.
+# Needs /dev/kvm and a tap, nothing else (see the lane brief).
+#
+# Not wired into cella-probe's own main(): docs/LIFECYCLE.md already
+# names the probe's host-side spawn of the VMM through the flag
+# interface as the one deliberate unjailed exception ("the probe is
+# the instrument, not the product"). This file stays as data, and
+# as the calibration fixture the lane gate exercises directly.
+
+unshare-user
+unshare-pid
+unshare-ipc
+unshare-uts
+unshare-cgroup
+
+dev-bind /dev/kvm
+dev-bind /dev/net/tun
+
+ro-bind /lib
+ro-bind /usr/lib
+ro-bind /lib64
+
+proc
+tmpfs-tmp
+new-session

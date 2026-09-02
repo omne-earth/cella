@@ -1,0 +1,20 @@
+# bwrap profile for cella-gateway (1.6.14a): NOT USED, ruled
+# 2026-09-02.
+#
+# The gateway's live wire is a signal: an incoming release kicks
+# the running VMM (VALVE_KICKED) so mail moves without a thaw.
+# Signal permission across user namespaces flows from namespace
+# ownership -- the invoking uid created the VMM's user namespace
+# and therefore holds every capability over it, which is why the
+# unjailed verbs can signal a VMM that runs as a different sub-uid.
+# A self-jailed gateway would sit in a *sibling* user namespace
+# with no authority over the VMM's, and the kick dies with EPERM.
+# Unprivileged bwrap cannot decline the user namespace (it is the
+# mechanism), so there is no jail that keeps the wire live.
+#
+# The gateway's walls are its seccomp allowlist (lane b) and its
+# SELinux domain (lane c), which bind with no user namespace in
+# the way. This file exists so that every persona directory has
+# the same shape; it carries no directives. 1.6.14f (the broker
+# shim) jails this persona: the unjailed shim brokers the kick
+# over a per-invocation socketpair, resolving the pid itself.

@@ -23,3 +23,6 @@ pub mod audit;
 
 #[cfg(feature = "machine")]
 pub mod machine;
+
+#[cfg(feature = "jail")]
+pub mod jail;

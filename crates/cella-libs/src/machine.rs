@@ -342,6 +342,27 @@ fn create_persistent_tap(name: &str, owner: libc::uid_t) -> Result<(), String> {
     Ok(())
 }
 
+/// Re-own one persistent tap to a machine's sub-uid (1.6.14a). The
+/// pool creates taps owned by the invoking user; machines each run
+/// as their own sub-user, and only the tap's owner may attach it.
+/// The spawn calls `cella-network own <tap> <uid>` at start, so the
+/// ownership follows the machine. The ioctls are the creation set
+/// minus nothing: TUNSETIFF on an existing persistent tap attaches
+/// it, TUNSETOWNER moves it, TUNSETPERSIST keeps it -- all under
+/// this binary's file capability.
+pub fn own_tap(tap: &str, uid: u32) -> Result<(), String> {
+    // SAFETY: geteuid has no failure mode.
+    let root = unsafe { libc::geteuid() } == 0;
+    if !root && !have_net_admin() {
+        return Err(
+            "re-owning a tap needs CAP_NET_ADMIN -- run: cella-network own (make install-release \
+             grants the capability), or run as root"
+                .into(),
+        );
+    }
+    create_persistent_tap(tap, uid as libc::uid_t)
+}
+
 /// True when the effective capability set carries CAP_NET_ADMIN
 /// (bit 12 of CapEff in /proc/self/status). Root always does; the
 /// cella-network binary does through its file capability.
@@ -709,6 +730,34 @@ pub fn is_running(name: &str) -> bool {
 }
 
 /// Delete the machine, once and for all. Refuses a running machine.
+/// The tap follows the claim, both directions (1.6.14a): start
+/// re-owns a machine's taps to its sub-uid, and the end of the
+/// claim hands them back to the invoking user -- otherwise the
+/// next claimant (another machine, or the probe spawning its VMM
+/// directly as the invoker) finds a tap owned by a departed
+/// sub-uid and dies EPERM at attach. Best-effort: a tap that no
+/// longer exists, or a missing cella-network, is not this verb's
+/// failure -- the next start re-owns regardless.
+fn release_taps(name: &str) {
+    let Ok(m) = read_manifest(name) else { return };
+    if m.net == "none" {
+        return;
+    }
+    let net_bin = std::env::var("HOME")
+        .map(|h| PathBuf::from(h).join(".local/bin/cella-network"))
+        .ok()
+        .filter(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| find_program("cella-network"));
+    // SAFETY: getuid has no failure mode.
+    let me = unsafe { libc::getuid() };
+    for tap in m.net.split(',') {
+        let _ = std::process::Command::new(&net_bin)
+            .args(["own", tap, &me.to_string()])
+            .status();
+    }
+}
+
 pub fn destroy(name: &str) -> Result<(), String> {
     if !valid_name(name) {
         return Err(format!("invalid machine name {name:?}"));
@@ -720,6 +769,7 @@ pub fn destroy(name: &str) -> Result<(), String> {
     if is_running(name) {
         return Err(format!("machine {name:?} is running -- stop it first"));
     }
+    release_taps(name);
     fs::remove_dir_all(&dir).map_err(|e| format!("removing {}: {e}", dir.display()))
 }
 
@@ -898,12 +948,91 @@ pub fn freeze(name: &str) -> Result<(), String> {
     ))
 }
 
+/// The delegated sub-id range for the invoking user: one line of
+/// /etc/subuid or /etc/subgid, "<user>:<base>:<count>". This is the
+/// host prerequisite for the identity mapping below -- an
+/// administrator runs `usermod --add-subuids` (or edits the file
+/// directly) once, out of band, the same one-time spending as
+/// cella-network's file capability.
+fn subid_range(file: &str) -> Result<(u32, u32), String> {
+    let user = std::env::var("USER").unwrap_or_else(|_| {
+        std::process::Command::new("id")
+            .arg("-un")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    });
+    let text = fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
+    text.lines()
+        .find_map(|l| {
+            let mut f = l.splitn(3, ':');
+            let u = f.next()?;
+            if u != user {
+                return None;
+            }
+            let base: u32 = f.next()?.parse().ok()?;
+            let count: u32 = f.next()?.parse().ok()?;
+            Some((base, count))
+        })
+        .ok_or_else(|| {
+            format!(
+                "no {file} entry for user {user:?} -- the identity mapping needs a delegated \
+                 sub-id range (see docs/LIFECYCLE.md, \"The security boundary\"): \
+                 sudo usermod --add-subuids {r} --add-subgids {r} {user}",
+                r = crate::config::SUBID_RANGE_HINT
+            )
+        })
+}
+
+/// The host uid/gid this machine runs as, mapped by the spawn: a
+/// distinct sub-user per machine (the lane's standing ruling), never
+/// the invoking user's own uid. The offset into the delegated range
+/// is allocated once, at the machine's first spawn, and persisted in
+/// its directory (dir/uid) so that a thaw after a freeze keeps the
+/// same identity -- the same allocation pattern as the tap pool
+/// (allocate_tap/claimed_taps): first free slot, scanned across the
+/// sibling machine directories, never reused while another machine
+/// still claims it.
+fn machine_identity(name: &str, dir: &Path) -> Result<(u32, u32), String> {
+    let uid_path = dir.join("uid");
+    if let Ok(s) = fs::read_to_string(&uid_path) {
+        if let Ok(off) = s.trim().parse::<u32>() {
+            let (ubase, _) = subid_range("/etc/subuid")?;
+            let (gbase, _) = subid_range("/etc/subgid")?;
+            return Ok((ubase + off, gbase + off));
+        }
+    }
+    let (ubase, ucount) = subid_range("/etc/subuid")?;
+    let (gbase, gcount) = subid_range("/etc/subgid")?;
+    let count = ucount.min(gcount);
+    let claimed: Vec<u32> = fs::read_dir(home().join("machines"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|e| fs::read_to_string(e.path().join("uid")).ok())
+                .filter_map(|s| s.trim().parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let offset = (0..count)
+        .find(|o| !claimed.contains(o))
+        .ok_or_else(|| format!("no free sub-id slot in the delegated range ({count} wide)"))?;
+    write_atomic(&uid_path, format!("{offset}\n").as_bytes())
+        .map_err(|e| format!("writing {name}'s identity: {e}"))?;
+    Ok((ubase + offset, gbase + offset))
+}
+
 /// The shared spawn of start and thaw: the VMM inside the jail,
-/// detached, with readiness on a pipe. The jail is the bwrap
-/// invocation of scripts/jail.sh, spawned directly with no shell.
-/// One deliberate difference: no --die-with-parent. The verb process
-/// exits after readiness, and the machine must survive it; the pid
-/// file and stop own the cleanup instead.
+/// detached, with readiness on a pipe. The jail's static bind set
+/// and namespace set come from security/profiles/cella-vmm/bwrap.txt
+/// (cella_libs::jail); this function adds the dynamic, per-machine
+/// paths and the identity mapping, then invokes bwrap directly, with
+/// no shell. One deliberate difference from a plain jail: no
+/// --die-with-parent. The verb process exits after readiness, and
+/// the machine must survive it; the pid file and stop own the
+/// cleanup instead.
 fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     let m = read_manifest(name)?;
     if is_running(name) {
@@ -966,15 +1095,22 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     // The console exists only in the lab (debug-assertions on). A
     // release machine gets no console.log and no console.sock: its
     // ttyS0 has no listener, and the VMM discards the bytes.
-    let console: std::process::Stdio = if cfg!(debug_assertions) {
+    // A plain File, not a Stdio: the identity mapping below forks and
+    // execs by hand (Command::spawn's own pre_exec cannot block on a
+    // handshake with its own caller without deadlocking spawn()
+    // itself -- see the comment above the fork), and a raw fork needs
+    // a raw fd to dup2, not the opaque Stdio enum.
+    let console: fs::File = if cfg!(debug_assertions) {
         fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(dir.join("console.log"))
             .map_err(|e| format!("opening console.log: {e}"))?
-            .into()
     } else {
-        std::process::Stdio::null()
+        fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .map_err(|e| format!("opening /dev/null: {e}"))?
     };
     let vmm_log = fs::OpenOptions::new()
         .create(true)
@@ -982,17 +1118,176 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         .open(dir.join("vmm.log"))
         .map_err(|e| format!("opening vmm.log: {e}"))?;
 
+    // The bind set and the namespace set are data:
+    // security/profiles/cella-vmm/bwrap.txt (cella_libs::jail). This
+    // function adds only the dynamic, per-machine paths the profile
+    // cannot name (the state dir, the kernel dir, the attached rock,
+    // the VMM binary itself), and the identity mapping below.
+    let profile = crate::jail::load("cella-vmm")?;
+
+    // The identity mapping: a distinct sub-user for this machine,
+    // never the invoking user's own uid (the standing ruling: no
+    // shared identity anywhere). bwrap's own --unshare-user always
+    // self-maps (the real uid becomes namespace uid 0, mapped back to
+    // the *same* real uid on the host -- namespace virtualization,
+    // not a new identity), thus it is not the mechanism here: this
+    // process unshares the user namespace itself, in pre_exec, and
+    // claims namespace uid/gid 0 with setresuid/setresgid while it
+    // still holds the creator's grace-period capabilities (a fresh,
+    // still-unmapped namespace grants its creator a full capability
+    // set, before any uid_map is written). It then blocks on a pipe;
+    // this function, still outside the namespace, calls newuidmap
+    // and newgidmap -- the setuid-root helpers that honor the range
+    // /etc/subuid and /etc/subgid delegate to this user (see
+    // subid_range above) -- to map that namespace uid 0 to this
+    // machine's distinct host uid. Only once that mapping lands does
+    // the child resume and exec bwrap: from here on, every file the
+    // VMM creates is owned, on the host, by this machine's own uid,
+    // not the invoking user's.
+    let (host_uid, host_gid) = machine_identity(name, &dir)?;
+    // The state directory is owned by the invoking user (create()'s
+    // mkdir), and every verb process still needs to read and write
+    // it as that user (the pid file, the valve record, vmm.log).
+    // Chowning it to the machine's own sub-user would lock the
+    // invoking user out; leaving its permission bits as they are
+    // would lock the sub-user out (the VMM cannot open disk.img,
+    // already created by create() as the invoking user, nor create
+    // ram.img or console.sock inside a directory it does not own and
+    // that grants "other" no write bit). A POSIX ACL entry for this
+    // one machine's host uid, set by the owning user (always
+    // permitted, no privilege needed) and applied recursively (disk.img
+    // already exists by the time a machine first starts; new entries
+    // this same VMM creates -- ram.img, console.sock -- are simply
+    // owned by it, no ACL needed for those), grants exactly this
+    // directory and its current contents to exactly this uid -- a
+    // different machine's uid gets no entry here, thus the
+    // cross-machine refusal still holds by uid alone. The path down
+    // to the state directory (this worktree, the install prefix, or
+    // wherever CELLA_HOME lives) must itself stay traversable by the
+    // delegated sub-id range: an ancestor directory locked to the
+    // invoking user alone (a mode-0700 $HOME, for instance) refuses
+    // the sub-user before it ever reaches this ACL -- a host
+    // prerequisite this function cannot satisfy from here, since the
+    // ancestors are outside any one machine's ownership.
+    // bwrap must also *traverse* CELLA_HOME and CELLA_HOME/machines to
+    // reach this one directory (a fresh sandbox -- the test suite's
+    // mktemp -d, or a from-scratch install -- is mode 0700, owner
+    // only); grant execute-only there, one level at a time, so a
+    // different machine's directory still refuses this uid (no entry
+    // widens anything below the two ancestors this loop touches).
+    for ancestor in [home(), home().join("machines")] {
+        let status = std::process::Command::new(find_program("setfacl"))
+            .args(["-m", &format!("u:{host_uid}:x"), ancestor.to_str().unwrap()])
+            .status();
+        if !matches!(status, Ok(s) if s.success()) {
+            return Err(format!(
+                "granting machine {name:?}'s sub-user traversal of {} failed ({status:?})",
+                ancestor.display()
+            ));
+        }
+    }
+    // Per entry, not -R: after a freeze the directory holds files
+    // the machine's own sub-uid created (ram.img, the sidecar), and
+    // only a file's owner may set its ACL -- a recursive grant by
+    // the invoking user dies EPERM on them at thaw. Files the
+    // sub-uid owns need no grant; files the invoker owns get one.
+    // SAFETY: getuid has no failure mode.
+    let my_uid = unsafe { libc::getuid() };
+    let mut targets = vec![dir.clone()];
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            use std::os::unix::fs::MetadataExt;
+            if e.metadata().map(|md| md.uid()).ok() == Some(my_uid) {
+                targets.push(e.path());
+            }
+        }
+    }
+    // The default ACL on the directory makes the grant symmetric
+    // for everything born later: files the VMM creates as its
+    // sub-uid (network/ledger, console.sock, the sidecar) inherit
+    // an entry for the invoking user, and files the verbs create
+    // inherit one for the sub-uid -- otherwise each side's
+    // creations lock the other out (the ledger unreadable by the
+    // gateway, the socket unconnectable, destroy unable to unlink).
+    // Subdirectories inherit the default ACL itself, so network/
+    // propagates it without a recursive pass.
+    let default_acl = format!("d:u:{my_uid}:rwx,d:u:{host_uid}:rwx");
+    for target in &targets {
+        let is_dir = target.is_dir();
+        let mut args = vec!["-m".to_string(), format!("u:{host_uid}:rwx")];
+        if is_dir {
+            args.push("-m".to_string());
+            args.push(default_acl.clone());
+        }
+        args.push(target.to_str().unwrap().to_string());
+        let status = std::process::Command::new(find_program("setfacl"))
+            .args(&args)
+            .status();
+        if !matches!(status, Ok(s) if s.success()) {
+            return Err(format!(
+                "granting machine {name:?}'s sub-user access to {} failed ({status:?}) -- is \
+                 the acl package (setfacl) installed, and does the filesystem under {} support \
+                 POSIX ACLs?",
+                target.display(),
+                dir.display()
+            ));
+        }
+    }
+    // The tap follows the machine (1.6.14a): the pool created its
+    // taps owned by the invoking user, and only a tap's owner may
+    // attach it -- re-own each of this machine's taps to its
+    // sub-uid before the VMM (running as that sub-uid) opens them.
+    // The one CAP_NET_ADMIN holder does it; this verb process holds
+    // no capability of its own.
+    if m.net != "none" {
+        let net_bin = std::env::var("HOME")
+            .map(|h| PathBuf::from(h).join(".local/bin/cella-network"))
+            .ok()
+            .filter(|p| p.is_file())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| find_program("cella-network"));
+        for tap in m.net.split(',') {
+            let status = std::process::Command::new(&net_bin)
+                .args(["own", tap, &host_uid.to_string()])
+                .status();
+            if !matches!(status, Ok(s) if s.success()) {
+                return Err(format!(
+                    "re-owning tap {tap:?} to machine {name:?}'s sub-user failed ({status:?}) -- \
+                     is cella-network installed with its file capability (make install-release)?"
+                ));
+            }
+        }
+    }
+    let mut rfds = [0i32; 2]; // child -> parent: "I am uid/gid 0, map me"
+    let mut gfds = [0i32; 2]; // parent -> child: "mapped, proceed"
+                              // SAFETY: rfds and gfds are valid two-element arrays.
+    if unsafe { libc::pipe(rfds.as_mut_ptr()) } != 0
+        || unsafe { libc::pipe(gfds.as_mut_ptr()) } != 0
+    {
+        return Err("creating the identity-mapping pipes failed".to_string());
+    }
+    let (ready_read, ready_write) = (rfds[0], rfds[1]);
+    let (go_read, go_write) = (gfds[0], gfds[1]);
+
     // Resolve the jail binary ourselves: the PATH of a PID-1 child
     // inside a guest is not a given, and an absolute path makes the
     // spawn error name the real fault.
     let mut cmd = std::process::Command::new(find_program("bwrap"));
-    cmd.args([
-        "--unshare-user",
-        "--unshare-pid",
-        "--unshare-ipc",
-        "--unshare-uts",
-        "--unshare-cgroup",
-    ]);
+    // --unshare-user is deliberately absent from this list: the
+    // pre_exec closure below unshares the user namespace itself, so
+    // that this process (not bwrap after another fork) is the
+    // creator holding the grace-period capabilities the identity
+    // mapping needs.
+    for (flag, on) in [
+        ("--unshare-pid", profile.unshare_pid),
+        ("--unshare-ipc", profile.unshare_ipc),
+        ("--unshare-uts", profile.unshare_uts),
+        ("--unshare-cgroup", profile.unshare_cgroup),
+    ] {
+        if on {
+            cmd.arg(flag);
+        }
+    }
     // --as-pid-1: the VMM is pid 1 of the namespace, with no bwrap
     // init in front of it. The child-pid of --info-fd is then the
     // host pid of the VMM itself, and the freeze signal lands on the
@@ -1010,14 +1305,20 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     cmd.args(["--ro-bind", bin.to_str().unwrap(), "/cella-vmm"]);
     // Library binds only where the directories exist: the busybox
     // guest has none, and the in-guest cella is static.
-    for lib in ["/lib", "/usr/lib", "/lib64"] {
-        if Path::new(lib).is_dir() {
+    for lib in &profile.ro_binds {
+        if Path::new(lib).exists() {
             ro(&mut cmd, lib);
         }
     }
-    cmd.args(["--dev-bind", "/dev/kvm", "/dev/kvm"]);
-    if m.net != "none" {
-        cmd.args(["--dev-bind", "/dev/net/tun", "/dev/net/tun"]);
+    for dev in &profile.dev_binds {
+        // The tap device is the one profile entry the manifest can
+        // still turn off: a netless machine gets no /dev/net/tun.
+        if dev == "/dev/net/tun" && m.net == "none" {
+            continue;
+        }
+        if Path::new(dev).exists() {
+            cmd.args(["--dev-bind", dev, dev]);
+        }
     }
     let dir_s = dir.to_str().unwrap().to_string();
     cmd.args(["--bind", &dir_s, &dir_s]);
@@ -1052,24 +1353,148 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         cmd.args(["--console", dir.join("console.sock").to_str().unwrap()]);
     }
     cmd.args(["--cmdline", &cmdline_for(&m)]);
-    cmd.env("CELLA_READY_FD", write_fd.to_string());
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(console);
-    cmd.stderr(vmm_log);
-    // SAFETY: setsid in the child detaches it from this session, and
-    // it calls nothing async-signal-unsafe.
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
+
+    // From here on this is not a Command::spawn(): spawn()'s own
+    // pre_exec hook cannot block waiting on its caller (the identity
+    // handshake below) without deadlocking spawn() itself -- spawn()
+    // does not return in the parent until the child's pre_exec
+    // finishes, and the child's pre_exec does not finish until the
+    // parent (past spawn()) calls newuidmap/newgidmap. cmd stays
+    // useful only as an argv builder (every --bind/--unshare-* line
+    // above is unchanged); the fork and exec are done by hand.
+    let bwrap_path = cmd.get_program().to_owned();
+    let bargs: Vec<std::ffi::CString> = std::iter::once(bwrap_path.clone())
+        .chain(cmd.get_args().map(|a| a.to_owned()))
+        .map(|a| std::ffi::CString::new(a.into_encoded_bytes()).expect("no NUL in an argument"))
+        .collect();
+    let mut argv: Vec<*const libc::c_char> = bargs.iter().map(|a| a.as_ptr()).collect();
+    argv.push(std::ptr::null());
+    let bwrap_cpath = std::ffi::CString::new(bwrap_path.into_encoded_bytes())
+        .map_err(|_| "the bwrap path contains a NUL byte".to_string())?;
+    let ready_fd_key = std::ffi::CString::new("CELLA_READY_FD").unwrap();
+    let ready_fd_val = std::ffi::CString::new(write_fd.to_string()).unwrap();
+    use std::os::fd::AsRawFd;
+    let console_fd = console.as_raw_fd();
+    let vmm_log_fd = vmm_log.as_raw_fd();
+
+    // SAFETY: fork() is async-signal-safe by definition; everything
+    // the child branch does afterward (dup2, setsid, unshare,
+    // setresuid/setresgid, raw read/write/close on this process's
+    // own fds, setenv, execv) is async-signal-safe or, for setenv,
+    // safe because this single-threaded child has touched no other
+    // Rust allocator state since fork.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err("forking the jail failed".to_string());
     }
-    use std::os::unix::process::CommandExt;
-    let child = cmd.spawn().map_err(|e| format!("spawning the jail: {e}"))?;
+    if pid == 0 {
+        // The child: everything here runs before exec, thus a
+        // mistake here never reaches the parent's control flow --
+        // any failure exits directly instead of returning.
+        unsafe {
+            libc::close(ready_read);
+            libc::close(go_write);
+            let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY);
+            if devnull >= 0 {
+                libc::dup2(devnull, 0);
+                libc::close(devnull);
+            }
+            libc::dup2(console_fd, 1);
+            libc::dup2(vmm_log_fd, 2);
+            libc::setsid();
+            // Unshare the user namespace ourselves, so that this
+            // process -- not bwrap after another fork -- is the
+            // creator. Its uid_map is still empty: no id, including
+            // 0, is valid here yet, and setresuid/setresgid would
+            // fail EINVAL if attempted now.
+            if libc::unshare(libc::CLONE_NEWUSER) != 0 {
+                libc::_exit(126);
+            }
+            // Signal readiness, then wait for the parent's
+            // newuidmap/newgidmap calls to write the mapping from
+            // outside this namespace.
+            let byte = [0u8; 1];
+            if libc::write(ready_write, byte.as_ptr() as *const libc::c_void, 1) != 1 {
+                libc::_exit(126);
+            }
+            let mut buf = [0u8; 1];
+            if libc::read(go_read, buf.as_mut_ptr() as *mut libc::c_void, 1) != 1 {
+                libc::_exit(126);
+            }
+            libc::close(ready_write);
+            libc::close(go_read);
+            // The mapping now exists (namespace uid/gid 0 -> this
+            // machine's host uid/gid): claim it. This process is
+            // still the creator, thus still capable of the id
+            // change even though its real uid has no entry of its
+            // own in the map.
+            if libc::setresgid(0, 0, 0) != 0 {
+                libc::_exit(126);
+            }
+            if libc::setresuid(0, 0, 0) != 0 {
+                libc::_exit(126);
+            }
+            libc::setenv(ready_fd_key.as_ptr(), ready_fd_val.as_ptr(), 1);
+            libc::execv(bwrap_cpath.as_ptr(), argv.as_ptr());
+            // execv only returns on failure.
+            libc::_exit(127);
+        }
+    }
+    // The parent, from here on.
     // SAFETY: these are this process's ends; the child holds its own.
     unsafe {
         libc::close(write_fd);
         libc::close(info_write);
+        libc::close(ready_write);
+        libc::close(go_read);
+    }
+    // Wait for the child's readiness (it has unshared its own user
+    // namespace and claimed uid/gid 0), then map that identity to
+    // this machine's distinct host uid with the setuid-root helpers
+    // that honor the delegated /etc/subuid and /etc/subgid range,
+    // then release the child -- only then does it exec bwrap.
+    let mut byte = [0u8; 1];
+    // SAFETY: byte is a valid one-byte buffer; ready_read is this
+    // process's own fd.
+    let got_ready = unsafe { libc::read(ready_read, byte.as_mut_ptr() as *mut libc::c_void, 1) };
+    // SAFETY: ready_read is this process's own fd.
+    unsafe { libc::close(ready_read) };
+    let reap = || {
+        // SAFETY: pid is this function's own child.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let mut status = 0;
+        // SAFETY: status is a valid out-param.
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+    };
+    if got_ready != 1 {
+        reap();
+        // SAFETY: go_write is this process's own fd.
+        unsafe { libc::close(go_write) };
+        return Err(format!(
+            "machine {name:?} never signaled readiness for the identity mapping"
+        ));
+    }
+    let child_pid = pid.to_string();
+    for (tool, target) in [("newuidmap", host_uid), ("newgidmap", host_gid)] {
+        let status = std::process::Command::new(find_program(tool))
+            .args([&child_pid, "0", &target.to_string(), "1"])
+            .status();
+        if !matches!(status, Ok(s) if s.success()) {
+            // SAFETY: go_write is this process's own fd.
+            unsafe { libc::close(go_write) };
+            reap();
+            return Err(format!(
+                "{tool} {child_pid} 0 {target} 1 failed ({status:?}) -- is {tool} \
+                 installed with the setuid capability, and does a delegated sub-id \
+                 range exist for this user (see docs/LIFECYCLE.md)?"
+            ));
+        }
+    }
+    // SAFETY: go_write is this process's own fd, and the write wakes
+    // the child's blocking read.
+    unsafe {
+        libc::write(go_write, [0u8].as_ptr() as *const libc::c_void, 1);
+        libc::close(go_write);
     }
     // Read the info JSON from bwrap and take child-pid: the host pid
     // of the VMM.
@@ -1082,7 +1507,7 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     }
     let pid: i32 = json_field(&info, "child-pid")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(child.id() as i32);
+        .unwrap_or(pid);
     write_atomic(&pid_path(name), format!("{pid}\n").as_bytes())
         .map_err(|e| format!("writing the pid file: {e}"))?;
 
@@ -1161,6 +1586,7 @@ pub fn stop(name: &str) -> Result<(), String> {
     } else {
         println!("cella: machine {name:?} was not running");
     }
+    release_taps(name);
     let cleared = clear_transients(name);
     if !cleared.is_empty() {
         println!("cella: cleared transients: {}", cleared.join(", "));

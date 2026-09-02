@@ -1,0 +1,33 @@
+# bwrap profile for cella-vmm (1.6.14a): the VMM's jail, the floor
+# that existed before the shakedown, tightened. The spawn
+# (crates/cella-libs/src/machine.rs) reads this file for the static
+# bind set and namespace set; the dynamic paths (the machine's state
+# dir, the golden kernel dir, the attached rock, the VMM binary
+# itself) are per-machine and are added by the spawn, not named
+# here. The identity mapping (a sub-user per machine) is a separate
+# step the spawn performs before it execs bwrap; this file names
+# only binds and namespaces.
+
+unshare-user
+unshare-pid
+unshare-ipc
+unshare-uts
+unshare-cgroup
+
+# The run loop's two devices. /dev/net/tun is added by the spawn
+# only when the manifest asks for a tap (m.net != "none"); it is
+# named here for jail.sh's stand-alone invocations, which bind it
+# unconditionally.
+dev-bind /dev/kvm
+dev-bind /dev/net/tun
+
+# Dynamic linking needs these at the same host paths; a busybox
+# guest has none of them, and apply() skips a bind whose host path
+# is absent.
+ro-bind /lib
+ro-bind /usr/lib
+ro-bind /lib64
+
+proc
+tmpfs-tmp
+new-session

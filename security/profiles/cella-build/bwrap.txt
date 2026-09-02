@@ -1,0 +1,34 @@
+# bwrap profile for cella-build (1.6.14a): jails the orchestrator
+# only. cella-build shells out to `toolbox` (podman) to run the
+# actual toolchain; the toolbox's own boundary is podman's, and this
+# jail does not reach inside it -- it confines the orchestrating
+# process that invokes toolbox, nothing more.
+#
+# Needs: the home tree read-write (writes goldens under
+# kernel/<flavor>/ and rootfs/<flavor>/), and whatever `toolbox` and
+# `podman` need on PATH plus their runtime dirs (XDG_RUNTIME_DIR,
+# the podman graph root) -- named here only as the binaries; the
+# runtime directories are host-specific and are left for the
+# reviewer to add once this profile is wired in.
+#
+# Not wired, ruled 2026-09-02: rootless podman needs newuidmap to
+# map its containers, and bwrap mounts nosuid inside a user
+# namespace -- the toolbox cannot start from inside a self-jail.
+# Build's walls are its seccomp allowlist (lane b) and its SELinux
+# domain (lane c). The directives below stay as data.
+
+unshare-user
+unshare-pid
+unshare-ipc
+unshare-uts
+unshare-cgroup
+
+ro-bind /lib
+ro-bind /usr/lib
+ro-bind /lib64
+ro-bind /usr/bin/toolbox
+ro-bind /usr/bin/podman
+
+proc
+tmpfs-tmp
+new-session

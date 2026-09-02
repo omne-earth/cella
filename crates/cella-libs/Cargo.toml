@@ -17,7 +17,8 @@ wire = ["dep:prost", "dep:kvm-ioctls"]
 golden = ["dep:sha3"]
 sidecar = ["wire", "dep:kvm-bindings"]
 audit = ["wire"]
-machine = ["wire", "golden"]
+machine = ["wire", "golden", "jail"]
+jail = []
 
 [dependencies]
 libc = { workspace = true }

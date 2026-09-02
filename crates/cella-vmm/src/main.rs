@@ -328,6 +328,15 @@ fn main() {
             .unwrap_or_else(|e| fatal(&format!("binding the console socket {path:?}: {e}")));
         std::env::set_current_dir(&cwd)
             .unwrap_or_else(|e| fatal(&format!("returning to {cwd:?}: {e}")));
+        // Group-writable, deliberately: the machine directory's
+        // default ACL grants the invoking user rwx on files born
+        // here, but a file's ACL mask is its group bits -- and
+        // bind() under the default umask creates the socket 0755,
+        // clipping the inherited entry to r-x. connect(2) needs
+        // write. 0770 restores the mask; the ACL, not the group,
+        // names who gets in.
+        std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o770))
+            .unwrap_or_else(|e| fatal(&format!("opening the console socket's mask: {e}")));
         l.set_nonblocking(true).expect("nonblocking listener");
         set_async(&l);
         l

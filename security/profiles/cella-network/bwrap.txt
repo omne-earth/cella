@@ -1,0 +1,26 @@
+# bwrap profile for cella-network (1.6.14a): NOT USED, ruled
+# 2026-09-02 (this was the lane's one open ruling).
+#
+# cella-network holds CAP_NET_ADMIN as a file capability, granted
+# once at install. Two independent walls close every jail route:
+# the kernel severs a child user namespace from all capabilities
+# over the host network namespace (ambient set included) -- and
+# unprivileged bwrap always builds its sandbox from a user
+# namespace; bwrap itself refuses to start when invoked with
+# elevated or ambient capabilities on a non-setuid install
+# ("Unexpected capabilities but not setuid"). Measured, not
+# assumed: the same setup verb succeeds unjailed and reports
+# CapEff 0 inside bwrap.
+#
+# The ruling: thin at the bwrap layer. cella-network's walls are
+# its seccomp allowlist (lane b) and its SELinux domain (lane c),
+# which bind with no user namespace in the way. The binary stays
+# the one CAP_NET_ADMIN holder, and gains the `own` verb: at
+# machine start the spawn calls `cella-network own <tap> <uid>`
+# (TUNSETOWNER) so the tap's ownership follows the machine's own
+# sub-uid, and only that machine can attach it.
+#
+# This file carries no directives. 1.6.14e (the rootless
+# network) retires the file capability entirely -- taps leave the
+# host netns, the wire goes userspace -- and this persona jails
+# like everyone else after it.

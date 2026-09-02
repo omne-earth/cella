@@ -1,0 +1,11 @@
+# bwrap profile for cella (1.6.14a): NOT USED, deliberately.
+#
+# The shim's confinement is its exec set and nothing else (see the
+# lane brief): persona_for() in crates/cella/src/main.rs is the
+# entire allowlist -- a fixed, small match over verb names, each
+# arm naming exactly one sibling binary. There is no bind set to
+# name and no namespace to unshare for a process whose only act is
+# one execve into a binary it already knows by name. This file
+# exists so that every persona directory has the same shape; it
+# carries no directives, and cella_libs::jail::load("cella") is
+# never called.

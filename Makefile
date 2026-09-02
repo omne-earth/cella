@@ -155,6 +155,10 @@ test-jail: build ## Rootless bwrap jail actually confines the process (scripts/t
 	$(LOG)
 	$(SCRIPTS)/test/jail.sh
 
+test-jail-identity: build-smoke golden ## Lane a's gate (1.6.14a): per-machine sub-uid, cross-machine refusal, bind-set refusal (scripts/test/jail-identity.sh)
+	$(LOG)
+	$(SCRIPTS)/test/jail-identity.sh
+
 test-seccomp: build ## The real BPF filter kills a disallowed syscall (scripts/test/seccomp.sh)
 	$(LOG)
 	$(SCRIPTS)/test/seccomp.sh

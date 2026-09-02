@@ -64,6 +64,15 @@ pub const DEFAULT_THAW_PREFAULT: &str = "deep";
 /// The static addresses of the TAP subnet, in one place: the guest
 /// address and the host gateway. `sudo cella setup net` creates the
 /// host side; a networked machine uses these on its ip= argument.
+/// The sub-id range the install scripts delegate and every
+/// operator-facing message suggests (1.6.14a). A hint, not the
+/// mechanism: machine_identity reads the range actually delegated
+/// in /etc/subuid and /etc/subgid at run time, whatever it is.
+/// One source, so the suggestions cannot diverge; 524288 sits
+/// above the ranges systemd-homed and rootless container tools
+/// typically claim.
+pub const SUBID_RANGE_HINT: &str = "524288-589823";
+
 pub const DEFAULT_GUEST_IP: &str = "192.168.200.2";
 pub const DEFAULT_HOST_IP: &str = "192.168.200.1";
 

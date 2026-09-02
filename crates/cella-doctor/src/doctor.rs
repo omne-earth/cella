@@ -128,6 +128,45 @@ pub fn check() -> u32 {
         r.fail("bwrap", "not found -- run: make install-release");
     }
 
+    // The identity slice (1.6.14a): each machine runs as its own
+    // sub-user, mapped by the spawn. That needs a delegated sub-id
+    // range for this user, the setuid mapping helpers, and setfacl
+    // (the spawn grants the sub-user its machine directory by ACL).
+    let user = std::env::var("USER").unwrap_or_default();
+    for file in ["/etc/subuid", "/etc/subgid"] {
+        let delegated = fs::read_to_string(file)
+            .map(|t| {
+                t.lines()
+                    .any(|l| l.split(':').next() == Some(user.as_str()))
+            })
+            .unwrap_or(false);
+        if delegated {
+            r.ok(file, "a sub-id range is delegated to this user");
+        } else {
+            r.fail(
+                file,
+                &format!(
+                    "no delegated range -- run: sudo usermod --add-subuids {r} \
+                     --add-subgids {r} $USER (install-release does this)",
+                    r = cella_libs::config::SUBID_RANGE_HINT
+                ),
+            );
+        }
+    }
+    for tool in ["newuidmap", "newgidmap", "setfacl"] {
+        let present = ["/usr/bin", "/bin", "/usr/sbin"]
+            .iter()
+            .any(|d| Path::new(&format!("{d}/{tool}")).is_file());
+        if present {
+            r.ok(tool, "present");
+        } else {
+            r.fail(
+                tool,
+                "not found -- run: make install-release (shadow-utils, acl)",
+            );
+        }
+    }
+
     // Nested KVM: required by the nested and inception images only.
     let nested = ["kvm_intel", "kvm_amd"].iter().any(|m| {
         fs::read_to_string(format!("/sys/module/{m}/parameters/nested"))
@@ -280,6 +319,31 @@ pub fn fix() -> u32 {
         println!(
             "cella doctor: {net_bin} failed -- run: make install-release (grants it cap_net_admin)"
         );
+    }
+    // The identity slice: a missing sub-id delegation is repairable
+    // with one usermod -- the same root moment the install spends.
+    // sudo asks the terminal; a refusal leaves the check's message.
+    let user = std::env::var("USER").unwrap_or_default();
+    let missing = ["/etc/subuid", "/etc/subgid"].iter().any(|f| {
+        !fs::read_to_string(f)
+            .map(|t| {
+                t.lines()
+                    .any(|l| l.split(':').next() == Some(user.as_str()))
+            })
+            .unwrap_or(false)
+    });
+    if missing && !user.is_empty() {
+        println!("cella doctor: fix -- delegating a sub-id range (sudo usermod)");
+        let _ = std::process::Command::new("sudo")
+            .args([
+                "usermod",
+                "--add-subuids",
+                cella_libs::config::SUBID_RANGE_HINT,
+                "--add-subgids",
+                cella_libs::config::SUBID_RANGE_HINT,
+                &user,
+            ])
+            .status();
     }
     // The goldens: building needs no root, thus fix builds what is
     // absent or unmanifested. The kernel compile takes minutes; the
