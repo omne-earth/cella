@@ -153,8 +153,8 @@ requires a decision, nothing stands, and the mouth closes.
             the real-internet attempt AC5 (skipped when offline), so
             the battery still touches the true world somewhere.
             The DEVICE-STATE acceptance row states both legs.
-- [~] 1.6.9 (part 1: 9ac235b -- the mechanism; part 2 pending:
-      the gate choreography, see .claude/1.6.9.md) The ear gets
+- [x] 1.6.9 (part 1: 9ac235b -- the mechanism; part 2: 001b867
+      -- the choreography; full battery green) The ear gets
       customs (ruled 2026-09-02): ingress
       under an open valve holds for a decision like egress does,
       with one asymmetry -- an incoming hold never freezes the
@@ -185,14 +185,21 @@ requires a decision, nothing stands, and the mouth closes.
       gate, smoke-inspection, in the aggregate, and the gate is
       CLI operations alone -- park, inspect, show, refuse,
       thaw -- nothing else (the name stays grep-distinct from
-      the universe verb's inspect inside smoke-universe). One
-      ruling stays open for the implementor to ask before
-      building: where inspect reads (the ledger is a chronicle,
-      never the store, and no second store may appear beside it;
-      the frames live in the vessel -- the sidecar when frozen,
-      the VMM's memory when running -- thus the look is either
-      frozen-only, or a request to the holder: kick, one-shot
-      ephemeral dump, nothing at rest). Ask the operator.
+      the universe verb's inspect inside smoke-universe).
+      Inspect is frozen-only (ruled 2026-09-02): sight requires
+      stillness -- a running lane mutates under the render, and
+      evidence-grade means a consistent instant. The verb reads
+      the sidecar alone (the vessel; the ledger is a chronicle,
+      never the store, and no second store appears beside it).
+      Nothing is lost: an egress hold implies frozen by law, and
+      a judge who wants sight of held mail freezes first -- one
+      machine verb, cheap, cryogenic, itself witnessed. Against
+      a running machine the verb refuses and says so. The DFA
+      diagrams and transition tables of docs/FREEZE-THAW.md
+      ("The two automata") gain the input: frozen | inspect |
+      frozen | the render, and an Inspected event in the
+      chronicle; running | inspect | running | refused. The look
+      changes no state in either automaton.
 - [ ] 1.6.11 The witnessed border (ruled 2026-09-02, sharpened
       2026-09-02): every verb is an event, no exception -- show
       and inspect included; every human action is as auditable as
