@@ -206,8 +206,12 @@ requires a decision, nothing stands, and the mouth closes.
       the machine's. The chronicle stays the operations ledger
       (parked, released, lapsed); the verbs get their own audit
       stream in the same proto language: an Audit message with
-      verb, args, uid, gid, persona, and both clocks (gid rides
-      for SELinux debugging). Machine-scoped verbs append to
+      verb, args, uid, gid, persona, and host_ns (gid rides for
+      SELinux debugging). The operator acts in host time: a CLI
+      has no guest clock, and against a stopped or frozen machine
+      no VMM exists to ask -- guest_ns rides only on the border
+      events the VMM itself emits, and the audit stream carries
+      the host clock alone. Machine-scoped verbs append to
       machines/<vm>/audit; the placeless verbs (list, doctor,
       build, setup) to the audit file at the CELLA_HOME root.
       The pump's five shows a second make a thick file, and that
@@ -219,7 +223,20 @@ requires a decision, nothing stands, and the mouth closes.
       harvest verb lands HERE, before the shakedown needs it --
       a privileged, optional doctor verb that files matching
       denials beside the audit log (the debugger exists before
-      the lane that generates the denials).
+      the lane that generates the denials). Gate: smoke-witness,
+      in the aggregate -- one of each verb class runs against a
+      sandbox machine, and every one lands in the right book
+      (machine-scoped in machines/<vm>/audit, placeless in the
+      CELLA_HOME audit file) with uid, gid, and persona; the
+      negatives: a verb that only reads still writes its entry
+      (show twice makes two entries), and the AVC harvest on a
+      permissive host files an empty set and says so. The static
+      gate rides make test, the one-door pattern applied to the
+      witness: every verb arm of the dispatch calls the audit
+      append, thus an unwitnessed verb fails the battery, not a
+      review. Builder's own calls, unruled: the real uid and gid
+      of the invoking process, the harvest file's name, and the
+      Audit variant's field number in the Message envelope.
 
 - [ ] 1.6.12 IPv6 leaves the canonical kernel fragment.
       ipv6.disable=1 in DEFAULT_BASE_ARGS silences the stack at
