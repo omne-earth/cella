@@ -182,7 +182,6 @@ scripts/
   utils/count_lines.py  source-vs-tests line counting for `make lines`
 security/profiles/<cli>/  seccomp + SELinux placeholders per thin CLI (shakedown fills them)
 selinux/cella.te.example  policy sketch, reference only
-TASKS.md                  the running task scratch and the CLI map
 Makefile                one target per workflow -- see TESTING.md
 TESTING.md              what each target verifies, and how to reproduce
 ```

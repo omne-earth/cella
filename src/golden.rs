@@ -6,7 +6,7 @@
 //! the manifest states what was built, and nothing edits that
 //! statement. Verification lives in doctor, not here and not in
 //! build -- build makes, doctor judges. This module is the seed of
-//! cella-libs (see TASKS.md).
+//! cella-libs (see .claude/TASKS.md).
 
 use std::fs::{self, File};
 use std::io::Read;

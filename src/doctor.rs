@@ -5,7 +5,7 @@
 //! for the rest. verify recomputes golden digests against their
 //! manifests -- build makes, doctor judges. Facts that need root to
 //! inspect (nft tables) degrade to a note instead of a guess.
-//! Becomes its own thin CLI at the split (see TASKS.md).
+//! Becomes its own thin CLI at the split (see .claude/TASKS.md).
 
 use std::fs;
 use std::path::Path;

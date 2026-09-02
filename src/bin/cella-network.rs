@@ -1,6 +1,6 @@
 //! cella-network: the one CAP_NET_ADMIN holder.
 //!
-//! The first thin CLI of the split (see TASKS.md). install.sh grants
+//! The first thin CLI of the split (see .claude/TASKS.md). install.sh grants
 //! the binary cap_net_admin as a file capability, thus no invocation
 //! uses sudo: the root moment happens once, at install time. The
 //! binary provisions the tap pool, the addresses, the deterministic

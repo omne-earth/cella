@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The ledger backend's gate. See docs/NETWORK-MODEL.md, "The control
-# plane", and TASKS.md phase 1.
+# plane", and .claude/TASKS.md phase 1.
 #
 # Part A: hold, one fetch parks, the ledger holds one operation with
 # an id and both clocks; freeze and thaw leave it still held, not

@@ -475,7 +475,7 @@ pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String
 }
 
 /// The gateway rootfs: the canonical tree with the gateway init --
-/// the appliance between an agent and the world (see TASKS.md and
+/// the appliance between an agent and the world (see .claude/TASKS.md and
 /// docs/LIFECYCLE.md). No bash, no diagnostics beyond a heartbeat:
 /// the appliance forwards, and a busybox shell serves diagnosis.
 pub fn rootfs_gateway(golden: &Path, canonical_golden: &Path) -> Result<(), String> {
