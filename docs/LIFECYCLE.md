@@ -262,7 +262,8 @@ and after, and the results land in the documents. Sequence:
 2. **start/stop + pid + readiness.** `make boot` becomes a wrapper;
    the sleep-based waits in the test scripts become readiness waits.
 3. **freeze/thaw as verbs.** Signal by pid, not by process name.
-   `make freeze`, `make thaw`, and `make demo` migrate.
+   `make freeze`, `make thaw`, and the shell gate (now
+   `make smoke-shell`) migrate.
 4. **enter + console socket.** tmux leaves the dependency list. The
    seccomp filter gains the accept path and keeps socket(2) as the
    canary.

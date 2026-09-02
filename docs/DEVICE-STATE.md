@@ -25,7 +25,8 @@ reads. Field evidence (2026-08-30, bare metal):
   cold pages of busybox, and the read went to the dead disk.
 - Networking after a thaw is dead for the same reason.
 
-Until AC1 landed, `make demo` ran its guest with ROOT=ro, and a
+Until AC1 landed, the shell gate (now `make smoke-shell`) ran its
+guest with ROOT=ro, and a
 thawed guest lived on what its RAM held at the freeze instant.
 
 ## What the device holds, and what RAM holds
@@ -192,7 +193,7 @@ target (`make device-state-ac1` .. `device-state-ac4`), and
 
 | Criterion | State |
 |---|---|
-| **AC1 -- the disk survives the thaw** | The sidecar (v8) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. |
+| **AC1 -- the disk survives the thaw** | The sidecar (v8) carries the transport state, the thaw restores it before the first KVM_RUN, and `make smoke-shell` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. |
 | **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, and the transport restore covers virtio-net. The gate opens the valve, decides the guest's parked echo reply, pings, freezes, thaws, decides the reply of the new epoch, and pings again. A missing tap fails at start; `setup net` recreates the pool by convention. |
 | **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, the open verb arms the membrane, the sidecar carries the parked frames with their descriptor head indices, and the operations survive the thaw as held -- ids rebound through the ledger. A decision by id releases each one, in park order. The gate fetches a real www page: the fetch parks, the machine freezes, the engine decides while it sleeps, and the same request completes after the thaw. |
 | **AC4 -- the verdict is external** | Every egress frame parks under the open valve into an operation with an id, the park reports its destination, and the decisions come from outside, by id, applied in park order: a release with allow installs a pass entry for that epoch and the flow runs at full speed, or freeze, grow the world, decide, thaw. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. |

@@ -54,7 +54,7 @@ cella selftest     # the whole cycle proves itself
 cella doctor check # the host judged, one fact per line (fix repairs, verify audits)
 ```
 
-`make demo` narrates the freeze and the thaw end to end. `make boot`,
+`make smoke-shell` narrates the freeze and the thaw end to end. `make boot`,
 `make enter`, `make freeze`, `make thaw`, and `make remove` wrap the
 verbs for one default machine (`VM=<name>` picks another).
 

@@ -24,7 +24,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 .PHONY: help build install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested setup-tap \
-        boot enter freeze thaw remove demo doctor smoke smoke-boot smoke-thaw smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-ping smoke-multinet smoke-universe smoke-ledger smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
+        boot enter freeze thaw remove doctor smoke smoke-shell smoke-boot smoke-thaw smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-ping smoke-multinet smoke-universe smoke-ledger smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
         clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -40,10 +40,10 @@ help: ## Show this help
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Run: a real jailed guest, interactively:"
-	grep -hE '^(boot|enter|freeze|thaw|remove|demo):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(boot|enter|freeze|thaw|remove):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-ping|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean|smoke-gateway|smoke-multinet|smoke-universe|smoke-ledger|smoke-device-state|device-state-ac1|device-state-ac2|device-state-ac3|device-state-ac4):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(smoke|smoke-shell|smoke-boot|smoke-thaw|smoke-ping|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean|smoke-gateway|smoke-multinet|smoke-universe|smoke-ledger|smoke-device-state|device-state-ac1|device-state-ac2|device-state-ac3|device-state-ac4):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
 	grep -hE '^(init|golden|golden-nested|setup-tap|doctor|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -166,11 +166,11 @@ remove: $(CELLA_DEV) ## Discard $(VM): stop it and destroy it
 	$(CELLA_DEV) stop $(VM) 2>/dev/null || true
 	$(CELLA_DEV) destroy $(VM)
 
-demo: $(CELLA_DEV) golden ## End-to-end demonstration: a shell learns a value, freezes, thaws, and remembers. Tears down after.
-	$(LOG)
-	$(SCRIPTS)/test/demo.sh
-
 # --- Smoke tests: required real KVM ---------------
+
+smoke-shell: build golden ## A shell learns a value, freezes, thaws, and remembers -- the one gate that drives the machine through enter (scripts/test/shell.sh)
+	$(LOG)
+	$(SCRIPTS)/test/shell.sh
 
 smoke-boot: build golden ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
 	$(LOG)
@@ -239,7 +239,7 @@ doctor: $(CELLA_DEV) ## Judge the host and the goldens: cella doctor check + ver
 	$(CELLA_DEV) doctor check
 	$(CELLA_DEV) doctor verify
 
-smoke: test smoke-boot smoke-thaw smoke-ping smoke-nested-boot smoke-machine smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger smoke-device-state probe-inception ## The no-KVM checks first (fail fast), then all smoke-* targets + the deep clock probe (skips gracefully without KVM)
+smoke: test smoke-shell smoke-boot smoke-thaw smoke-ping smoke-nested-boot smoke-machine smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger smoke-device-state probe-inception ## The no-KVM checks first (fail fast), then all smoke-* targets + the deep clock probe (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
@@ -249,7 +249,7 @@ smoke: test smoke-boot smoke-thaw smoke-ping smoke-nested-boot smoke-machine smo
 # One gate per acceptance criterion, in dependency order. Each gate
 # fails until its implementation lands.
 
-device-state-ac1: build golden ## AC1: the disk survives the thaw -- transport state rides the sidecar (v7); write a file, freeze, thaw, read it back, sync; make demo drops ROOT=ro
+device-state-ac1: build golden ## AC1: the disk survives the thaw -- transport state rides the sidecar (v7); write a file, freeze, thaw, read it back, sync; smoke-shell drops ROOT=ro
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac1
 

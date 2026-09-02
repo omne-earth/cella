@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# make demo: the freeze and the thaw, end to end, through the verbs.
+# smoke-shell: the freeze and the thaw, end to end, through the verbs.
 # A shell stores a value, the machine freezes to files, thaws, and the
 # same shell returns the value. Runs in a sandboxed CELLA_HOME with
 # the goldens copied in, and tears down, pass or fail.
