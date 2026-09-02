@@ -82,7 +82,7 @@ SMOKE_ALTERNATION := $(subst $(space),|,$(strip $(SMOKE_TARGETS)))
 # The development binary, as a real file target: the wrappers depend
 # on the file, and cargo runs only when a source changed.
 CELLA_DEV := target/release/cella
-$(CELLA_DEV): $(shell find src -name '*.rs') Cargo.toml Cargo.lock
+$(CELLA_DEV): $(shell find crates -name '*.rs') Cargo.toml Cargo.lock
 	$(LOG)
 	$(CARGO) build --release
 
@@ -91,7 +91,7 @@ build: $(CELLA_DEV) ## Release build (target/release/cella) -- the field flavor:
 # The lab flavor: release-sized, debug-assertions on -- the console
 # exists. Every smoke and probe pins to it (see TESTING.md).
 CELLA_SMOKE := target/smoke/cella
-$(CELLA_SMOKE): $(shell find src -name '*.rs') Cargo.toml Cargo.lock
+$(CELLA_SMOKE): $(shell find crates -name '*.rs') Cargo.toml Cargo.lock
 	$(LOG)
 	$(CARGO) build --profile smoke
 
@@ -168,35 +168,32 @@ test-one-door: ## Static gate: exactly one TX call site writes the TAP (the deci
 	# With the pass table gone, the TAP is reachable from the decision
 	# delivery alone. A second door is a leak path, and it fails the
 	# battery here, not a review.
-	doors=$$(grep -c 'tap.write_frame' src/devices/virtio/net.rs)
+	doors=$$(grep -c 'tap.write_frame' crates/cella-vmm/src/devices/virtio/net.rs)
 	if [ "$$doors" -ne 1 ]; then
 		echo "FAIL: $$doors TX call sites write the TAP (exactly 1 allowed: write_egress)"
-		grep -n 'tap.write_frame' src/devices/virtio/net.rs
+		grep -n 'tap.write_frame' crates/cella-vmm/src/devices/virtio/net.rs
 		exit 1
 	fi
 	echo "OK: one door -- a single TX call site writes the TAP"
 
-test-witness: ## Static gate: every verb door calls the witness (the one-door pattern applied to the audit)
+test-witness: ## Static gate: one witness door per persona binary (the one-door pattern applied to the audit)
 	$(LOG)
-	# Every verb of the multi-call binary flows through run_verb, and
-	# cella-network is its own door: exactly two witness call sites.
-	# A verb path that bypasses the witness fails the battery here,
-	# not a review.
-	doors=$$(grep -rn 'audit::witness(' src/main.rs src/bin/cella-network.rs | wc -l)
-	if [ "$$doors" -ne 2 ]; then
-		echo "FAIL: $$doors witness call sites (exactly 2: run_verb, cella-network)"
-		grep -rn 'audit::witness(' src/ | grep -v 'audit.rs'
+	# Every persona binary witnesses its own verbs since the split
+	# (1.6.13): one audit::witness call site per persona main --
+	# machine, gateway, universe, build, doctor, network -- and the
+	# shim owns none (it owns no verbs). The VMM is internal (its
+	# actions are the border events), and the probes are diagnostics.
+	doors=$$(grep -rln 'audit::witness(' crates/*/src/main.rs | wc -l)
+	if [ "$$doors" -ne 6 ]; then
+		echo "FAIL: $$doors witness doors (exactly 6 persona mains)"
+		grep -rln 'audit::witness(' crates/*/src/main.rs
 		exit 1
 	fi
-	# The witness precedes the dispatch: the call sits above the verb
-	# match in run_verb.
-	w=$$(grep -n 'audit::witness(' src/main.rs | head -1 | cut -d: -f1)
-	m=$$(grep -n 'let ok = match verb' src/main.rs | head -1 | cut -d: -f1)
-	if [ "$$w" -ge "$$m" ]; then
-		echo "FAIL: the witness does not precede the verb dispatch"
+	if grep -q 'audit::witness(' crates/cella/src/main.rs; then
+		echo "FAIL: the shim witnesses -- it owns no verbs"
 		exit 1
 	fi
-	echo "OK: two witness doors, and the witness precedes the dispatch"
+	echo "OK: six witness doors, one per persona; the shim owns none"
 
 test: check lint unit-test integration-test test-jail test-seccomp test-machine test-one-door test-witness ## Everything above: build hygiene + all no-KVM tests
 	$(LOG)

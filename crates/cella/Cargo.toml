@@ -1,0 +1,16 @@
+# The shim: a launcher that owns zero verbs (1.6.13). It execs the
+# persona binary that owns the verb, sibling and flavor resolved
+# beside its own inode -- -debug pairs with -debug, and the field
+# shim never execs a lab binary.
+[package]
+name = "cella"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cella"
+path = "src/main.rs"
+
+[dependencies]
+libc = { workspace = true }

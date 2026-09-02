@@ -88,20 +88,15 @@ EOT
 # The binary. A release build lands in ~/.local/bin, and PATH gains
 # the directory when absent. make install-release calls this script.
 cargo build --release
-install -D -m 0755 target/release/cella "$HOME/.local/bin/cella"
-# The thin CLIs. cella-network is the one CAP_NET_ADMIN holder: the
-# file capability makes every later invocation sudo-free -- this
-# setcap is the root moment, once, here.
-install -D -m 0755 target/release/cella-network "$HOME/.local/bin/cella-network"
-install -D -m 0755 target/release/cella-probe "$HOME/.local/bin/cella-probe"
-# The multi-call names: one binary, one symlink per thin CLI. Each
-# name admits only its own verbs (persona dispatch on argv0); the
-# shakedown branch attaches the confinement per name. cella-network
-# stays a real binary: a file capability binds to an inode.
-for name in cella-machine cella-build cella-doctor cella-vmm cella-universe cella-gateway; do
-    ln -sf cella "$HOME/.local/bin/$name"
+# Every persona is its own binary since the split (1.6.13): the
+# shim routes, the personas own their verbs, and the shakedown
+# confines each inode. cella-network is the one CAP_NET_ADMIN
+# holder -- the file capability makes every later invocation
+# sudo-free; that setcap is the root moment, once, below.
+for name in cella cella-machine cella-vmm cella-gateway cella-universe cella-build cella-doctor cella-network cella-probe; do
+    install -D -m 0755 "target/release/$name" "$HOME/.local/bin/$name"
 done
-echo "cella: multi-call links: cella-machine cella-build cella-doctor cella-vmm cella-universe cella-gateway"
+echo "cella: nine persona binaries installed (the shim routes; each owns its verbs)"
 sudo setcap 'cap_net_admin+eip' "$HOME/.local/bin/cella-network"
 echo "cella: cella-network installed with cap_net_admin"
 sudo setcap 'cap_net_admin+eip' target/release/cella-network 2>/dev/null || true

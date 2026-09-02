@@ -1,0 +1,31 @@
+# The tightest profile's binary: the run loop and its devices, and
+# nothing else -- no build orchestrator, no universe verbs, no
+# doctor in its text pages (1.6.13). The feature graph is the proof:
+# wire + sidecar alone.
+[package]
+name = "cella-vmm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "cella_vmm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cella-vmm"
+path = "src/main.rs"
+
+[dependencies]
+cella-libs = { workspace = true, features = ["wire", "sidecar"] }
+libc = { workspace = true }
+kvm-ioctls = { workspace = true }
+kvm-bindings = { workspace = true }
+vm-memory = { workspace = true }
+linux-loader = { workspace = true }
+vm-superio = "0.8"
+virtio-queue = { workspace = true }
+
+[dev-dependencies]
+virtio-bindings = "0.2"
+virtio-queue = { workspace = true, features = ["test-utils"] }

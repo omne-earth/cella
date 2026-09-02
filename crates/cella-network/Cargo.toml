@@ -1,0 +1,15 @@
+# The one CAP_NET_ADMIN holder: wiring only. A real binary -- a file
+# capability binds to an inode.
+[package]
+name = "cella-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cella-network"
+path = "src/main.rs"
+
+[dependencies]
+cella-libs = { workspace = true, features = ["machine", "audit"] }
+libc = { workspace = true }

@@ -1,0 +1,17 @@
+# The membrane's surface, provably free of machine code (1.6.13):
+# the <vm>/ directory is its complete interface -- the ledger, the
+# verdict, the valve, the pid, and the audit book, plus SIGWINCH.
+# Its features say so: wire + sidecar + audit, never machine.
+[package]
+name = "cella-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cella-gateway"
+path = "src/main.rs"
+
+[dependencies]
+cella-libs = { workspace = true, features = ["wire", "sidecar", "audit"] }
+libc = { workspace = true }

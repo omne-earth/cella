@@ -1,0 +1,13 @@
+[package]
+name = "cella-universe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cella-universe"
+path = "src/main.rs"
+
+[dependencies]
+cella-libs = { workspace = true, features = ["machine", "audit"] }
+libc = { workspace = true }

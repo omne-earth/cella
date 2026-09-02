@@ -1,0 +1,16 @@
+# The cryogenic diagnostics: /dev/kvm and a tap, nothing else.
+[package]
+name = "cella-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cella-probe"
+path = "src/main.rs"
+
+[dependencies]
+cella-libs = { workspace = true, features = ["machine", "audit"] }
+libc = { workspace = true }
+kvm-ioctls = { workspace = true }
+kvm-bindings = { workspace = true }

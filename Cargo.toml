@@ -1,65 +1,45 @@
-[package]
-name = "cella"
+# The workspace: per-persona crates over one cella-libs (see
+# tasks/PHASE1.md 1.6.13). A binary contains only its own verbs; the
+# commons live in cella-libs behind features, thus what a binary does
+# not need is not compiled into it -- thinness by the feature graph,
+# not by trust in the linker.
+[workspace]
+resolver = "2"
+members = [
+    "crates/cella",
+    "crates/cella-libs",
+    "crates/cella-vmm",
+    "crates/cella-machine",
+    "crates/cella-gateway",
+    "crates/cella-universe",
+    "crates/cella-build",
+    "crates/cella-doctor",
+    "crates/cella-network",
+    "crates/cella-probe",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Minimal x86_64 KVM microVM: virtio-blk + virtio-net + serial, with cryogenic freeze/thaw."
 
-[lib]
-name = "cella"
-path = "src/lib.rs"
-
-[[bin]]
-name = "cella"
-path = "src/main.rs"
-
-# The thin CLIs (see TASKS.md, the CLI map). Each carries only its
-# own confinement; cella-network is the one CAP_NET_ADMIN holder.
-[[bin]]
-name = "cella-network"
-path = "src/bin/cella-network.rs"
-
-[[bin]]
-name = "cella-probe"
-path = "src/bin/cella-probe/main.rs"
-
-[dependencies]
+[workspace.dependencies]
+cella-libs = { path = "crates/cella-libs" }
+cella-build = { path = "crates/cella-build" }
 libc = "0.2"
-# Raw KVM ioctls/struct layouts are load-bearing correctness: a wrong struct
-# size silently produces a wrong ioctl request number. We use the vetted
-# rust-vmm crates for this layer instead of hand-rolling it blind.
 kvm-ioctls = "0.19"
 kvm-bindings = { version = "0.10", features = ["fam-wrappers"] }
 vm-memory = { version = "0.16", features = ["backend-mmap"] }
 linux-loader = { version = "0.13", features = ["bzimage", "elf"] }
 vm-superio = "0.8"
 virtio-queue = "0.14"
-# The one dependency beyond the KVM layer and libc: the golden
-# manifests carry sha3-256 digests, and the static in-guest binary
-# must compute them itself (no sha3 tool exists in the guest).
 sha3 = "0.10"
-# The wire vocabulary of the network model (proto/cella.proto):
-# encode/decode only -- prost-the-codec, never a gRPC framework.
-# gRPC lives outside the VMMs (docs/NETWORK-MODEL.md).
 prost = "0.13"
+prost-build = "0.13"
 
 [profile.release]
 panic = "abort"
 lto = true
-
-[build-dependencies]
-prost-build = "0.13"
-
-[dev-dependencies]
-# Transitively pulled in by virtio-queue already; listed explicitly so
-# tests/ can name VRING_DESC_F_* constants directly.
-virtio-bindings = "0.2"
-# test-utils gates virtio-queue's mock descriptor-chain builder, which
-# our integration tests use to drive Block/Net exactly the way
-# MmioTransport does on a real QueueNotify. Cargo's per-target feature
-# resolution (edition 2021, resolver v2) keeps this out of `cargo build
-# --release`'s dependency graph.
-virtio-queue = { version = "0.14", features = ["test-utils"] }
 
 # The lab profile: release-sized (the debug profile's binary does not
 # fit the nested images), with debug-assertions on -- the console

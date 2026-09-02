@@ -258,7 +258,7 @@ requires a decision, nothing stands, and the mouth closes.
       /proc/sys/net/ipv6 must not exist. The full local battery
       follows the rebuild in the same sitting.
 
-- [ ] 1.6.13 The source goes thin with the surface (ruled
+- [x] 1.6.13 The source goes thin with the surface (ruled
       2026-09-02): one workspace split, per-persona crates over a
       real cella-libs -- cella-vmm, cella-machine, cella-gateway,
       cella-universe, cella-build, cella-doctor (cella-network and

@@ -1,0 +1,18 @@
+[package]
+name = "cella-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "cella_build"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cella-build"
+path = "src/main.rs"
+
+[dependencies]
+cella-libs = { workspace = true, features = ["machine", "audit"] }
+libc = { workspace = true }
+sha3 = { workspace = true }

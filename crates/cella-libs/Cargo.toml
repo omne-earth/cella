@@ -1,0 +1,30 @@
+# The commons, by observation: what two or more personas genuinely
+# share. The features are the thinness proof -- a persona that does
+# not enable a feature does not compile its code:
+#   wire     proto + ledger (the one language, the books' framing)
+#   sidecar  the freeze image: reader and writer, and the state types
+#   audit    the witnessed border (self-contained path resolution)
+#   machine  the registry and the lifecycle (paths, manifests, spawn)
+[package]
+name = "cella-libs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+wire = ["dep:prost", "dep:kvm-ioctls"]
+golden = ["dep:sha3"]
+sidecar = ["wire", "dep:kvm-bindings"]
+audit = ["wire"]
+machine = ["wire", "golden"]
+
+[dependencies]
+libc = { workspace = true }
+prost = { workspace = true, optional = true }
+kvm-ioctls = { workspace = true, optional = true }
+kvm-bindings = { workspace = true, optional = true }
+sha3 = { workspace = true, optional = true }
+
+[build-dependencies]
+prost-build = { workspace = true }

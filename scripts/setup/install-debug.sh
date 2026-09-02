@@ -14,11 +14,11 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 cargo build --profile smoke
-install -D -m 0755 target/smoke/cella "$HOME/.local/bin/cella-debug"
-install -D -m 0755 target/smoke/cella-probe "$HOME/.local/bin/cella-probe-debug"
-# The multi-call names, suffixed: persona dispatch strips -debug.
-for name in cella-machine cella-build cella-doctor cella-vmm cella-universe cella-gateway; do
-    ln -sf cella-debug "$HOME/.local/bin/$name-debug"
+# Every persona is its own binary since the split (1.6.13), and the
+# lab flavor carries the -debug suffix on each: a -debug shim execs
+# -debug personas, and the two flavors never shadow each other.
+for name in cella cella-machine cella-vmm cella-gateway cella-universe cella-build cella-doctor cella-probe; do
+    install -D -m 0755 "target/smoke/$name" "$HOME/.local/bin/$name-debug"
 done
 echo "cella: lab flavor installed -> ~/.local/bin/cella-debug (and its -debug personas)"
 echo "cella: the console exists in this flavor alone; the field flavor stays dark"

@@ -1,0 +1,18 @@
+[package]
+name = "cella-doctor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "cella_doctor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cella-doctor"
+path = "src/main.rs"
+
+[dependencies]
+cella-libs = { workspace = true, features = ["machine", "audit"] }
+cella-build = { workspace = true }
+libc = { workspace = true }

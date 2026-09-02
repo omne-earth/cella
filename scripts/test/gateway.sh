@@ -97,11 +97,17 @@ pump "world-ok" 180 || { echo "FAIL: the gateway does not forward to the world";
 echo "  agent -> gateway -> host: the appliance forwards, every hop decided"
 
 say "step 5: the pair freezes together (agent first), thaws together (gateway first)"
-# A member may already stand frozen on its own park: the pair
-# freeze takes each machine as it finds it, agent first.
+# A member may already stand frozen on its own park, or be caught
+# mid-transition (its park's sidecar landing, its VMM exiting):
+# the pair freeze takes each machine as it finds it, agent first,
+# and waits out a transition instead of racing it.
 for m in ag gw; do
-    [ -f "$CELLA_HOME/machines/$m/state" ] && continue
-    "$BIN" freeze $m >/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        [ -f "$CELLA_HOME/machines/$m/state" ] && break
+        if "$BIN" freeze $m >/dev/null 2>&1; then break; fi
+        sleep 1
+    done
+    [ -f "$CELLA_HOME/machines/$m/state" ] || { echo "FAIL: $m neither froze nor stood"; exit 1; }
 done
 "$BIN" thaw gw >/dev/null
 wait_con gw "forwarding on" >/dev/null 2>&1 || true
