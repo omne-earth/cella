@@ -367,7 +367,7 @@ requires a decision, nothing stands, and the mouth closes.
             selftest dies by SIGSYS on a syscall outside its own
             list, and a KVM ioctl outside the request set kills
             the VMM.
-      - [ ] 1.6.14c SELinux, bound to the identity. The example
+      - [x] 1.6.14c SELinux, bound to the identity. The example
             policy becomes the enforced policy, per persona, per
             machine sub-user; lateral movement between machine
             directories dies; LIFECYCLE's one "planned" cell

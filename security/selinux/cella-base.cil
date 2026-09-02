@@ -1,0 +1,91 @@
+; cella-base.cil -- shared SELinux types and the per-persona domain
+; macro. Loaded together with every security/profiles/<cli>/selinux.cil
+; (they are one policy split across files, per the "profiles are
+; files" ruling). CIL, not refpolicy TE+M4: this host has no
+; selinux-policy-devel refpolicy headers, and CIL loads straight
+; through `semodule -i`, on any targeted-policy host.
+;
+; See scripts/selinux-build.sh for the build/load/verify sequence,
+; and tasks/PHASE1.md 1.6.14c for the ruling this implements.
+
+; ---- shared object types ----------------------------------------
+
+; Golden kernel and rootfs images (~/.cella/kernel, ~/.cella/rootfs).
+; Read-only to every persona that boots a guest; cella-build alone
+; may write, since it is the toolbox orchestrator that produces them.
+(type cella_data_t)
+(roletype object_r cella_data_t)
+(typeattributeset file_type (cella_data_t))
+
+; The ~/.cella top level outside any one machine's directory
+; (config, the index). Not machine-scoped: carries no MCS category,
+; every persona domain may read it.
+(type cella_home_t)
+(roletype object_r cella_home_t)
+(typeattributeset file_type (cella_home_t))
+
+; One machine's directory (~/.cella/machines/<name>/): ledger,
+; verdict, valve, pid, the audit book, vmm.log, disk.img,
+; manifest.json. Machine-scoped, so it carries the mcs_constrained_type
+; attribute: the kernel's existing MCS constraints (the same ones
+; sVirt uses for qemu image files) then require a process's category
+; set to dominate the object's before any access is allowed. Each
+; machine directory is labeled with its own category at creation
+; (scripts/selinux-machine-label.sh); no two machines ever share one,
+; so lateral movement between machine directories is an MCS denial,
+; not a type-enforcement rule -- the same file type covers every
+; machine, the category is what separates them.
+(type cella_machine_data_t)
+(roletype object_r cella_machine_data_t)
+(typeattributeset file_type (cella_machine_data_t))
+(typeattributeset mcs_constrained_type (cella_machine_data_t))
+
+; ---- the per-persona domain macro --------------------------------
+;
+; Every persona binary gets: its own domain type, its own exec_t
+; label, a transition into the domain on exec (from an interactive
+; unconfined_t shell, and from the cella_t shim), and read/execute on
+; its own binary. Nothing else -- the calling profile adds the
+; persona's specific object access.
+;
+; A persona profile that acts on behalf of exactly one machine at a
+; time (cella-machine, cella-vmm, cella-network, cella-probe,
+; cella-gateway) additionally adds its own domain to
+; mcs_constrained_type, right after calling this macro. A domain that
+; legitimately spans machines (cella-doctor, cella-universe) does
+; not, and instead runs at the full category range (s0:c0.c1023) so
+; it dominates every machine's category -- an operator range, not a
+; bypass: it is still one domain, still denied anything outside this
+; policy's allow rules.
+(macro cella_domain ((type ARG_T) (type ARG_EXEC_T))
+  (roletype system_r ARG_T)
+  (typeattributeset domain (ARG_T))
+  (roletype object_r ARG_EXEC_T)
+  (typeattributeset file_type (ARG_EXEC_T))
+  (allow ARG_T ARG_EXEC_T (file (entrypoint)))
+  ; The running domain also needs ordinary file access to its own
+  ; binary (read, mmap of its own text/data segments) -- entrypoint
+  ; alone only covers the exec-time transition check.
+  (allow ARG_T ARG_EXEC_T (file (read execute open getattr map)))
+  (typetransition unconfined_t ARG_EXEC_T process ARG_T)
+  (allow unconfined_t ARG_EXEC_T (file (read execute open getattr map)))
+  (allow unconfined_t ARG_T (process (transition sigchld noatsecure siginh rlimitinh)))
+  ; The transition still has to cross nosuid-mounted paths (tmpfs
+  ; jails, /tmp during this lane's own gate): without this, the
+  ; kernel denies the type change with nosuid_transition even though
+  ; the type_transition rule above says it should happen.
+  (allow unconfined_t ARG_T (process2 (nosuid_transition)))
+  (typetransition cella_t ARG_EXEC_T process ARG_T)
+  (allow cella_t ARG_EXEC_T (file (read execute open getattr map)))
+  (allow cella_t ARG_T (process (transition sigchld noatsecure siginh rlimitinh)))
+  (allow cella_t ARG_T (process2 (nosuid_transition)))
+  ; Every persona binary is a dynamically linked ELF; without these,
+  ; the dynamic linker itself cannot run inside the new domain --
+  ; not a machine-directory permission, just "the process starts at
+  ; all." Base policy grants this per domain type explicitly rather
+  ; than through a shared attribute, so each persona needs its own.
+  (allow ARG_T lib_t (file (read execute open getattr map)))
+  (allow ARG_T lib_t (dir (read search getattr)))
+  (allow ARG_T ld_so_t (file (read execute open getattr map)))
+  (allow ARG_T ld_so_cache_t (file (read open getattr map)))
+)

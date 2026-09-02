@@ -1,0 +1,25 @@
+; SELinux domain for cella-vmm: the run loop. Runs inside cella-machine's
+; bwrap jail, at that machine's MCS category (inherited across exec,
+; see cella-machine/selinux.cil). Needs /dev/kvm, the TAP device, and
+; its own machine directory -- nothing else, matching the seccomp
+; lane's run-loop-only allowlist.
+(type cella_vmm_t)
+(type cella_vmm_exec_t)
+(call cella_domain (cella_vmm_t cella_vmm_exec_t))
+(typeattributeset mcs_constrained_type (cella_vmm_t))
+
+(allow cella_vmm_t cella_machine_data_t
+  (dir (read write add_name remove_name search getattr)))
+(allow cella_vmm_t cella_machine_data_t
+  (file (read write create unlink open getattr lock append)))
+
+(allow cella_vmm_t cella_data_t (file (read open getattr map)))
+(allow cella_vmm_t cella_data_t (dir (read search getattr)))
+
+; ~/.cella itself, to reach its own machine directory by path --
+; search only, no file access: the top level holds no data cella-vmm
+; ever reads directly.
+(allow cella_vmm_t cella_home_t (dir (search getattr)))
+
+(allow cella_vmm_t kvm_device_t (chr_file (read write open ioctl getattr map)))
+(allow cella_vmm_t tun_tap_device_t (chr_file (read write open ioctl getattr)))

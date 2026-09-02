@@ -65,7 +65,7 @@ the probe is the instrument, not the product.
 | rootless | everything | No privilege to lose: CAP_NET_ADMIN lives in the cella-network binary as a file capability, granted once at install | enforced |
 | bwrap jail | per VM | The filesystem, except the machine directory, the golden kernel, /dev/kvm, and the TAP; the pid, ipc, uts, user, and cgroup namespaces | enforced |
 | seccomp | per VMM process | Every syscall outside the allowlist (~35 entries, each commented); socket(2) stays the canary | enforced |
-| SELinux | per domain | Lateral movement between machine directories and device types | example policy only |
+| SELinux | per domain | Lateral movement between machine directories and device types | enforced |
 
 ### The network privilege
 

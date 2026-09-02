@@ -1,0 +1,23 @@
+; SELinux domain for cella-gateway: the membrane. Its whole interface
+; is one machine's directory (1.6.13): write on verdict, valve, and
+; audit; read on ledger and pid; no exec anywhere, ever. Bound to
+; that one machine's category.
+;
+; No seccomp/bwrap profile placeholder exists yet for cella-gateway
+; under security/profiles/cella-gateway/ as of this lane's build --
+; lane a's scaffold covers eight personas and this crate is a ninth;
+; flagged in the shakedown report, not decided here.
+(type cella_gateway_t)
+(type cella_gateway_exec_t)
+(call cella_domain (cella_gateway_t cella_gateway_exec_t))
+(typeattributeset mcs_constrained_type (cella_gateway_t))
+
+(allow cella_gateway_t cella_machine_data_t (dir (read search getattr)))
+; verdict, valve, and audit take write; ledger and pid take read --
+; both collapse to one type-enforcement rule here, since the five
+; files share cella_machine_data_t and SELinux does not see
+; filenames. Splitting them into distinct per-file types so the
+; verb's own read/write split becomes a real MAC boundary, not just
+; the gateway code's discipline, is future work, named here rather
+; than assumed.
+(allow cella_gateway_t cella_machine_data_t (file (read write open getattr)))

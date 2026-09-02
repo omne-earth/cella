@@ -1,0 +1,7 @@
+; SELinux domain for the cella shim (crates/cella): owns zero verbs
+; (1.6.13), execs the persona binary named by its first argument, and
+; nothing else. No machine directory access, no device access: the
+; shim's whole job is one exec.
+(type cella_t)
+(type cella_exec_t)
+(call cella_domain (cella_t cella_exec_t))

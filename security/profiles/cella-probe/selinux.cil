@@ -1,0 +1,11 @@
+; SELinux domain for cella-probe: /dev/kvm and a tap, nothing else
+; (lane a calibrates the process on exactly this). Bound to one
+; machine's category, same as cella-vmm.
+(type cella_probe_t)
+(type cella_probe_exec_t)
+(call cella_domain (cella_probe_t cella_probe_exec_t))
+(typeattributeset mcs_constrained_type (cella_probe_t))
+
+(allow cella_probe_t kvm_device_t (chr_file (read write open ioctl getattr map)))
+(allow cella_probe_t tun_tap_device_t (chr_file (read write open ioctl getattr)))
+(allow cella_probe_t cella_data_t (file (read open getattr map)))

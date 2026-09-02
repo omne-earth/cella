@@ -1,0 +1,19 @@
+; SELinux domain for cella-universe: branch, archive, inspect. An
+; operator domain like cella-doctor, deliberately not MCS
+; constrained: branch and archive move a machine's frozen state
+; between directories by design, and inspect renders a frozen hold
+; from any machine's evidence directory. Runs at the full category
+; range (s0:c0.c1023); still denied anything outside these rules.
+(type cella_universe_t)
+(type cella_universe_exec_t)
+(call cella_domain (cella_universe_t cella_universe_exec_t))
+
+(allow cella_universe_t cella_machine_data_t
+  (dir (read write add_name remove_name search getattr reparent rmdir create)))
+(allow cella_universe_t cella_machine_data_t
+  (file (read write create unlink open getattr rename lock append)))
+
+(allow cella_universe_t cella_data_t (file (read open getattr map)))
+(allow cella_universe_t cella_data_t (dir (read search getattr)))
+(allow cella_universe_t cella_home_t (dir (read search getattr)))
+(allow cella_universe_t cella_home_t (file (read open getattr)))

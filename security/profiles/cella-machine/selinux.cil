@@ -1,0 +1,37 @@
+; SELinux domain for cella-machine: create, start, stop, freeze,
+; thaw, branch, archive, enter -- the lifecycle verbs, always scoped
+; to one machine at a time.
+;
+; Bound to lane a's per-machine sub-user: the spawn launches this
+; domain with an MCS category set from that machine's sub-uid
+; (scripts/selinux-machine-label.sh derives the category the same
+; way the label on the machine's directory was set, so the two always
+; agree). See the shakedown report for the exact
+; formula and where lane a's spawn must call it.
+(type cella_machine_t)
+(type cella_machine_exec_t)
+(call cella_domain (cella_machine_t cella_machine_exec_t))
+(typeattributeset mcs_constrained_type (cella_machine_t))
+
+; Its own machine directory: full read/write, no execute (nothing in
+; a machine directory is ever run as code).
+(allow cella_machine_t cella_machine_data_t
+  (dir (read write add_name remove_name search getattr reparent rmdir create)))
+(allow cella_machine_t cella_machine_data_t
+  (file (read write create unlink open getattr rename lock append)))
+
+; Golden kernel and rootfs images: read-only.
+(allow cella_machine_t cella_data_t (file (read open getattr map)))
+(allow cella_machine_t cella_data_t (dir (read search getattr)))
+
+; The ~/.cella top level (index, config): read-only.
+(allow cella_machine_t cella_home_t (dir (read search getattr)))
+(allow cella_machine_t cella_home_t (file (read open getattr)))
+
+; start execs cella-vmm; the child inherits this domain's MCS
+; category (CIL range_transition is not needed -- an exec()-only
+; transition with no explicit range keeps the process's current
+; range, which is exactly the per-machine category already set).
+(typetransition cella_machine_t cella_vmm_exec_t process cella_vmm_t)
+(allow cella_machine_t cella_vmm_exec_t (file (read execute open getattr map)))
+(allow cella_machine_t cella_vmm_t (process (transition sigchld noatsecure siginh rlimitinh)))

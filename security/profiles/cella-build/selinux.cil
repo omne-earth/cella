@@ -1,0 +1,24 @@
+; SELinux domain for cella-build: the toolbox orchestrator. Jails the
+; orchestrator only -- podman keeps its own container_runtime_t
+; boundary for the toolbox itself (lane a's jail note, mirrored
+; here). Not MCS constrained: image builds are not machine-scoped, so
+; there is no per-machine category to bind.
+(type cella_build_t)
+(type cella_build_exec_t)
+(call cella_domain (cella_build_t cella_build_exec_t))
+
+; It writes the golden images podman produces; every other persona
+; reads them read-only (see their own profiles).
+(allow cella_build_t cella_data_t
+  (dir (read write add_name remove_name search getattr)))
+(allow cella_build_t cella_data_t
+  (file (read write create unlink open getattr rename)))
+
+(allow cella_build_t cella_home_t (dir (read search getattr)))
+(allow cella_build_t cella_home_t (file (read open getattr)))
+
+; Hands off to podman for the toolbox from here; podman's own domain
+; (container_runtime_t, shipped by the container-selinux policy this
+; host already carries) takes over -- no rule needed in this profile
+; for that handoff, since it is podman's exec_t, not ours, that
+; drives the transition.

@@ -1,0 +1,19 @@
+; SELinux domain for cella-network: setup net and the tap claim.
+; Holds CAP_NET_ADMIN as a file capability (lane a's open ruling
+; covers whether it also keeps a user namespace; this profile grants
+; the capability either way -- SELinux gates it independently of
+; namespaces). Bound to one machine's category when it acts on that
+; machine's tap claim; the sub-uid provisioning itself
+; (`cella setup net`) runs before any machine exists and is not
+; category-scoped, since it has no machine directory to touch yet.
+(type cella_network_t)
+(type cella_network_exec_t)
+(call cella_domain (cella_network_t cella_network_exec_t))
+(typeattributeset mcs_constrained_type (cella_network_t))
+
+(allow cella_network_t self (capability (net_admin)))
+(allow cella_network_t tun_tap_device_t (chr_file (read write open ioctl getattr)))
+
+; The manifest inside its machine's directory records the tap claim.
+(allow cella_network_t cella_machine_data_t (dir (read search getattr)))
+(allow cella_network_t cella_machine_data_t (file (read write open getattr lock)))
