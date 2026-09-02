@@ -16,7 +16,7 @@ use vm_memory::{Bytes, GuestMemoryMmap};
 
 use super::tap::Tap;
 use super::{ValveState, VirtioDevice, VIRTIO_F_VERSION_1};
-use crate::ledger::{self, GuestClock, OpenOperation};
+use crate::ledger::{self, Dest, GuestClock, OpenOperation};
 use crate::proto;
 
 const QUEUE_RX: u16 = 0;
@@ -32,7 +32,7 @@ const MAX_FRAME: usize = 65550; // 65535 + vnet hdr + slack
 /// its destination; it does not mint a second one.
 struct ParkedOp {
     id: [u8; 16],
-    dest: ([u8; 4], u16, u8),
+    dest: Dest,
     /// The descriptor head index and the frame bytes, oldest first
     /// -- the same shape the sidecar and the thaw delivery expect.
     frames: Vec<(u16, Vec<u8>)>,
@@ -62,35 +62,57 @@ pub struct Net {
     pending_ledger: Vec<proto::Event>,
 }
 
-/// The IPv4 destination of one egress frame: the address, the port
-/// (0 when the protocol has none), and the protocol number. Returns
-/// None for a non-IPv4 frame (ARP stays link-local housekeeping and
-/// never parks). The frame starts with the 12-byte vnet header.
-fn ipv4_destination(frame: &[u8]) -> Option<([u8; 4], u16, u8)> {
-    let eth = frame.get(12..)?;
-    if eth.get(12..14)? != [0x08, 0x00] {
-        return None;
-    }
-    let ip = eth.get(14..)?;
-    let ihl = ((*ip.first()? & 0x0f) as usize) * 4;
-    let proto = *ip.get(9)?;
-    let dst: [u8; 4] = ip.get(16..20)?.try_into().ok()?;
-    let port = match proto {
-        6 | 17 => u16::from_be_bytes(ip.get(ihl + 2..ihl + 4)?.try_into().ok()?),
-        _ => 0,
+/// The name of one egress frame, at the most primitive level a
+/// frame has. An IPv4 frame refines to (ip, port, proto); every
+/// other frame -- ARP, IPv6, anything a future stack invents --
+/// is named by its ethertype and destination MAC. No frame goes
+/// unnamed, thus no frame goes unparked. The frame starts with
+/// the 12-byte vnet header.
+fn frame_name(frame: &[u8]) -> Dest {
+    let l2_name = || {
+        let mut mac = [0u8; 6];
+        if let Some(b) = frame.get(12..18) {
+            mac.copy_from_slice(b);
+        }
+        let ethertype = frame
+            .get(24..26)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+            .unwrap_or(0);
+        Dest::L2 { ethertype, mac }
     };
-    Some((dst, port, proto))
+    let ipv4 = || -> Option<Dest> {
+        let eth = frame.get(12..)?;
+        if eth.get(12..14)? != [0x08, 0x00] {
+            return None;
+        }
+        let ip = eth.get(14..)?;
+        let ihl = ((*ip.first()? & 0x0f) as usize) * 4;
+        let proto = *ip.get(9)?;
+        let dst: [u8; 4] = ip.get(16..20)?.try_into().ok()?;
+        let port = match proto {
+            6 | 17 => u16::from_be_bytes(ip.get(ihl + 2..ihl + 4)?.try_into().ok()?),
+            _ => 0,
+        };
+        Some(Dest::Ipv4 {
+            ip: dst,
+            port,
+            proto,
+        })
+    };
+    ipv4().unwrap_or_else(l2_name)
 }
 
-/// The wire Destination for one (ip, port, proto) triple.
-fn dest_message(dest: ([u8; 4], u16, u8)) -> proto::Destination {
-    let (ip, port, ip_proto) = dest;
-    proto::Destination {
-        host: String::new(),
-        ip: ip.to_vec(),
-        port: port as u32,
-        proto: ip_proto as u32,
+/// The one open operation for a key, or nothing. The matcher never
+/// guesses: zero candidates is a gap, two or more is ambiguity,
+/// and both re-mint a fresh id that stays held -- a collision
+/// costs a decision, never a leak.
+fn match_open<'a>(open: &'a [OpenOperation], dest: &Dest) -> Option<&'a OpenOperation> {
+    let mut it = open.iter().filter(|o| o.dest == *dest);
+    let first = it.next()?;
+    if it.next().is_some() {
+        return None;
     }
+    Some(first)
 }
 
 /// An id from the ledger (a Vec<u8>, since that is the wire type) as
@@ -205,22 +227,21 @@ impl Net {
                     used_any = true;
                     continue;
                 }
-                // The membrane: ARP passes (without L2 resolution
-                // nothing could deliver), a pass entry passes, and
-                // every other frame -- initiations and replies alike
-                // -- parks for a decision.
+                // The membrane: every egress frame parks under
+                // its most primitive name -- ARP, IPv6, kernel
+                // chatter, initiations and replies alike. No
+                // exemptions. A pass entry alone passes.
                 ValveState::Open => {
-                    let dest = ipv4_destination(&buf[..len]);
+                    let dest = frame_name(&buf[..len]);
                     let pass = match dest {
-                        None => true,
-                        Some((ip, port, _)) => self.allowed.contains(&(ip, port)),
+                        Dest::Ipv4 { ip, port, .. } => self.allowed.contains(&(ip, port)),
+                        Dest::L2 { .. } => false,
                     };
                     if !pass {
                         // The park point: after the read from the TX
                         // ring, and before the write to the TAP. No
                         // completion here -- a decision releases the
                         // operation, or the thaw delivers it.
-                        let dest = dest.expect("the None case takes the pass branch above");
                         self.park(dest, head_index, buf[..len].to_vec());
                         continue;
                     }
@@ -240,16 +261,12 @@ impl Net {
     /// -- one per operation, never one per frame (see
     /// docs/NETWORK-MODEL.md, "one decision per new part of the
     /// world").
-    fn park(&mut self, dest: ([u8; 4], u16, u8), head_index: u16, frame: Vec<u8>) {
+    fn park(&mut self, dest: Dest, head_index: u16, frame: Vec<u8>) {
         if let Some(op) = self.parked.iter_mut().find(|op| op.dest == dest) {
             op.frames.push((head_index, frame));
             return;
         }
-        let (ip, port, ip_proto) = dest;
-        eprintln!(
-            "cella: parked egress to {}.{}.{}.{}:{port} proto {ip_proto}",
-            ip[0], ip[1], ip[2], ip[3]
-        );
+        eprintln!("cella: parked egress to {dest}");
         // One clock read names both the id's timestamp bits and the
         // Operation.guest_ns field: the id and the field must agree
         // on the instant, not describe two independent reads of it.
@@ -258,7 +275,7 @@ impl Net {
         self.pending_ledger.push(proto::Event {
             event: Some(proto::event::Event::Parked(proto::Operation {
                 id: id.to_vec(),
-                destination: Some(dest_message(dest)),
+                destination: Some(dest.to_message()),
                 guest_ns,
                 host_ns: ledger::host_ns_now(),
             })),
@@ -322,35 +339,33 @@ impl VirtioDevice for Net {
         // ParkedOp again, not one per frame.
         let mut rebuilt: Vec<ParkedOp> = Vec::new();
         for (head, bytes) in frames {
-            let dest = ipv4_destination(&bytes).unwrap_or(([0, 0, 0, 0], 0, 0));
+            let dest = frame_name(&bytes);
             if let Some(existing) = rebuilt.iter_mut().find(|op| op.dest == dest) {
                 existing.frames.push((head, bytes));
                 continue;
             }
-            let id = match open.iter().find(|o| o.dest == dest) {
+            let id = match match_open(open, &dest) {
                 Some(op) => id_array(&op.id),
                 None => {
-                    // A frame with no open ledger entry for its
-                    // destination: a gap in the book, not a normal
-                    // case. Mint fresh, and say so both on the
-                    // console and in the chronicle, so the gap is
-                    // visible rather than silently absorbed.
+                    // No single open ledger entry names this key:
+                    // zero is a gap in the book, two or more is a
+                    // collision, and the matcher never guesses.
+                    // Mint fresh, and say so both on the console
+                    // and in the chronicle, so the anomaly is
+                    // visible rather than silently absorbed. The
+                    // frame stays held: a collision costs a
+                    // decision, never a leak.
                     let guest_ns = self.guest_clock.now_ns();
                     let fresh = ledger::uuid7(guest_ns);
-                    let (ip, port, ip_proto) = dest;
                     eprintln!(
-                        "cella: ledger gap at thaw -- no open operation for \
-                         {}.{}.{}.{}:{port} proto {ip_proto}, minted {}",
-                        ip[0],
-                        ip[1],
-                        ip[2],
-                        ip[3],
+                        "cella: no unambiguous open operation at thaw for \
+                         {dest}, minted {}",
                         ledger::hex(&fresh)
                     );
                     self.pending_ledger.push(proto::Event {
                         event: Some(proto::event::Event::Parked(proto::Operation {
                             id: fresh.to_vec(),
-                            destination: Some(dest_message(dest)),
+                            destination: Some(dest.to_message()),
                             guest_ns,
                             host_ns: ledger::host_ns_now(),
                         })),
@@ -405,9 +420,13 @@ impl VirtioDevice for Net {
             match &decision.decision {
                 Some(proto::decision::Decision::Release(r)) => {
                     if r.allow_flow {
-                        let (ip, port, _) = op.dest;
-                        if !self.allowed.contains(&(ip, port)) {
-                            self.allowed.push((ip, port));
+                        // A pass entry exists only for a refined
+                        // IPv4 key; an L2 operation has no flow to
+                        // allow. (The table itself dies at 1.6.2.)
+                        if let Dest::Ipv4 { ip, port, .. } = op.dest {
+                            if !self.allowed.contains(&(ip, port)) {
+                                self.allowed.push((ip, port));
+                            }
                         }
                     }
                     let bytes_out: u64 = op.frames.iter().map(|(_, f)| f.len() as u64).sum();
@@ -434,5 +453,85 @@ impl VirtioDevice for Net {
             }
         }
         released_frames
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn op(id: u8, dest: Dest) -> OpenOperation {
+        OpenOperation {
+            id: vec![id; 16],
+            dest,
+            guest_ns: 0,
+        }
+    }
+
+    const ARP: Dest = Dest::L2 {
+        ethertype: 0x0806,
+        mac: [0xff; 6],
+    };
+    const WWW: Dest = Dest::Ipv4 {
+        ip: [10, 0, 0, 2],
+        port: 443,
+        proto: 6,
+    };
+
+    /// A frame with one open operation for its key rejoins that
+    /// operation; the matcher needs exactly one candidate.
+    #[test]
+    fn one_candidate_matches() {
+        let open = vec![op(1, ARP), op(2, WWW)];
+        assert_eq!(match_open(&open, &ARP).unwrap().id, vec![1; 16]);
+        assert_eq!(match_open(&open, &WWW).unwrap().id, vec![2; 16]);
+    }
+
+    /// The matcher never guesses: a colliding sidecar (two open
+    /// operations under one key) matches nothing, thus the restore
+    /// path re-mints a fresh id and the frame stays held. A
+    /// collision costs a decision, never a leak.
+    #[test]
+    fn a_colliding_sidecar_matches_nothing() {
+        let open = vec![op(1, WWW), op(2, WWW)];
+        assert!(match_open(&open, &WWW).is_none());
+        let none: Vec<OpenOperation> = Vec::new();
+        assert!(match_open(&none, &WWW).is_none());
+    }
+
+    /// Every frame gets a name: IPv4 refines, ARP and IPv6 name at
+    /// the Ethernet layer, and a runt frame still names (zeroed) --
+    /// no frame goes unnamed, thus no frame goes unparked.
+    #[test]
+    fn every_frame_has_a_name() {
+        // 12B vnet header, then dst MAC, src MAC, ethertype.
+        let mut arp = vec![0u8; 12];
+        arp.extend_from_slice(&[0xff; 6]);
+        arp.extend_from_slice(&[0x02; 6]);
+        arp.extend_from_slice(&[0x08, 0x06]);
+        arp.extend_from_slice(&[0u8; 28]);
+        assert_eq!(frame_name(&arp), ARP);
+
+        let mut v6 = vec![0u8; 12];
+        v6.extend_from_slice(&[0x33, 0x33, 0, 0, 0, 0x16]);
+        v6.extend_from_slice(&[0x02; 6]);
+        v6.extend_from_slice(&[0x86, 0xdd]);
+        v6.extend_from_slice(&[0u8; 40]);
+        assert_eq!(
+            frame_name(&v6),
+            Dest::L2 {
+                ethertype: 0x86dd,
+                mac: [0x33, 0x33, 0, 0, 0, 0x16],
+            }
+        );
+
+        let runt = vec![0u8; 4];
+        assert_eq!(
+            frame_name(&runt),
+            Dest::L2 {
+                ethertype: 0,
+                mac: [0; 6],
+            }
+        );
     }
 }

@@ -33,6 +33,14 @@ message Destination {
   // share an ip and a port on different protocols; the chronicle
   // must tell them apart at a thaw rebind.
   uint32 proto = 4;
+  // The most primitive name a frame has. Every operation carries
+  // its ethertype (0x0800 for IPv4, 0x0806 for ARP, 0x86dd for
+  // IPv6); a frame that parses no further than the Ethernet
+  // header carries its destination MAC here, and the ip stays
+  // empty. Every egress frame parks under one of the two shapes:
+  // nothing crosses the membrane unnamed.
+  uint32 ethertype = 5;
+  bytes mac = 6;
 }
 
 // One held egress flow. The identifier is a UUIDv7, minted in the

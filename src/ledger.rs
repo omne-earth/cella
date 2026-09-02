@@ -77,6 +77,89 @@ pub fn uuid7(guest_ns: u64) -> [u8; 16] {
     id
 }
 
+/// The park key: the most primitive name a frame has. An IPv4
+/// frame refines to its address, port, and protocol; every other
+/// frame is named at the Ethernet layer -- ethertype and
+/// destination MAC. Every egress frame carries one of the two
+/// shapes: nothing crosses the membrane unnamed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Dest {
+    Ipv4 { ip: [u8; 4], port: u16, proto: u8 },
+    L2 { ethertype: u16, mac: [u8; 6] },
+}
+
+impl std::fmt::Display for Dest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Dest::Ipv4 { ip, port, proto } => write!(
+                f,
+                "{}.{}.{}.{}:{port} proto {proto}",
+                ip[0], ip[1], ip[2], ip[3]
+            ),
+            Dest::L2 { ethertype, mac } => {
+                match ethertype {
+                    0x0806 => write!(f, "arp")?,
+                    0x86dd => write!(f, "ipv6")?,
+                    other => write!(f, "0x{other:04x}")?,
+                }
+                write!(
+                    f,
+                    " {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+                )
+            }
+        }
+    }
+}
+
+impl Dest {
+    /// The wire Destination for this key. Every operation carries
+    /// its ethertype; the MAC rides only where no IP exists.
+    pub fn to_message(self) -> proto::Destination {
+        match self {
+            Dest::Ipv4 { ip, port, proto } => proto::Destination {
+                host: String::new(),
+                ip: ip.to_vec(),
+                port: port as u32,
+                proto: proto as u32,
+                ethertype: 0x0800,
+                mac: Vec::new(),
+            },
+            Dest::L2 { ethertype, mac } => proto::Destination {
+                host: String::new(),
+                ip: Vec::new(),
+                port: 0,
+                proto: 0,
+                ethertype: ethertype as u32,
+                mac: mac.to_vec(),
+            },
+        }
+    }
+
+    /// The key back from the wire: a non-empty ip names IPv4, and
+    /// anything else names the Ethernet layer.
+    pub fn from_message(d: &proto::Destination) -> Dest {
+        if d.ip.is_empty() {
+            let mut mac = [0u8; 6];
+            let n = d.mac.len().min(6);
+            mac[..n].copy_from_slice(&d.mac[..n]);
+            Dest::L2 {
+                ethertype: d.ethertype as u16,
+                mac,
+            }
+        } else {
+            let mut ip = [0u8; 4];
+            let n = d.ip.len().min(4);
+            ip[..n].copy_from_slice(&d.ip[..n]);
+            Dest::Ipv4 {
+                ip,
+                port: d.port as u16,
+                proto: d.proto as u8,
+            }
+        }
+    }
+}
+
 /// Wrap one Event as the Message it becomes on the wire.
 pub fn event_message(event: Event) -> Message {
     Message {
@@ -96,7 +179,7 @@ pub fn hex(bytes: &[u8]) -> String {
 /// a freeze minting a phantom the book never named.
 pub struct OpenOperation {
     pub id: Vec<u8>,
-    pub dest: ([u8; 4], u16, u8),
+    pub dest: Dest,
     pub guest_ns: u64,
 }
 
@@ -124,12 +207,9 @@ pub fn open_operations(path: &Path) -> std::io::Result<Vec<OpenOperation>> {
             }
             Some(proto::event::Event::Parked(op)) => {
                 let d = op.destination.clone().unwrap_or_default();
-                let mut ip = [0u8; 4];
-                let n = d.ip.len().min(4);
-                ip[..n].copy_from_slice(&d.ip[..n]);
                 parked.push(OpenOperation {
                     id: op.id.clone(),
-                    dest: (ip, d.port as u16, d.proto as u8),
+                    dest: Dest::from_message(&d),
                     guest_ns: op.guest_ns,
                 });
             }
@@ -211,6 +291,8 @@ mod tests {
                 ip: vec![192, 168, 200, 1],
                 port: 8080,
                 proto: 6,
+                ethertype: 0x0800,
+                mac: Vec::new(),
             }),
             guest_ns: 111,
             host_ns: 222,
@@ -243,6 +325,8 @@ mod tests {
                         ip: ip.to_vec(),
                         port,
                         proto,
+                        ethertype: 0x0800,
+                        mac: Vec::new(),
                     }),
                     guest_ns,
                     host_ns: 0,
@@ -292,7 +376,14 @@ mod tests {
         let open = open_operations(&path).unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].id, id_b.to_vec());
-        assert_eq!(open[0].dest, ([10, 0, 0, 2], 443, 6));
+        assert_eq!(
+            open[0].dest,
+            Dest::Ipv4 {
+                ip: [10, 0, 0, 2],
+                port: 443,
+                proto: 6
+            }
+        );
         assert_eq!(open[0].guest_ns, 200);
 
         let _ = std::fs::remove_dir_all(&dir);

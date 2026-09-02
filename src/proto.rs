@@ -42,6 +42,8 @@ mod tests {
                 ip: vec![1, 2, 3, 4],
                 port: 443,
                 proto: 6,
+                ethertype: 0x0800,
+                mac: Vec::new(),
             }),
             guest_ns: 1_000_000_007,
             host_ns: 9_000_000_001,

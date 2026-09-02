@@ -84,14 +84,19 @@ fn resolve_id(book: &Book, prefix: &str) -> Result<Vec<u8>, String> {
 
 fn fmt_dest(op: &proto::Operation) -> String {
     match &op.destination {
-        Some(d) => {
-            let ip: Vec<String> = d.ip.iter().map(u8::to_string).collect();
-            if d.host.is_empty() {
-                format!("{}:{}", ip.join("."), d.port)
-            } else {
-                format!("{} ({}:{})", d.host, ip.join("."), d.port)
+        Some(d) => match ledger::Dest::from_message(d) {
+            ledger::Dest::Ipv4 { ip, port, .. } => {
+                let ip: Vec<String> = ip.iter().map(u8::to_string).collect();
+                if d.host.is_empty() {
+                    format!("{}:{}", ip.join("."), port)
+                } else {
+                    format!("{} ({}:{})", d.host, ip.join("."), port)
+                }
             }
-        }
+            // The L2 name: the ethertype word and the destination
+            // MAC (arp ff:ff:ff:ff:ff:ff).
+            l2 => l2.to_string(),
+        },
         None => "(unknown)".to_string(),
     }
 }
