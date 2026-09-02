@@ -239,7 +239,7 @@ doctor: $(CELLA_DEV) ## Judge the host and the goldens: cella doctor check + ver
 	$(CELLA_DEV) doctor check
 	$(CELLA_DEV) doctor verify
 
-smoke: smoke-boot smoke-thaw smoke-ping smoke-nested-boot smoke-machine smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger smoke-device-state probe-inception ## All smoke-* targets + the deep clock probe (skips gracefully without KVM)
+smoke: test smoke-boot smoke-thaw smoke-ping smoke-nested-boot smoke-machine smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger smoke-device-state probe-inception ## The no-KVM checks first (fail fast), then all smoke-* targets + the deep clock probe (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
