@@ -208,25 +208,26 @@ pub fn refuse(vm: &str, prefix: &str, why: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Set the valve posture: the manifest carries it (thus it survives
-/// stop, thaw, and restart), a Valve message rides the verdict file,
-/// and a running machine is kicked so the posture applies now.
-fn set_posture(vm: &str, v: proto::valve::V, word: &str) -> Result<(), String> {
+/// Set the valve posture. The valve automaton's record lives
+/// beside the machine (never in the manifest), the gateway verbs
+/// alone write it, and the posture holds across any number of
+/// freezes and thaws until the opposite verb. A running machine is
+/// kicked so the posture applies now; a sleeping one reads the
+/// record when it next runs.
+fn set_posture(vm: &str, word: &str) -> Result<(), String> {
     if !machine::machine_dir(vm).exists() {
         return Err(format!("no machine named {vm:?}"));
     }
-    machine::set_manifest_field(vm, "valve", word)?;
-    let msg = proto::Message {
-        body: Some(proto::message::Body::Valve(proto::Valve { v: v as i32 })),
-    };
-    ledger::append(&verdict_path(vm), &msg).map_err(|e| format!("writing the posture: {e}"))?;
+    machine::set_valve_record(vm, word)?;
     match running_pid(vm) {
         Some(pid) => {
             // SAFETY: the pid comes from the machine's own pid file.
             unsafe { libc::kill(pid, libc::SIGWINCH) };
             println!("cella: the valve of {vm:?} is {word}, now");
         }
-        None => println!("cella: the valve of {vm:?} is {word} -- it applies at the next run"),
+        None => println!(
+            "cella: the valve of {vm:?} is {word} -- the posture holds across freeze and thaw"
+        ),
     }
     Ok(())
 }
@@ -234,12 +235,12 @@ fn set_posture(vm: &str, v: proto::valve::V, word: &str) -> Result<(), String> {
 /// close: the closed machine. Nothing goes in or out -- no parking, no
 /// ledger, no freeze; the machine runs dark.
 pub fn close(vm: &str) -> Result<(), String> {
-    set_posture(vm, proto::valve::V::Closed, "closed")
+    set_posture(vm, "closed")
 }
 
 /// open: the membrane, never a free flow. Egress reaches the hold
 /// trigger: initiations and replies alike park, and the park is the
 /// freeze; only decisions let anything through.
 pub fn open(vm: &str) -> Result<(), String> {
-    set_posture(vm, proto::valve::V::Open, "open")
+    set_posture(vm, "open")
 }

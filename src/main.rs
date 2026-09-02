@@ -605,10 +605,15 @@ fn main() {
             MMIO_LEN,
             MmioTransport::new(Box::new(net), irq_raiser.clone(), NET_IRQ + 2 * i as u32),
         ));
-        // Born closed, always: no flag opens a valve. Only the
-        // gateway verb's Valve message does (see docs/NETWORK-MODEL.md).
         net_poll.push((mmio_devices.len() - 1, net_fd));
     }
+
+    // The valve automaton's posture, at birth: the record beside the
+    // machine, written by the gateway verbs alone. Born closed when
+    // no record exists; the posture holds across any number of
+    // freezes and thaws until the opposite verb (see
+    // docs/FREEZE-THAW.md, "The two automata").
+    apply_valve_record(&args.state_dir, &mut mmio_devices);
 
     // The console socket. The listener binds before the seccomp
     // filter, thus socket(2) stays outside the allowlist (the canary
@@ -832,7 +837,7 @@ fn run_loop(
             // stage in the verdict file and the thaw edge applies
             // them: under one-shot, a running machine froze at its
             // first park, thus it never holds anything to deliver.
-            apply_valve_messages(state_dir, mmio_devices);
+            apply_valve_record(state_dir, mmio_devices);
         }
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
             let device_states: Vec<_> = mmio_devices
@@ -1041,42 +1046,33 @@ fn poll_net_rx(
 /// appends to the file and sends SIGWINCH. Reapplying an
 /// already-seen decision is harmless: it names an id no longer at
 /// the front of any device's queue, and nothing happens for it.
-/// The valve edges of the verdict file, alone: the live path (a
-/// SIGWINCH against a running machine) carries postures and never
-/// decisions -- under one-shot a running machine holds nothing to
-/// deliver. The last posture stands.
-fn apply_valve_messages(
-    state_dir: &std::path::Path,
-    mmio_devices: &mut [(u64, u64, MmioTransport)],
-) {
-    let messages = ledger::read_all(&state_dir.join("verdict")).unwrap_or_default();
-    let mut posture = None;
-    for msg in &messages {
-        if let Some(proto::message::Body::Valve(v)) = &msg.body {
-            posture = Some(if v.v == proto::valve::V::Open as i32 {
-                devices::virtio::ValveState::Open
-            } else {
-                devices::virtio::ValveState::Closed
-            });
-        }
+/// The valve automaton's record, read from beside the machine: the
+/// gateway verbs alone write it, and the posture holds across any
+/// number of freezes and thaws until the opposite verb (see
+/// docs/FREEZE-THAW.md, "The two automata"). A missing record is
+/// the birth state: closed.
+fn apply_valve_record(state_dir: &std::path::Path, mmio_devices: &mut [(u64, u64, MmioTransport)]) {
+    let word = std::fs::read_to_string(state_dir.join("valve"))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let state = if word == "open" {
+        devices::virtio::ValveState::Open
+    } else {
+        devices::virtio::ValveState::Closed
+    };
+    for (_, _, t) in mmio_devices.iter_mut() {
+        t.set_valve(state);
     }
-    if let Some(state) = posture {
-        for (_, _, t) in mmio_devices.iter_mut() {
-            t.set_valve(state);
-        }
-        eprintln!("cella: valve {:?}", state);
-    }
+    eprintln!("cella: valve {:?}", state);
 }
 
-/// The whole verdict file, at the thaw edge: the valve edges apply
-/// (the last posture stands), and the staged decisions apply in
-/// park order.
+/// The staged decisions of the verdict file, at the thaw edge: they
+/// apply in park order.
 fn apply_verdicts(
     state_dir: &std::path::Path,
     mmio_devices: &mut [(u64, u64, MmioTransport)],
     mem: &vm_memory::GuestMemoryMmap,
 ) {
-    apply_valve_messages(state_dir, mmio_devices);
     let messages = ledger::read_all(&state_dir.join("verdict")).unwrap_or_default();
     let mut decisions: std::collections::HashMap<Vec<u8>, proto::Decision> =
         std::collections::HashMap::new();
