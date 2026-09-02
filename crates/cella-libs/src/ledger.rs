@@ -356,6 +356,7 @@ pub fn append_chained(path: &Path, build: impl FnOnce(Vec<u8>) -> Message) -> st
     }
     let mut f = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(path)?;
