@@ -65,9 +65,11 @@ mod tests {
                 version: ACCORD_VERSION,
             }),
             message::Body::Event(Event {
+                predecessor: Vec::new(),
                 event: Some(event::Event::Parked(sample_operation())),
             }),
             message::Body::Event(Event {
+                predecessor: Vec::new(),
                 event: Some(event::Event::Released(Released {
                     id: vec![7u8; 16],
                     first_response_ns: 42,
@@ -76,6 +78,7 @@ mod tests {
                 })),
             }),
             message::Body::Event(Event {
+                predecessor: Vec::new(),
                 event: Some(event::Event::Lapsed(Lapsed {
                     id: vec![7u8; 16],
                     why: "the sender gave up".into(),
@@ -111,6 +114,7 @@ mod tests {
     fn a_partial_frame_waits_for_the_rest() {
         let msg = Message {
             body: Some(message::Body::Event(Event {
+                predecessor: Vec::new(),
                 event: Some(event::Event::Parked(sample_operation())),
             })),
         };

@@ -242,6 +242,7 @@ impl Net {
         let guest_ns = self.guest_clock.now_ns();
         let id = ledger::uuid7(guest_ns);
         self.pending_ledger.push(proto::Event {
+            predecessor: Vec::new(),
             event: Some(proto::event::Event::Parked(proto::Operation {
                 id: id.to_vec(),
                 destination: Some(peer.to_message()),
@@ -332,6 +333,7 @@ impl Net {
         let guest_ns = self.guest_clock.now_ns();
         let id = ledger::uuid7(guest_ns);
         self.pending_ledger.push(proto::Event {
+            predecessor: Vec::new(),
             event: Some(proto::event::Event::Parked(proto::Operation {
                 id: id.to_vec(),
                 destination: Some(dest.to_message()),
@@ -423,6 +425,7 @@ impl VirtioDevice for Net {
                         ledger::hex(&fresh)
                     );
                     self.pending_ledger.push(proto::Event {
+                        predecessor: Vec::new(),
                         event: Some(proto::event::Event::Parked(proto::Operation {
                             id: fresh.to_vec(),
                             destination: Some(dest.to_message()),
@@ -508,6 +511,7 @@ impl VirtioDevice for Net {
                         ledger::hex(&fresh)
                     );
                     self.pending_ledger.push(proto::Event {
+                        predecessor: Vec::new(),
                         event: Some(proto::event::Event::Parked(proto::Operation {
                             id: fresh.to_vec(),
                             destination: Some(peer.to_message()),
@@ -551,6 +555,7 @@ impl VirtioDevice for Net {
             match &decision.decision {
                 Some(proto::decision::Decision::Release(_)) => {
                     self.pending_ledger.push(proto::Event {
+                        predecessor: Vec::new(),
                         event: Some(proto::event::Event::Released(proto::Released {
                             id: op.id.to_vec(),
                             first_response_ns: 0,
@@ -563,6 +568,7 @@ impl VirtioDevice for Net {
                 }
                 Some(proto::decision::Decision::Refusal(refusal)) => {
                     self.pending_ledger.push(proto::Event {
+                        predecessor: Vec::new(),
                         event: Some(proto::event::Event::Lapsed(proto::Lapsed {
                             id: op.id.to_vec(),
                             why: refusal.why.clone(),
@@ -601,6 +607,7 @@ impl VirtioDevice for Net {
                 Some(proto::decision::Decision::Release(_)) => {
                     let bytes_out: u64 = op.frames.iter().map(|(_, f)| f.len() as u64).sum();
                     self.pending_ledger.push(proto::Event {
+                        predecessor: Vec::new(),
                         event: Some(proto::event::Event::Released(proto::Released {
                             id: op.id.to_vec(),
                             first_response_ns: 0,
@@ -612,6 +619,7 @@ impl VirtioDevice for Net {
                 }
                 Some(proto::decision::Decision::Refusal(refusal)) => {
                     self.pending_ledger.push(proto::Event {
+                        predecessor: Vec::new(),
                         event: Some(proto::event::Event::Lapsed(proto::Lapsed {
                             id: op.id.to_vec(),
                             why: refusal.why.clone(),

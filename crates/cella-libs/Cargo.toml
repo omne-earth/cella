@@ -13,7 +13,7 @@ license.workspace = true
 
 [features]
 default = []
-wire = ["dep:prost", "dep:kvm-ioctls"]
+wire = ["dep:prost", "dep:kvm-ioctls", "dep:sha2"]
 golden = ["dep:sha3"]
 sidecar = ["wire", "dep:kvm-bindings"]
 audit = ["wire"]
@@ -26,6 +26,7 @@ prost = { workspace = true, optional = true }
 kvm-ioctls = { workspace = true, optional = true }
 kvm-bindings = { workspace = true, optional = true }
 sha3 = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

@@ -662,8 +662,7 @@ fn flush_ledger(
         }
     }
     for event in events {
-        let msg = ledger::event_message(event);
-        if let Err(e) = ledger::append(ledger_path, &msg) {
+        if let Err(e) = ledger::append_event(ledger_path, event) {
             eprintln!("cella: ledger append failed: {e}");
         }
     }
@@ -862,13 +861,14 @@ fn apply_verdicts(
         if held.contains(id) || !open.contains(id) {
             continue;
         }
-        let msg = ledger::event_message(proto::Event {
+        let event = proto::Event {
             event: Some(proto::event::Event::Lapsed(proto::Lapsed {
                 id: id.clone(),
                 why: refusal.why.clone(),
             })),
-        });
-        if let Err(e) = ledger::append(&ledger_path, &msg) {
+            predecessor: Vec::new(),
+        };
+        if let Err(e) = ledger::append_event(&ledger_path, event) {
             eprintln!("cella: ledger append failed: {e}");
         }
         eprintln!(

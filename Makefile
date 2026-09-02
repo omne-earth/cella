@@ -30,7 +30,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-nested-boot-hybrid smoke-nested-boot-www \
         smoke-machine smoke-clean smoke-gateway smoke-gateway-cli \
         smoke-ping smoke-udp smoke-collide smoke-inspection \
-        smoke-witness smoke-multinet smoke-universe smoke-ledger \
+        smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
         test-jail test-seccomp test-machine test-one-door test-witness \
@@ -70,7 +70,7 @@ SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
         smoke-udp smoke-collide smoke-inspection smoke-witness smoke-nested-boot \
         smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
         smoke-nested-boot-www smoke-machine smoke-clean \
-        smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger \
+        smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5
 empty :=
@@ -322,6 +322,10 @@ smoke-ledger: build-smoke golden ## 1.2: hold, one fetch parks, the ledger holds
 	$(LOG)
 	$(SCRIPTS)/test/ledger.sh
 
+smoke-chain: build-smoke golden ## 1.6.14d: field 15 chains both books by SHA-256 of the predecessor's framed bytes -- an intact book verifies, a tampered one snaps loudly, a branched twin's book forks and stays valid (scripts/test/chain.sh)
+	$(LOG)
+	$(SCRIPTS)/test/chain.sh
+
 doctor: $(CELLA_DEV) ## Judge the host and the goldens: cella doctor check + verify
 	$(LOG)
 	$(CELLA_DEV) doctor check
@@ -330,7 +334,7 @@ doctor: $(CELLA_DEV) ## Judge the host and the goldens: cella doctor check + ver
 smoke: test smoke-shell smoke-boot smoke-thaw smoke-ping smoke-udp \
         smoke-collide smoke-inspection smoke-witness smoke-nested-boot \
         smoke-machine smoke-gateway smoke-gateway-cli \
-        smoke-multinet smoke-universe smoke-ledger \
+        smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state probe-inception ## The no-KVM checks first (fail fast), then all smoke-* targets + the deep clock probe (skips gracefully without KVM)
 	$(LOG)
 	echo ""

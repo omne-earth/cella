@@ -492,12 +492,13 @@ pub fn inspect(vm: &str, prefix: &str) -> Result<(), String> {
     }
     // The look is itself recorded. The machine is frozen, thus no
     // other writer holds the chronicle.
-    let msg = ledger::event_message(proto::Event {
+    let event = proto::Event {
         event: Some(proto::event::Event::Inspected(proto::Inspected {
             id: id.clone(),
         })),
-    });
-    ledger::append(&ledger_path(vm), &msg).map_err(|e| format!("writing the look: {e}"))?;
+        predecessor: Vec::new(),
+    };
+    ledger::append_event(&ledger_path(vm), event).map_err(|e| format!("writing the look: {e}"))?;
     println!(
         "cella: inspected {} -- the look is in the chronicle",
         ledger::hex(&id)

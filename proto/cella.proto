@@ -32,9 +32,11 @@ message Audit {
   uint32 gid = 4;
   string persona = 5;
   uint64 host_ns = 6;
-  // Field 15 is the predecessor hash of the tamper-evident chain:
-  // shape only now, implemented with the shakedown's SELinux work.
-  reserved 15;
+  // The tamper-evident chain (1.6.14d): the SHA-256 of the
+  // predecessor entry's framed bytes, predecessor field included.
+  // The first entry in a book chains from the empty digest
+  // (SHA-256 of zero bytes) -- there is no predecessor to name.
+  bytes predecessor = 15;
 }
 
 // The version handshake: two ends agree on the language before
@@ -96,9 +98,11 @@ message Event {
     Lapsed lapsed = 3;
     Inspected inspected = 4;
   }
-  // Field 15 is the predecessor hash of the tamper-evident chain:
-  // shape only now, implemented with the shakedown's SELinux work.
-  reserved 15;
+  // The tamper-evident chain (1.6.14d): the SHA-256 of the
+  // predecessor entry's framed bytes, predecessor field included.
+  // The first entry in a book chains from the empty digest
+  // (SHA-256 of zero bytes) -- there is no predecessor to name.
+  bytes predecessor = 15;
 }
 
 // The look is itself recorded: the operator read a held

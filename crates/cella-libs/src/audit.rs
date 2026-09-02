@@ -64,16 +64,20 @@ fn persona() -> String {
 pub fn witness(vm: Option<&str>, verb: &str, args: &[String]) -> Result<(), String> {
     // SAFETY: getuid and getgid read facts and cannot fail.
     let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
-    let msg = proto::Message {
+    let owned_verb = verb.to_string();
+    let args = args.to_vec();
+    let persona = persona();
+    let host_ns = ledger::host_ns_now();
+    ledger::append_chained(&book_path(vm), |predecessor| proto::Message {
         body: Some(proto::message::Body::Audit(proto::Audit {
-            verb: verb.to_string(),
-            args: args.to_vec(),
+            verb: owned_verb,
+            args,
             uid,
             gid,
-            persona: persona(),
-            host_ns: ledger::host_ns_now(),
+            persona,
+            host_ns,
+            predecessor,
         })),
-    };
-    ledger::append(&book_path(vm), &msg)
-        .map_err(|e| format!("witnessing {verb:?} failed -- the verb does not proceed: {e}"))
+    })
+    .map_err(|e| format!("witnessing {verb:?} failed -- the verb does not proceed: {e}"))
 }

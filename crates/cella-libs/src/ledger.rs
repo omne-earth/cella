@@ -6,11 +6,13 @@
 //! of phase 2, its own guest RAM).
 
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kvm_ioctls::VmFd;
+use sha2::{Digest, Sha256};
 
 use crate::proto::{self, Event, Message};
 
@@ -305,6 +307,151 @@ pub fn read_all(path: &Path) -> std::io::Result<Vec<Message>> {
     Ok(out)
 }
 
+/// The SHA-256 of `bytes`, as raw digest bytes.
+pub fn sha256(bytes: &[u8]) -> Vec<u8> {
+    Sha256::digest(bytes).to_vec()
+}
+
+/// The SHA-256 of zero bytes: the genesis link of every chained
+/// book (see proto/cella.proto, Audit.predecessor and
+/// Event.predecessor). The first entry in a book has no
+/// predecessor to name, so it names this constant instead --
+/// verification recognizes it as the start of a chain, not a
+/// break.
+pub fn empty_digest() -> Vec<u8> {
+    sha256(&[])
+}
+
+/// The SHA-256 of the last complete framed Message in `bytes`, or
+/// None when `bytes` holds no complete frame (an empty or
+/// brand-new book).
+fn last_frame_digest(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut rest = bytes;
+    let mut last: Option<&[u8]> = None;
+    while let Some((_, used)) = proto::unframe(rest) {
+        last = Some(&rest[..used]);
+        rest = &rest[used..];
+    }
+    last.map(sha256)
+}
+
+/// Append one Message to a chained book (the ledger's Events, the
+/// audit's Audits) under an exclusive lock: `build` is handed the
+/// SHA-256 of the book's last entry's framed bytes (the empty
+/// digest for a book with no entries yet), and returns the
+/// Message to append, predecessor field already set.
+///
+/// The read of the last entry and the append share one flock on
+/// the book file, held for the whole call: two processes racing to
+/// write the same book (two placeless verbs at once, say) cannot
+/// both read the same predecessor and fork the chain. The second
+/// writer blocks on the lock, then reads the entry the first one
+/// just wrote before it mints its own link. The lock releases when
+/// the file handle drops at the end of this function, or if the
+/// process dies first, when the kernel closes the fd -- flock
+/// never survives a crash as a stale lock.
+pub fn append_chained(path: &Path, build: impl FnOnce(Vec<u8>) -> Message) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut f = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    // SAFETY: f.as_raw_fd() names this open file for the duration
+    // of the call below; LOCK_EX blocks until no other holder
+    // remains.
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes)?;
+    let predecessor = last_frame_digest(&bytes).unwrap_or_else(empty_digest);
+    let msg = build(predecessor);
+    f.write_all(&proto::frame(&msg))
+    // f drops here, closing the fd and releasing the flock.
+}
+
+/// Append one Event to a book's chain (see `append_chained`).
+pub fn append_event(path: &Path, mut event: Event) -> std::io::Result<()> {
+    append_chained(path, |predecessor| {
+        event.predecessor = predecessor;
+        event_message(event)
+    })
+}
+
+/// One break in a chained book: the 1-based position of the first
+/// entry whose predecessor field does not match the SHA-256 of the
+/// entry that came before it (position 1 names the very first
+/// entry, whose predecessor must be the empty digest).
+#[derive(Debug, PartialEq, Eq)]
+pub struct ChainBreak {
+    pub position: usize,
+}
+
+/// Walk a chained book once (see `append_chained`), verifying that
+/// every entry's predecessor field is the SHA-256 of the framed
+/// bytes of the entry before it -- the empty digest for the first
+/// entry. `predecessor_of` reads the predecessor field out of the
+/// body this book carries (Audit or Event); a frame of any other
+/// body shape is not this book's chain to judge, and is skipped.
+/// Returns the first break, if any. A book that has never been
+/// written has nothing to verify -- absence is not a failure.
+pub fn verify_chain(
+    path: &Path,
+    predecessor_of: impl Fn(&Message) -> Option<Vec<u8>>,
+) -> std::io::Result<Option<ChainBreak>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path)?;
+    let mut rest = bytes.as_slice();
+    let mut expect = empty_digest();
+    let mut position = 0usize;
+    while !rest.is_empty() {
+        // A byte flipped inside an entry's own content (its verb,
+        // its args) usually breaks protobuf decoding outright --
+        // an invalid UTF-8 string, say -- before the predecessor
+        // field is ever compared. `unframe` returning None with
+        // bytes still left is exactly that: a corrupted or
+        // truncated entry, not a clean end of book, and it is a
+        // break at the entry it corrupted, same as a mismatched
+        // predecessor is a break at the entry that carries it.
+        let Some((msg, used)) = proto::unframe(rest) else {
+            return Ok(Some(ChainBreak {
+                position: position + 1,
+            }));
+        };
+        let frame = &rest[..used];
+        if let Some(got) = predecessor_of(&msg) {
+            position += 1;
+            if got != expect {
+                return Ok(Some(ChainBreak { position }));
+            }
+            expect = sha256(frame);
+        }
+        rest = &rest[used..];
+    }
+    Ok(None)
+}
+
+/// Verify a ledger's Event chain (see `verify_chain`).
+pub fn verify_ledger_chain(path: &Path) -> std::io::Result<Option<ChainBreak>> {
+    verify_chain(path, |m| match &m.body {
+        Some(proto::message::Body::Event(e)) => Some(e.predecessor.clone()),
+        _ => None,
+    })
+}
+
+/// Verify an audit book's Audit chain (see `verify_chain`).
+pub fn verify_audit_chain(path: &Path) -> std::io::Result<Option<ChainBreak>> {
+    verify_chain(path, |m| match &m.body {
+        Some(proto::message::Body::Audit(a)) => Some(a.predecessor.clone()),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +507,7 @@ mod tests {
             direction: 0,
         };
         let msg = event_message(Event {
+            predecessor: Vec::new(),
             event: Some(proto::event::Event::Parked(op.clone())),
         });
         append(&path, &msg).unwrap();
@@ -379,6 +527,7 @@ mod tests {
 
     fn parked_event(id: &[u8], ip: [u8; 4], port: u32, proto: u32, guest_ns: u64) -> Message {
         event_message(Event {
+            predecessor: Vec::new(),
             event: Some(super::proto::event::Event::Parked(
                 crate::proto::Operation {
                     id: id.to_vec(),
@@ -400,6 +549,7 @@ mod tests {
 
     fn released_event(id: &[u8]) -> Message {
         event_message(Event {
+            predecessor: Vec::new(),
             event: Some(super::proto::event::Event::Released(
                 crate::proto::Released {
                     id: id.to_vec(),
@@ -449,5 +599,139 @@ mod tests {
         assert_eq!(open[0].guest_ns, 200);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 1.6.14d: field 15 fills the ledger's Event chain -- each
+    /// entry's predecessor is the SHA-256 of the framed bytes of
+    /// the entry before it, and an intact book of several entries
+    /// verifies end to end.
+    #[test]
+    fn an_intact_chain_verifies_end_to_end() {
+        let path = std::env::temp_dir().join(format!("cella-chain-ok-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let id_a = [1u8; 16];
+        let id_b = [2u8; 16];
+        append_event(
+            &path,
+            Event {
+                predecessor: Vec::new(),
+                event: Some(proto::event::Event::Parked(crate::proto::Operation {
+                    id: id_a.to_vec(),
+                    ..Default::default()
+                })),
+            },
+        )
+        .unwrap();
+        append_event(
+            &path,
+            Event {
+                predecessor: Vec::new(),
+                event: Some(proto::event::Event::Parked(crate::proto::Operation {
+                    id: id_b.to_vec(),
+                    ..Default::default()
+                })),
+            },
+        )
+        .unwrap();
+        append_event(
+            &path,
+            Event {
+                predecessor: Vec::new(),
+                event: Some(proto::event::Event::Lapsed(proto::Lapsed {
+                    id: id_a.to_vec(),
+                    why: "gave up".into(),
+                })),
+            },
+        )
+        .unwrap();
+        assert_eq!(verify_ledger_chain(&path).unwrap(), None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The genesis link: the first entry a book ever gets carries
+    /// the empty digest as its predecessor -- there is nothing
+    /// before it to name.
+    #[test]
+    fn the_first_entry_chains_from_the_empty_digest() {
+        let path = std::env::temp_dir().join(format!("cella-chain-genesis-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        append_event(
+            &path,
+            Event {
+                predecessor: Vec::new(),
+                event: Some(proto::event::Event::Parked(crate::proto::Operation {
+                    id: vec![9u8; 16],
+                    ..Default::default()
+                })),
+            },
+        )
+        .unwrap();
+        let messages = read_all(&path).unwrap();
+        let Some(proto::message::Body::Event(e)) = &messages[0].body else {
+            panic!("expected an Event");
+        };
+        assert_eq!(e.predecessor, empty_digest());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A tampered entry breaks the chain loudly, naming the entry:
+    /// a byte flipped inside an entry's own content (here, its id)
+    /// invalidates that entry's protobuf decoding outright -- a
+    /// break at the entry itself, not a silent pass.
+    #[test]
+    fn a_tampered_entry_fails_loudly_naming_the_break() {
+        let path = std::env::temp_dir().join(format!("cella-chain-tamper-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        append_event(
+            &path,
+            Event {
+                predecessor: Vec::new(),
+                event: Some(proto::event::Event::Parked(crate::proto::Operation {
+                    id: vec![9u8; 16],
+                    ..Default::default()
+                })),
+            },
+        )
+        .unwrap();
+        append_event(
+            &path,
+            Event {
+                predecessor: Vec::new(),
+                event: Some(proto::event::Event::Lapsed(proto::Lapsed {
+                    id: vec![9u8; 16],
+                    why: "gave up".into(),
+                })),
+            },
+        )
+        .unwrap();
+        assert_eq!(verify_ledger_chain(&path).unwrap(), None, "intact first");
+
+        // Flip the last byte of the first frame: `predecessor`
+        // (field 15) serializes last on the wire, so this lands
+        // inside the first entry's own predecessor digest -- a
+        // bytes field, so the frame still decodes; only its
+        // content, and thus the genesis check, changes. The break
+        // surfaces immediately, at the entry it corrupted.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let a = &parked_event_bytes(&[9u8; 16]);
+        assert_eq!(&bytes[..a.len()], a.as_slice(), "layout assumption");
+        bytes[a.len() - 1] ^= 0xff;
+        std::fs::write(&path, &bytes).unwrap();
+
+        let brk = verify_ledger_chain(&path)
+            .unwrap()
+            .expect("the tampered book fails to verify");
+        assert_eq!(brk.position, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn parked_event_bytes(id: &[u8; 16]) -> Vec<u8> {
+        proto::frame(&event_message(Event {
+            predecessor: empty_digest(),
+            event: Some(proto::event::Event::Parked(crate::proto::Operation {
+                id: id.to_vec(),
+                ..Default::default()
+            })),
+        }))
     }
 }

@@ -375,7 +375,7 @@ requires a decision, nothing stands, and the mouth closes.
             the merge. Lane gate: a cross-machine touch denies
             with an AVC, and cella doctor harvest files that
             denial -- the 1.6.11 verb meets its purpose.
-      - [ ] 1.6.14d The hash chain. Field 15 fills: every Audit
+      - [x] 1.6.14d The hash chain. Field 15 fills: every Audit
             and Event entry carries the digest of its
             predecessor, both books, and the chain survives
             branch and archive (the twin's chain forks with its

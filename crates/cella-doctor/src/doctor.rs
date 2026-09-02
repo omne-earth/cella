@@ -423,6 +423,48 @@ pub fn verify_machine(name: &str) -> u32 {
     if seen == 0 {
         println!("  note  {name}: no recorded digests (branch and archive write them)");
     }
+    failed += verify_books(name, &dir);
+    failed
+}
+
+/// Walk both of a machine's books once each, checking the
+/// tamper-evident chain (proto/cella.proto, Audit.predecessor and
+/// Event.predecessor -- 1.6.14d). A book that has never been
+/// written is a note, not a failure: a fresh machine has parked
+/// nothing and no verb has audited it yet.
+fn verify_books(name: &str, dir: &Path) -> u32 {
+    let mut failed = 0u32;
+    for (book, path) in [
+        ("ledger", dir.join("network").join("ledger")),
+        ("audit", dir.join("audit")),
+    ] {
+        let verify = if book == "ledger" {
+            cella_libs::ledger::verify_ledger_chain
+        } else {
+            cella_libs::ledger::verify_audit_chain
+        };
+        if !path.is_file() {
+            println!("  note  {name} {book}: no book yet -- nothing to verify");
+            continue;
+        }
+        match verify(&path) {
+            Ok(None) => {
+                println!("  ok    {name} {book}: chain verifies end to end");
+            }
+            Ok(Some(brk)) => {
+                println!(
+                    "  FAIL  {name} {book}: chain breaks at entry {} -- \
+                     its predecessor does not match the entry before it",
+                    brk.position
+                );
+                failed += 1;
+            }
+            Err(e) => {
+                println!("  FAIL  {name} {book}: reading the chain: {e}");
+                failed += 1;
+            }
+        }
+    }
     failed
 }
 

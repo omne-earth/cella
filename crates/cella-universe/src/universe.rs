@@ -104,6 +104,24 @@ pub fn branch(src: &str, dst: &str) -> Result<(), String> {
         }
     }
 
+    // The books (1.6.14d): a byte-identical copy carries the chain
+    // as it stands -- the twin forks with the source's history, and
+    // both books verify from the same genesis onward. Copied, never
+    // rewritten: the predecessor field of the twin's first new
+    // entry still names the copied tail, same as the source's would
+    // have.
+    let ledger_from = src_dir.join("network").join("ledger");
+    if ledger_from.is_file() {
+        let ledger_dir = dst_dir.join("network");
+        fs::create_dir_all(&ledger_dir).map_err(|e| format!("mkdir network: {e}"))?;
+        fs::copy(&ledger_from, ledger_dir.join("ledger"))
+            .map_err(|e| format!("copy ledger: {e}"))?;
+    }
+    let audit_from = src_dir.join("audit");
+    if audit_from.is_file() {
+        fs::copy(&audit_from, dst_dir.join("audit")).map_err(|e| format!("copy audit: {e}"))?;
+    }
+
     m.name = dst.to_string();
     m.net = "none".to_string();
     let mut fields = layer_digests(&dst_dir)?;
