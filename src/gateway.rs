@@ -147,8 +147,8 @@ pub fn show(vm: &str, all: bool) -> Result<(), String> {
     }
     let book = read_book(vm)?;
     println!(
-        "{:<34} {:<40} {:>6}  {}",
-        "OPERATION", "DESTINATION", "AGE", "STATE"
+        "{:<34} {:<40} {:>6}  STATE",
+        "OPERATION", "DESTINATION", "AGE"
     );
     let mut held = 0;
     for op in &book.parked {

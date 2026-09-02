@@ -136,7 +136,7 @@ impl Net {
         // not see backpressure from a dark machine) and every frame
         // discards; the guest's posted buffers stay posted.
         if self.valve == ValveState::Closed {
-            while matches!(self.tap.read_frame(&mut buf), Ok(_)) {}
+            while self.tap.read_frame(&mut buf).is_ok() {}
             return false;
         }
         loop {
