@@ -175,7 +175,7 @@ scripts/
   setup/install.sh      host setup: deps, forward rules, the binary to ~/.local/bin
   build/                kernel/busybox config fragments, the init of each rootfs,
                         kernel-config-check.sh
-  test/                 one script per system test: boot, thaw, ping, shell,
+  test/                 one script per system test: boot, thaw, ping, udp, shell,
                         device-state (the four acceptance gates), universe,
                         multinet, gateway, gateway-cli, ledger, nested-boot,
                         inception, jail, seccomp, machine

@@ -111,7 +111,10 @@ appliance in-frame; the appliance resolves upstream over TCP, and
 every resolution becomes a parkable operation on a name), NTP is
 dead by design (time comes from the frame), and QUIC falls back to
 TCP -- into the terminating membrane instead of around it. ICMP
-dies with UDP; diagnosis is host-side.
+dies with UDP; diagnosis is host-side. The full law waits for the
+appliance; what the current seam already proves, from within the
+guest, is `make smoke-udp`: no datagram leaves undecided -- closed
+drops it, open parks it, a refusal delivers nothing.
 
 TLS terminates at the membrane too (a later phase): the pair CA
 signs, the machine trusts its own CA from birth, and every
