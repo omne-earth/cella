@@ -8,11 +8,15 @@
 //! RX both become "copy bytes between a descriptor chain and the TAP
 //! fd" with no header translation at all.
 
+use std::sync::Arc;
+
 use virtio_queue::{Queue, QueueOwnedT, QueueT};
 use vm_memory::{Bytes, GuestMemoryMmap};
 
 use super::tap::Tap;
 use super::{VirtioDevice, VIRTIO_F_VERSION_1};
+use crate::ledger::{self, GuestClock};
+use crate::proto;
 
 const QUEUE_RX: u16 = 0;
 const QUEUE_TX: u16 = 1;
@@ -20,21 +24,43 @@ const QUEUE_TX: u16 = 1;
 const VIRTIO_NET_F_MAC: u64 = 1 << 5;
 const MAX_FRAME: usize = 65550; // 65535 + vnet hdr + slack
 
+/// One held egress flow: the frames of every parked TX frame that
+/// shares a destination group under one identifier (see
+/// docs/NETWORK-MODEL.md, "Egress parks for decisions"). A
+/// retransmitted SYN joins the operation that is already parked for
+/// its destination; it does not mint a second one.
+struct ParkedOp {
+    #[allow(dead_code)]
+    // read by release-by-id in phase 1.3; written now so the ledger's id matches the operation it names
+    id: [u8; 16],
+    dest: ([u8; 4], u16, u8),
+    /// The descriptor head index and the frame bytes, oldest first
+    /// -- the same shape the sidecar and the thaw delivery expect.
+    frames: Vec<(u16, Vec<u8>)>,
+}
+
 pub struct Net {
     tap: Tap,
     mac: [u8; 6],
     hold: bool,
     /// Egress frames read from the TX ring and not yet written to the
-    /// TAP: the descriptor head index and the frame bytes. The guest
+    /// TAP: grouped into operations by destination. The guest
     /// considers these sent, and their completion is owed (see
     /// docs/DEVICE-STATE.md).
-    parked: Vec<(u16, Vec<u8>)>,
+    parked: Vec<ParkedOp>,
     /// Pass entries, installed by an allow verdict: a destination
     /// IPv4 address and port whose frames flow at full speed under
     /// hold. The verdict cost is amortized per destination: one park
     /// for a destination without a pass entry, and an inline match
     /// for every frame after it.
     allowed: Vec<([u8; 4], u16)>,
+    /// What tells an operation its guest-frame timestamp at the
+    /// instant it parks (see docs/NETWORK-MODEL.md, the Operation
+    /// message).
+    guest_clock: Arc<dyn GuestClock>,
+    /// Ledger events waiting for the run loop to append to the
+    /// chronicle -- one per new operation, never one per frame.
+    pending_ledger: Vec<proto::Event>,
 }
 
 /// The IPv4 destination of one egress frame: the address, the port
@@ -58,13 +84,19 @@ fn ipv4_destination(frame: &[u8]) -> Option<([u8; 4], u16, u8)> {
 }
 
 impl Net {
-    pub fn new(tap_name: &str, mac: [u8; 6]) -> std::io::Result<Self> {
+    pub fn new(
+        tap_name: &str,
+        mac: [u8; 6],
+        guest_clock: Arc<dyn GuestClock>,
+    ) -> std::io::Result<Self> {
         Ok(Net {
             tap: Tap::open(tap_name)?,
             mac,
             hold: false,
             parked: Vec::new(),
             allowed: Vec::new(),
+            guest_clock,
+            pending_ledger: Vec::new(),
         })
     }
 
@@ -146,16 +178,10 @@ impl Net {
                 if !pass {
                     // The park point: after the read from the TX ring,
                     // and before the write to the TAP. No completion
-                    // here -- a verdict releases the frame, or the
-                    // thaw delivers and completes it. The line below
-                    // is the report primitive: the engine reads it.
-                    if let Some((ip, port, proto)) = dest {
-                        eprintln!(
-                            "cella: parked egress to {}.{}.{}.{}:{port} proto {proto}",
-                            ip[0], ip[1], ip[2], ip[3]
-                        );
-                    }
-                    self.parked.push((head_index, buf[..len].to_vec()));
+                    // here -- a decision releases the operation, or
+                    // the thaw delivers and completes it.
+                    let dest = dest.expect("the None case takes the pass branch above");
+                    self.park(dest, head_index, buf[..len].to_vec());
                     continue;
                 }
             }
@@ -164,6 +190,47 @@ impl Net {
             used_any = true;
         }
         used_any
+    }
+
+    /// Join a frame to the operation already parked for its
+    /// destination, or open a new one. A retransmitted SYN joins
+    /// silently; a new destination mints an id, reports (the line
+    /// the engine reads today), and queues the Parked ledger event
+    /// -- one per operation, never one per frame (see
+    /// docs/NETWORK-MODEL.md, "one decision per new part of the
+    /// world").
+    fn park(&mut self, dest: ([u8; 4], u16, u8), head_index: u16, frame: Vec<u8>) {
+        if let Some(op) = self.parked.iter_mut().find(|op| op.dest == dest) {
+            op.frames.push((head_index, frame));
+            return;
+        }
+        let (ip, port, ip_proto) = dest;
+        eprintln!(
+            "cella: parked egress to {}.{}.{}.{}:{port} proto {ip_proto}",
+            ip[0], ip[1], ip[2], ip[3]
+        );
+        // One clock read names both the id's timestamp bits and the
+        // Operation.guest_ns field: the id and the field must agree
+        // on the instant, not describe two independent reads of it.
+        let guest_ns = self.guest_clock.now_ns();
+        let id = ledger::uuid7(guest_ns);
+        self.pending_ledger.push(proto::Event {
+            event: Some(proto::event::Event::Parked(proto::Operation {
+                id: id.to_vec(),
+                destination: Some(proto::Destination {
+                    host: String::new(),
+                    ip: ip.to_vec(),
+                    port: port as u32,
+                }),
+                guest_ns,
+                host_ns: ledger::host_ns_now(),
+            })),
+        });
+        self.parked.push(ParkedOp {
+            id,
+            dest,
+            frames: vec![(head_index, frame)],
+        });
     }
 }
 
@@ -201,15 +268,42 @@ impl VirtioDevice for Net {
     }
 
     fn held_frames(&self) -> Vec<(u16, Vec<u8>)> {
-        self.parked.clone()
+        self.parked
+            .iter()
+            .flat_map(|op| op.frames.clone())
+            .collect()
     }
 
     fn restore_held(&mut self, frames: Vec<(u16, Vec<u8>)>) {
-        self.parked = frames;
+        // Operation ids and their destination grouping do not
+        // survive a freeze in this temporary backend: each restored
+        // frame becomes its own singleton operation, the same reset
+        // precedent as the pass-entry list below. No ledger event
+        // fires here -- the appliance of phase 2 keeps its held
+        // state in ram.img instead, and this reconstruction retires
+        // with it. One clock read for the whole batch: the vCPU and
+        // clock restore already ran (see main.rs's thaw ordering),
+        // thus this is the guest's just-restored frozen instant, the
+        // same value for every frame reconstructed here.
+        let guest_ns = self.guest_clock.now_ns();
+        self.parked = frames
+            .into_iter()
+            .map(|(head, bytes)| {
+                let dest = ipv4_destination(&bytes).unwrap_or(([0, 0, 0, 0], 0, 0));
+                ParkedOp {
+                    id: ledger::uuid7(guest_ns),
+                    dest,
+                    frames: vec![(head, bytes)],
+                }
+            })
+            .collect();
     }
 
     fn take_held(&mut self) -> Vec<(u16, Vec<u8>)> {
         std::mem::take(&mut self.parked)
+            .into_iter()
+            .flat_map(|op| op.frames)
+            .collect()
     }
 
     fn write_egress(&mut self, frame: &[u8]) {
@@ -224,5 +318,9 @@ impl VirtioDevice for Net {
         if !self.allowed.contains(&(ip, port)) {
             self.allowed.push((ip, port));
         }
+    }
+
+    fn drain_ledger_events(&mut self) -> Vec<proto::Event> {
+        std::mem::take(&mut self.pending_ledger)
     }
 }

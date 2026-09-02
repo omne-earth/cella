@@ -62,7 +62,7 @@ const ALLOWED: &[(u32, &str)] = &[
     (258, "mkdirat: fs::create_dir_all on some libc versions"),
     (293, "pipe2: not currently used, reserved for a future self-pipe"),
     (302, "prlimit64: std::fs / allocator introspection on some libcs"),
-    (318, "getrandom: glibc/Rust runtime init"),
+    (318, "getrandom: glibc/Rust runtime init, and ledger::uuid7's random fill"),
     // The vDSO serves clock_gettime on most hosts, and the syscall then
     // never reaches this filter. Inside a guest, kvm-clock without
     // PVCLOCK_TSC_STABLE_BIT makes the vDSO refuse, and glibc falls

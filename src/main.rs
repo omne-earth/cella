@@ -11,7 +11,8 @@
 //! freeze.rs / seccomp.rs together.
 
 use cella::{
-    boot, config, devices, doctor, freeze, machine, memory, seccomp, universe, vcpu, warm,
+    boot, config, devices, doctor, freeze, ledger, machine, memory, proto, seccomp, universe, vcpu,
+    warm,
 };
 
 use std::path::PathBuf;
@@ -465,6 +466,16 @@ fn main() {
         dump_state(&PathBuf::from(dir));
     }
 
+    // Print the chronicle of one ledger file, one line per event.
+    // There is no protobuf tool in the guest or in a test script, so
+    // this option is how a gate (or a person) examines it.
+    if std::env::args().nth(1).as_deref() == Some("--dump-ledger") {
+        let path = std::env::args()
+            .nth(2)
+            .unwrap_or_else(|| usage_error("--dump-ledger needs a ledger file path"));
+        dump_ledger(&PathBuf::from(path));
+    }
+
     let args = parse_args();
     let frozen = freeze::is_frozen(&args.state_dir);
     // Set at the thaw, and read immediately before the first KVM_RUN.
@@ -523,6 +534,7 @@ fn main() {
 
     let vm = Arc::new(vm);
     let irq_raiser: Arc<dyn devices::virtio::mmio::IrqLine> = vm.clone();
+    let guest_clock: Arc<dyn ledger::GuestClock> = vm.clone();
 
     let block = Block::new(&args.disk, args.disk_ro)
         .unwrap_or_else(|e| fatal(&format!("open disk {:?}: {e}", args.disk)));
@@ -556,7 +568,8 @@ fn main() {
         install_sigio_handler();
         let mut mac = args.mac;
         mac[5] = mac[5].wrapping_add(i as u8);
-        let net = Net::new(tap, mac).unwrap_or_else(|e| fatal(&format!("open tap {tap:?}: {e}")));
+        let net = Net::new(tap, mac, guest_clock.clone())
+            .unwrap_or_else(|e| fatal(&format!("open tap {tap:?}: {e}")));
         let net_fd = net.tap_fd();
         mmio_devices.push((
             NET_MMIO_BASE + (i as u64) * 0x2000,
@@ -762,6 +775,11 @@ fn run_loop(
     state_dir: &std::path::Path,
     mem_size_bytes: u64,
 ) {
+    // The chronicle of held operations (see docs/NETWORK-MODEL.md,
+    // "The control plane"). A control-plane observability file only:
+    // nothing yet reads it back, and nothing here changes hold or
+    // release behavior.
+    let ledger_path = state_dir.join("network").join("ledger");
     loop {
         if HOLD_REQUESTED.swap(false, Ordering::SeqCst) {
             // The egress hold, before the freeze: hold-then-freeze,
@@ -839,6 +857,23 @@ fn run_loop(
         // stdin does.
         if let Some(listener) = &console_listener {
             poll_console(listener, &console_client, serial);
+        }
+        flush_ledger(mmio_devices, &ledger_path);
+    }
+}
+
+/// Drain every device's pending ledger events and append them to the
+/// chronicle. Additive: nothing yet reads this file back, and the
+/// hold/release path above is untouched by its presence or absence.
+fn flush_ledger(mmio_devices: &mut [(u64, u64, MmioTransport)], ledger_path: &std::path::Path) {
+    let mut events = Vec::new();
+    for (_, _, t) in mmio_devices.iter_mut() {
+        events.extend(t.drain_ledger_events());
+    }
+    for event in events {
+        let msg = ledger::event_message(event);
+        if let Err(e) = ledger::append(ledger_path, &msg) {
+            eprintln!("cella: ledger append failed: {e}");
         }
     }
 }
@@ -1299,6 +1334,50 @@ fn dump_state(dir: &PathBuf) -> ! {
             }
         }
         println!();
+    }
+    std::process::exit(0);
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Print every framed Message of a ledger file, one line per event.
+fn dump_ledger(path: &PathBuf) -> ! {
+    let messages =
+        ledger::read_all(path).unwrap_or_else(|e| fatal(&format!("reading {path:?}: {e}")));
+    for msg in &messages {
+        let Some(proto::message::Body::Event(ev)) = &msg.body else {
+            println!("(not an event)");
+            continue;
+        };
+        match &ev.event {
+            Some(proto::event::Event::Parked(op)) => {
+                let d = op.destination.as_ref();
+                let ip: Vec<String> = d
+                    .map(|d| d.ip.iter().map(u8::to_string).collect())
+                    .unwrap_or_default();
+                let port = d.map(|d| d.port).unwrap_or(0);
+                println!(
+                    "parked id={} ip={} port={port} guest_ns={} host_ns={}",
+                    hex(&op.id),
+                    ip.join("."),
+                    op.guest_ns,
+                    op.host_ns
+                );
+            }
+            Some(proto::event::Event::Released(r)) => println!(
+                "released id={} first_response_ns={} bytes_in={} bytes_out={}",
+                hex(&r.id),
+                r.first_response_ns,
+                r.bytes_in,
+                r.bytes_out
+            ),
+            Some(proto::event::Event::Lapsed(l)) => {
+                println!("lapsed id={} why={:?}", hex(&l.id), l.why)
+            }
+            None => println!("(empty event)"),
+        }
     }
     std::process::exit(0);
 }

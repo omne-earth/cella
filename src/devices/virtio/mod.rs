@@ -65,4 +65,11 @@ pub trait VirtioDevice: Send {
     /// Install a pass entry: frames to this destination flow at full
     /// speed under hold (the allow verdict).
     fn allow(&mut self, _ip: [u8; 4], _port: u16) {}
+    /// Ledger events accumulated since the last drain -- one per new
+    /// operation parked, for the chronicle (see
+    /// docs/NETWORK-MODEL.md, "The control plane"). Only virtio-net
+    /// implements this; the default is inert.
+    fn drain_ledger_events(&mut self) -> Vec<crate::proto::Event> {
+        Vec::new()
+    }
 }

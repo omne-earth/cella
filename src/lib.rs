@@ -10,6 +10,7 @@ pub mod devices;
 pub mod doctor;
 pub mod freeze;
 pub mod golden;
+pub mod ledger;
 pub mod machine;
 pub mod memory;
 pub mod proto;

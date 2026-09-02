@@ -318,6 +318,11 @@ impl MmioTransport {
         self.device.allow(ip, port);
     }
 
+    /// Drain the device's pending ledger events, for the chronicle.
+    pub fn drain_ledger_events(&mut self) -> Vec<crate::proto::Event> {
+        self.device.drain_ledger_events()
+    }
+
     /// Deliver the parked egress frames, at thaw: write each frame to
     /// the TAP, oldest first, and complete it -- the buffer is marked
     /// used and the interrupt is raised. At the trap instant the
