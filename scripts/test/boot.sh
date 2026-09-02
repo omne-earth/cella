@@ -22,7 +22,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/../.."
-BIN="${CELLA_BIN:-$ROOT/target/release/cella}"
+BIN="${CELLA_BIN:-$ROOT/target/smoke/cella}"
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 TAP="${CELLA_TEST_TAP:-tap0}"
 TIMEOUT_SECS="${CELLA_BOOT_TIMEOUT:-20}"

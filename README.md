@@ -40,7 +40,6 @@ cella build kernel canonical     # goldens, built natively (skips while inputs m
 cella build rootfs cella
 cella create m1    # stage a machine (defaults from ~/.cella/config.json)
 cella start m1     # run it: detached, jailed, ready in milliseconds
-cella enter m1     # your terminal on its serial console (detach: Ctrl-])
 cella freeze m1    # the machine becomes files
 cella thaw m1      # the same machine, the same instant
 cella list         # every machine, one line each
@@ -50,13 +49,17 @@ cella branch m1 m2 # copy a still machine: frozen twin, or fresh-bootable
 cella archive m1   # a rock: storage stays, nothing resumes, start refuses
 cella inspect m1   # throwaway appliance; the evidence at /rock, ro + noexec
 cella stop m1 && cella destroy m1
-cella selftest     # the whole cycle proves itself
+cella selftest     # the whole cycle proves itself, by files and exit codes
 cella doctor check # the host judged, one fact per line (fix repairs, verify audits)
 ```
 
 `make smoke-shell` narrates the freeze and the thaw end to end. `make boot`,
-`make enter`, `make freeze`, `make thaw`, and `make remove` wrap the
-verbs for one default machine (`VM=<name>` picks another).
+`make freeze`, `make thaw`, and `make remove` wrap the verbs for one
+default machine (`VM=<name>` picks another). An installed machine is
+dark: the release flavor has no console, and the machine is observed
+through files, verbs, and the chronicle. The console -- console.log,
+console.sock, and `enter` -- exists in the lab flavor alone
+(`make install-debug`, the -debug names).
 
 ## The freeze/thaw design, briefly
 

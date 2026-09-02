@@ -98,7 +98,15 @@ fn parse_args() -> Args {
             "--tap" => taps.push(next()),
             "--mac" => mac = parse_mac(&next()),
             "--kernel" => kernel = Some(PathBuf::from(next())),
-            "--console" => console = Some(PathBuf::from(next())),
+            "--console" => {
+                if !cfg!(debug_assertions) {
+                    usage_error(
+                        "the console is a debug affordance -- a release VMM has no \
+                         mouth and no ear",
+                    );
+                }
+                console = Some(PathBuf::from(next()))
+            }
             "--cmdline" => cmdline = next(),
             "--mem-mb" => {
                 mem_mb = next()
@@ -369,13 +377,19 @@ fn print_help() {
 /// real separate binaries: cella-network (a file capability binds to
 /// an inode, and only that inode may hold it) and cella-probe.
 fn persona() -> String {
-    std::env::args()
+    let name = std::env::args()
         .next()
         .as_deref()
         .map(std::path::Path::new)
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "cella".to_string())
+        .unwrap_or_else(|| "cella".to_string());
+    // The lab flavor carries the -debug suffix (cella-debug and its
+    // personas), thus the two flavors never shadow each other on
+    // PATH; the persona is the name under the suffix.
+    name.strip_suffix("-debug")
+        .map(String::from)
+        .unwrap_or(name)
 }
 
 const UNIVERSE_VERBS: &[&str] = &["branch", "archive", "inspect"];

@@ -14,7 +14,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-BIN=target/release/cella
+BIN=target/smoke/cella
 TIMEOUT=240
 # The RAM of the outer guest. 384 MB starves the outer guest: its own
 # reclaim then evicts the warmed mappings between the warming and the

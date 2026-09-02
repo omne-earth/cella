@@ -665,6 +665,9 @@ fn build_static_binaries() -> Result<(PathBuf, PathBuf), String> {
     let root = repo_root();
     println!("cella: building the static cella and the static cella-probe");
     let rustflags = "RUSTFLAGS=-C target-feature=+crt-static";
+    // The smoke profile: release-sized, debug-assertions on. The
+    // in-image cella keeps its console -- the nested and inception
+    // gates read the inner machines through it, in the lab.
     run_in_toolbox_quiet(
         "static binaries",
         &root,
@@ -673,13 +676,14 @@ fn build_static_binaries() -> Result<(PathBuf, PathBuf), String> {
             rustflags,
             "cargo",
             "build",
-            "--release",
+            "--profile",
+            "smoke",
             "--target",
             "x86_64-unknown-linux-gnu",
         ],
     )?;
-    let bin = root.join("target/x86_64-unknown-linux-gnu/release/cella");
-    let probe = root.join("target/x86_64-unknown-linux-gnu/release/cella-probe");
+    let bin = root.join("target/x86_64-unknown-linux-gnu/smoke/cella");
+    let probe = root.join("target/x86_64-unknown-linux-gnu/smoke/cella-probe");
     for p in [&bin, &probe] {
         if !p.is_file() {
             return Err(format!("{} did not build", p.display()));

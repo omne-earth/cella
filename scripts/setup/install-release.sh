@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# One-time host setup for Fedora: installs the system packages the build
-# and the other scripts/ depend on, then checks /dev/kvm access. Every
-# step is idempotent, so it's safe to re-run after e.g. a fresh install
-# or a new machine.
+# The field install, explicitly release: the binary has no console --
+# no console.log, no console.sock, no enter. One-time host setup for
+# Fedora: installs the system packages the build and the other
+# scripts/ depend on, then checks /dev/kvm access. Every step is
+# idempotent, so it's safe to re-run after e.g. a fresh install or a
+# new machine. The lab flavor is its own script (install-debug.sh),
+# with no shared code between them.
 #
-# Usage: scripts/setup/install.sh
+# Usage: scripts/setup/install-release.sh
 set -euo pipefail
 
 if ! command -v dnf &>/dev/null; then
@@ -83,8 +86,7 @@ Next, from any directory (no make needed from here on):
 EOT
 
 # The binary. A release build lands in ~/.local/bin, and PATH gains
-# the directory when absent (moved here from the make install target;
-# make install calls this script).
+# the directory when absent. make install-release calls this script.
 cargo build --release
 install -D -m 0755 target/release/cella "$HOME/.local/bin/cella"
 # The thin CLIs. cella-network is the one CAP_NET_ADMIN holder: the

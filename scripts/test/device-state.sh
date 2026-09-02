@@ -5,7 +5,7 @@
 set -ueo pipefail
 
 cd "$(dirname "$0")/../.."
-BIN=target/release/cella
+BIN=target/smoke/cella
 ac="${1:-}"
 
 case "$ac" in

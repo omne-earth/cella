@@ -7,7 +7,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-BIN=target/release/cella
+BIN=target/smoke/cella
 NET_BIN="$HOME/.local/bin/cella-network"
 [ -x "$NET_BIN" ] || NET_BIN=target/release/cella-network
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
@@ -18,7 +18,7 @@ say() { echo; echo "==> $1"; }
 
 say "step 1: wire the pair (bridge, two taps, the route to the agent subnet)"
 if ! "$NET_BIN" pair --id 0 --via tap1; then
-    echo "SKIP: pair wiring failed (cap_net_admin -- run: make install)"; exit 0
+    echo "SKIP: pair wiring failed (cap_net_admin -- run: make install-release)"; exit 0
 fi
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"

@@ -417,7 +417,7 @@ pub fn setup_pair(id: u32, via: &str) -> Result<(), String> {
     let root = unsafe { libc::geteuid() } == 0;
     if !root && !have_net_admin() {
         return Err(
-            "pair wiring needs CAP_NET_ADMIN -- run: cella-network pair (make install grants \
+            "pair wiring needs CAP_NET_ADMIN -- run: cella-network pair (make install-release grants \
              the capability), or run as root"
                 .into(),
         );
@@ -484,7 +484,7 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
     if !root && !have_net_admin() {
         return Err(
             "setup net creates TAP devices and needs CAP_NET_ADMIN -- run: cella-network setup \
-             (make install grants it the capability), or run this verb as root"
+             (make install-release grants it the capability), or run this verb as root"
                 .into(),
         );
     }
@@ -1031,11 +1031,19 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     }
     let (info_read, info_write) = (ifds[0], ifds[1]);
 
-    let console = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("console.log"))
-        .map_err(|e| format!("opening console.log: {e}"))?;
+    // The console exists only in the lab (debug-assertions on). A
+    // release machine gets no console.log and no console.sock: its
+    // ttyS0 has no listener, and the VMM discards the bytes.
+    let console: std::process::Stdio = if cfg!(debug_assertions) {
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("console.log"))
+            .map_err(|e| format!("opening console.log: {e}"))?
+            .into()
+    } else {
+        std::process::Stdio::null()
+    };
     let vmm_log = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1108,7 +1116,9 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         cmd.args(["--attach-ro", &m.attach]);
     }
     cmd.args(["--mem-mb", &m.mem_mb.to_string()]);
-    cmd.args(["--console", dir.join("console.sock").to_str().unwrap()]);
+    if cfg!(debug_assertions) {
+        cmd.args(["--console", dir.join("console.sock").to_str().unwrap()]);
+    }
     cmd.args(["--cmdline", &cmdline_for(&m)]);
     cmd.env("CELLA_READY_FD", write_fd.to_string());
     cmd.stdin(std::process::Stdio::null());
@@ -1251,6 +1261,14 @@ pub fn connect_console(name: &str) -> Result<std::os::unix::net::UnixStream, Str
 }
 
 pub fn enter(name: &str) -> Result<(), String> {
+    if !cfg!(debug_assertions) {
+        return Err(
+            "enter is a debug affordance -- a release machine is dark: no console \
+             exists, and the machine is observed through files, verbs, and the \
+             chronicle"
+                .to_string(),
+        );
+    }
     refuse_rock(name, "enter")?;
     use std::io::{Read, Write};
     let mut stream = connect_console(name)?;
@@ -1480,46 +1498,34 @@ fn selftest_cycle() -> Result<(), String> {
             Err(_) => Ok(()),
         }
     }
+    // Console-free by design: the installed host's acceptance gate
+    // judges by files and exit codes alone, thus it runs identically
+    // against the field flavor (whose machines are dark) and doubles
+    // as the proof that the release binary's mouth is shut.
     let mut m = defaults();
     m.name = "m1".into();
     m.net = "none".into();
     step("create", create(&m))?;
-    step("start", start("m1"))?;
-    let console = machine_dir("m1").join("console.log");
-    let mut booted = false;
-    for _ in 0..200 {
-        if read_lossy(&console).contains("cella-rootfs: init running") {
-            booted = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    if valve_record("m1") != "closed" {
+        return Err("not born closed: the valve record is not \"closed\"".to_string());
     }
-    if !booted {
-        return Err("the guest did not reach its init".to_string());
+    step("start", start("m1"))?;
+    // The readiness handshake already gated start; hold a moment and
+    // require the VMM to still stand.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    if !is_running("m1") {
+        return Err("the VMM exited within 3 s of a started machine".to_string());
+    }
+    if cfg!(not(debug_assertions)) && machine_dir("m1").join("console.log").exists() {
+        return Err("a release machine wrote a console.log -- the mouth must be shut".to_string());
     }
     refuse("double start", start("m1"))?;
-    // The console round-trip: one line in through the socket, and the
-    // response lands on the console log.
-    {
-        use std::io::Write;
-        let mut c = connect_console("m1").map_err(|e| format!("console connect: {e}"))?;
-        c.write_all(b"echo selftest-rt-$((6*7))\n")
-            .map_err(|e| format!("console write: {e}"))?;
-        let mut seen = false;
-        for _ in 0..50 {
-            if read_lossy(&console).contains("selftest-rt-42") {
-                seen = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        if !seen {
-            return Err("the console round-trip produced no response".to_string());
-        }
-    }
     step("freeze", freeze("m1"))?;
     if !is_frozen("m1") {
         return Err("no sidecar after the freeze".to_string());
+    }
+    if machine_dir("m1").join("state.tmp").exists() {
+        return Err("state.tmp left behind -- the rename step did not happen".to_string());
     }
     refuse("start while frozen", start("m1"))?;
     refuse("stop while frozen", stop("m1"))?;
@@ -1527,11 +1533,47 @@ fn selftest_cycle() -> Result<(), String> {
     if is_frozen("m1") {
         return Err("the sidecar survived the thaw".to_string());
     }
+    if !is_running("m1") {
+        return Err("the VMM did not stand after the thaw".to_string());
+    }
     refuse("thaw while running", thaw("m1"))?;
     step("stop", stop("m1"))?;
     step("restart", start("m1"))?;
     step("stop again", stop("m1"))?;
     step("destroy", destroy("m1"))?;
+    // The installed world's negative, when the pool offers a free
+    // tap: a machine is born closed, a ping gets nothing, and no
+    // freeze happens on inbound traffic.
+    if std::path::Path::new("/sys/class/net/tap0").exists()
+        && !claimed_taps().contains(&"tap0".to_string())
+    {
+        let mut n = defaults();
+        n.name = "m2".into();
+        n.net = "tap0".into();
+        step("create (closed, tap)", create(&n))?;
+        step("start (closed, tap)", start("m2"))?;
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let answered = std::process::Command::new("ping")
+            .args(["-c", "1", "-W", "2", "192.168.200.2"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if answered {
+            let _ = stop("m2");
+            let _ = destroy("m2");
+            return Err("a closed machine answered a ping".to_string());
+        }
+        if is_frozen("m2") {
+            let _ = stop("m2");
+            let _ = destroy("m2");
+            return Err("a closed machine froze on inbound traffic".to_string());
+        }
+        step("stop (closed, tap)", stop("m2"))?;
+        step("destroy (closed, tap)", destroy("m2"))?;
+        println!("  the closed machine answered nothing, and never froze");
+    } else {
+        println!("  (no free tap0 -- the born-closed negative did not run)");
+    }
     Ok(())
 }
 

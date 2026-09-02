@@ -23,7 +23,7 @@ MODE="${1:-airgapped}"
 case "$MODE" in airgapped|hybrid|www) ;; *) echo "usage: $0 airgapped|hybrid|www" >&2; exit 2;; esac
 
 cd "$(dirname "$0")/../.."
-BIN=target/release/cella
+BIN=target/smoke/cella
 TAP="${CELLA_TEST_TAP:-tap0}"
 HOST_IP="${CELLA_TAP_CIDR:-192.168.200.1/24}"; HOST_IP="${HOST_IP%%/*}"
 OUTER_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"

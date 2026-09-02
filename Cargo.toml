@@ -60,3 +60,10 @@ virtio-bindings = "0.2"
 # resolution (edition 2021, resolver v2) keeps this out of `cargo build
 # --release`'s dependency graph.
 virtio-queue = { version = "0.14", features = ["test-utils"] }
+
+# The lab profile: release-sized (the debug profile's binary does not
+# fit the nested images), with debug-assertions on -- the console
+# exists only where they are on. The smokes and probes pin to it.
+[profile.smoke]
+inherits = "release"
+debug-assertions = true

@@ -21,7 +21,7 @@ BUSYBOX_VERSION ?= 1.37.0
 GUEST_BASH_VERSION ?= 5.3
 export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 
-.PHONY: help build install debug check lint fmt fmt-check \
+.PHONY: help build build-smoke install-release install-debug debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested setup-tap \
         boot enter freeze thaw remove doctor smoke smoke-shell smoke-boot smoke-thaw smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-ping smoke-udp smoke-multinet smoke-universe smoke-ledger smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine test-one-door \
@@ -34,7 +34,7 @@ help: ## Show this help
 	echo "cella -- build, lint, and test targets"
 	echo ""
 	echo "Build:"
-	grep -hE '^(build|install|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(build|build-smoke|install-release|install-debug|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine|test-one-door):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -63,15 +63,28 @@ $(CELLA_DEV): $(shell find src -name '*.rs') Cargo.toml Cargo.lock
 	$(LOG)
 	$(CARGO) build --release
 
-build: $(CELLA_DEV) ## Release build (target/release/cella)
+build: $(CELLA_DEV) ## Release build (target/release/cella) -- the field flavor: no console
+
+# The lab flavor: release-sized, debug-assertions on -- the console
+# exists. Every smoke and probe pins to it (see TESTING.md).
+CELLA_SMOKE := target/smoke/cella
+$(CELLA_SMOKE): $(shell find src -name '*.rs') Cargo.toml Cargo.lock
+	$(LOG)
+	$(CARGO) build --profile smoke
+
+build-smoke: $(CELLA_SMOKE) ## Lab build (target/smoke/cella): release-sized with the console on
 
 debug: ## Debug build (target/debug/cella), faster to compile
 	$(LOG)
 	$(CARGO) build
 
-install: ## Host deps, toolbox prerequisites, and the cella binary to ~/.local/bin (scripts/setup/install.sh)
+install-release: ## The field flavor: host deps, capabilities, and the console-free binary to ~/.local/bin (scripts/setup/install-release.sh)
 	$(LOG)
-	$(SCRIPTS)/setup/install.sh
+	$(SCRIPTS)/setup/install-release.sh
+
+install-debug: ## The lab flavor: the smoke-profile binary as cella-debug and its -debug personas (scripts/setup/install-debug.sh)
+	$(LOG)
+	$(SCRIPTS)/setup/install-debug.sh
 
 check: ## cargo check, no codegen
 	$(LOG)
@@ -181,15 +194,15 @@ remove: $(CELLA_DEV) ## Discard $(VM): stop it and destroy it
 
 # --- Smoke tests: required real KVM ---------------
 
-smoke-shell: build golden ## A shell learns a value, freezes, thaws, and remembers -- the one gate that drives the machine through enter (scripts/test/shell.sh)
+smoke-shell: build-smoke golden ## A shell learns a value, freezes, thaws, and remembers -- the one gate that drives the machine through enter (scripts/test/shell.sh)
 	$(LOG)
 	$(SCRIPTS)/test/shell.sh
 
-smoke-boot: build golden ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
+smoke-boot: build-smoke golden ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
 	$(LOG)
 	$(SCRIPTS)/test/boot.sh
 
-smoke-thaw: build golden ## Create -> start -> freeze -> verify sidecar -> thaw -> one-shot check, then the clock probe
+smoke-thaw: build-smoke golden ## Create -> start -> freeze -> verify sidecar -> thaw -> one-shot check, then the clock probe
 	$(LOG)
 	$(SCRIPTS)/test/thaw.sh
 	# The script cannot see whether the guest keeps its time. A guest that
@@ -205,15 +218,15 @@ smoke-thaw: build golden ## Create -> start -> freeze -> verify sidecar -> thaw 
 	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0
 	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0
 
-smoke-nested-boot-airgapped: build golden-nested ## cella hosts cella, no network on either layer
+smoke-nested-boot-airgapped: build-smoke golden-nested ## cella hosts cella, no network on either layer
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh airgapped
 
-smoke-nested-boot-hybrid: build golden-nested ## cella hosts cella, the outer guest networked, the inner airgapped
+smoke-nested-boot-hybrid: build-smoke golden-nested ## cella hosts cella, the outer guest networked, the inner airgapped
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh hybrid
 
-smoke-nested-boot-www: build golden-nested ## cella hosts cella, both layers networked (the outer init pings the inner guest)
+smoke-nested-boot-www: build-smoke golden-nested ## cella hosts cella, both layers networked (the outer init pings the inner guest)
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh www
 
@@ -223,31 +236,31 @@ smoke-machine: $(CELLA_DEV) ## The lifecycle cycle with a real guest: cella self
 	$(LOG)
 	$(CELLA_DEV) selftest
 
-smoke-gateway: build golden ## The gateway ladder: pair wiring (bridge + route), the appliance forwards agent->world, and the pair freezes and thaws together
+smoke-gateway: build-smoke golden ## The gateway ladder: pair wiring (bridge + route), the appliance forwards agent->world, and the pair freezes and thaws together
 	$(LOG)
 	$(SCRIPTS)/test/gateway.sh
 
-smoke-multinet: build golden ## A machine takes N taps: two-tap boot, both nics in the guest, host pings eth0, claims exclusive per tap
+smoke-multinet: build-smoke golden ## A machine takes N taps: two-tap boot, both nics in the guest, host pings eth0, claims exclusive per tap
 	$(LOG)
 	$(SCRIPTS)/test/multinet.sh
 
-smoke-universe: build golden ## The universe family end to end: branch (frozen twin, rock to rock), archive (the latch), inspect (evidence at /rock, byte-identical after)
+smoke-universe: build-smoke golden ## The universe family end to end: branch (frozen twin, rock to rock), archive (the latch), inspect (evidence at /rock, byte-identical after)
 	$(LOG)
 	$(SCRIPTS)/test/universe.sh
 
-smoke-udp: build golden ## No datagram leaves undecided, proven from within the guest: closed drops UDP, open parks it (the park is the freeze), a refusal delivers nothing; the guest's own ICMP lapses the same way (scripts/test/udp.sh)
+smoke-udp: build-smoke golden ## No datagram leaves undecided, proven from within the guest: closed drops UDP, open parks it (the park is the freeze), a refusal delivers nothing; the guest's own ICMP lapses the same way (scripts/test/udp.sh)
 	$(LOG)
 	$(SCRIPTS)/test/udp.sh
 
-smoke-ping: build golden ## The valve end to end: born closed fails a ping, open parks the reply and freezes, release answers, close darkens again (docs/NETWORK-MODEL.md)
+smoke-ping: build-smoke golden ## The valve end to end: born closed fails a ping, open parks the reply and freezes, release answers, close darkens again (docs/NETWORK-MODEL.md)
 	$(LOG)
 	$(SCRIPTS)/test/ping.sh
 
-smoke-gateway-cli: build golden ## 1.3: close shuts the valve, show lists the hold, release/refuse decide by id prefix, open refuses (docs/NETWORK-MODEL.md)
+smoke-gateway-cli: build-smoke golden ## 1.3: close shuts the valve, show lists the hold, release/refuse decide by id prefix, open refuses (docs/NETWORK-MODEL.md)
 	$(LOG)
 	$(SCRIPTS)/test/gateway-cli.sh
 
-smoke-ledger: build golden ## 1.2: hold, one fetch parks, the ledger holds one operation with an id and both clocks (docs/NETWORK-MODEL.md)
+smoke-ledger: build-smoke golden ## 1.2: hold, one fetch parks, the ledger holds one operation with an id and both clocks (docs/NETWORK-MODEL.md)
 	$(LOG)
 	$(SCRIPTS)/test/ledger.sh
 
@@ -266,19 +279,19 @@ smoke: test smoke-shell smoke-boot smoke-thaw smoke-ping smoke-udp smoke-nested-
 # One gate per acceptance criterion, in dependency order. Each gate
 # fails until its implementation lands.
 
-device-state-ac1: build golden ## AC1: the disk survives the thaw -- transport state rides the sidecar (v7); write a file, freeze, thaw, read it back, sync; smoke-shell drops ROOT=ro
+device-state-ac1: build-smoke golden ## AC1: the disk survives the thaw -- transport state rides the sidecar (v7); write a file, freeze, thaw, read it back, sync; smoke-shell drops ROOT=ro
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac1
 
-device-state-ac2: build golden ## AC2: the network survives the thaw -- the tap claim persists through the manifest, the tap is recreated by convention, and the host pings the guest after a thaw
+device-state-ac2: build-smoke golden ## AC2: the network survives the thaw -- the tap claim persists through the manifest, the tap is recreated by convention, and the host pings the guest after a thaw
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac2
 
-device-state-ac3: build golden ## AC3: the in-flight layer is exact -- a parked egress frame is delivered and completed after the thaw; the same request works, with no retransmission
+device-state-ac3: build-smoke golden ## AC3: the in-flight layer is exact -- a parked egress frame is delivered and completed after the thaw; the same request works, with no retransmission
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac3
 
-device-state-ac4: build golden ## AC4: the verdict is external -- every egress frame parks by default; the test, as the stand-in engine, releases with an allow or freezes, grows the world, and thaws (the world-ratchet gate)
+device-state-ac4: build-smoke golden ## AC4: the verdict is external -- every egress frame parks by default; the test, as the stand-in engine, releases with an allow or freezes, grows the world, and thaws (the world-ratchet gate)
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac4
 
@@ -322,7 +335,7 @@ kernel-config-check: ## Resolve kernel-fragment.config against defconfig and rep
 	$(LOG)
 	$(SCRIPTS)/build/kernel-config-check.sh
 
-setup-tap: build ## Provision the tap pool + NAT via cella-network (no sudo; make install granted the capability)
+setup-tap: build ## Provision the tap pool + NAT via cella-network (no sudo; make install-release granted the capability)
 	$(LOG)
 	target/release/cella-network setup --taps $(TAPS)
 
@@ -431,15 +444,15 @@ export CELLA_OBSERVE_SECS
 
 probe-sregs: build ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same* ioctl call? (no /dev/kvm needed beyond opening it; boots nothing -- see src/bin/cella-probe/sregs.rs)
 	$(LOG)
-	target/release/cella-probe sregs
+	target/smoke/cella-probe sregs
 
-probe-wallclock: build golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see src/bin/cella-probe/wallclock.rs)
+probe-wallclock: build-smoke golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see src/bin/cella-probe/wallclock.rs)
 	$(LOG)
-	target/release/cella-probe wallclock
+	target/smoke/cella-probe wallclock
 
-probe-freeze-thaw-clock: build golden ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see src/bin/cella-probe/freeze_thaw_clock.rs)
+probe-freeze-thaw-clock: build-smoke golden ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see src/bin/cella-probe/freeze_thaw_clock.rs)
 	$(LOG)
-	target/release/cella-probe freeze-thaw-clock
+	target/smoke/cella-probe freeze-thaw-clock
 
 # Findings from the 2026-08-30 investigation of the thaw delay:
 # - The excess across the freeze is a constant cost of each thaw. It does
@@ -470,14 +483,14 @@ probe-freeze-thaw-clock: build golden ## Does freeze/thaw leak real elapsed time
 # - The probe measures wake-up lateness after the thaw, not a clock step.
 #   A clock step smaller than the remaining sleep does not show in the
 #   crossing interval, because the wake-up is scheduled in the same clock.
-probe-prefault-ept: build golden ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
+probe-prefault-ept: build-smoke golden ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
 	$(LOG)
-	CELLA_THAW_PREFAULT=ept target/release/cella-probe freeze-thaw-clock
+	CELLA_THAW_PREFAULT=ept target/smoke/cella-probe freeze-thaw-clock
 
-probe-inception: build golden-nested ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
+probe-inception: build-smoke golden-nested ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
 	$(LOG)
 	$(SCRIPTS)/test/inception.sh
 
-probe-thaw-gate: build golden ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
+probe-thaw-gate: build-smoke golden ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
 	$(LOG)
-	CELLA_POST_THAW_SECS=30 target/release/cella-probe freeze-thaw-clock
+	CELLA_POST_THAW_SECS=30 target/smoke/cella-probe freeze-thaw-clock

@@ -102,7 +102,7 @@ stateDiagram-v2
 | stop    | Ends the machine as fast as possible, and clears the transients: ram.img, the pid file, the console socket, and any stale sidecar. An emergency maneuver: in-flight state is disposable, and the next start boots fresh from the disk | Rust only |
 | freeze  | Stops the machine and preserves the in-flight state: RAM, vCPU, clocks, devices, held operations. A machine with an open valve also freezes itself on a park (docs/NETWORK-MODEL.md, one-shot). The next thaw resumes the same instant | Rust only |
 | thaw    | Resumes a frozen machine | Rust only |
-| enter   | Attaches the terminal to the serial console. An exit of the guest shell detaches | Rust only |
+| enter   | Attaches the terminal to the serial console -- the lab flavor alone (debug-assertions on). The release flavor has no console, and enter refuses; the machine is observed through files, verbs, and the chronicle. An exit of the guest shell detaches | Rust only |
 | destroy | Deletes the machine and its artifacts, once and for all | Rust only |
 | branch  | Copies a still machine: a frozen source yields a frozen twin, a stopped source a fresh-bootable copy, a rock a rock. Records the layer digests | Rust only |
 | archive | Turns a still machine into a rock: storage layers stay, runtime state goes, the manifest latches | Rust only |
@@ -244,9 +244,13 @@ invocation, and the registry survives a host reboot: a stale pid file
 is detected and cleared, and a `state` file means frozen, exactly as
 the sidecar rule already works.
 
-`enter` connects the terminal to `console.sock`. The VMM serves the
-serial console on that socket, and it writes the console transcript
-to its own log. The stderr of the VMM never enters the console: a
+`enter` connects the terminal to `console.sock` -- in the lab
+flavor alone. The release VMM has no console: no console.sock, no
+console.log, no ear, no mouth; its guest's ttyS0 bytes are consumed
+and discarded, and its only crossings are the disk at birth and
+decided frames at the membrane. In the lab flavor the VMM serves
+the serial console on the socket and writes the transcript to its
+own log; the stderr of the VMM never enters the console, because a
 reader of the console must not see the instrumentation of the
 operator.
 

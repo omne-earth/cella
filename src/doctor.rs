@@ -54,7 +54,7 @@ pub fn gate(needs: &[String]) -> u32 {
             }
             "bwrap" => {
                 if run_out("bwrap", &["--version"]).is_none() {
-                    println!("SKIP: bwrap not found -- run: make install");
+                    println!("SKIP: bwrap not found -- run: make install-release");
                     return 3;
                 }
             }
@@ -96,6 +96,15 @@ pub fn check() -> u32 {
     let mut r = Report { failed: 0 };
     println!("cella doctor: host facts");
 
+    // The flavor of this binary. The field flavor (release) has no
+    // console; the lab flavor (debug-assertions on) keeps it as the
+    // instrument, under the -debug names.
+    if cfg!(debug_assertions) {
+        r.ok("flavor", "debug -- the console exists (the lab)");
+    } else {
+        r.ok("flavor", "release -- no console exists (the field)");
+    }
+
     // /dev/kvm: the one device that makes a machine possible.
     let kvm = Path::new("/dev/kvm");
     if !kvm.exists() {
@@ -116,7 +125,7 @@ pub fn check() -> u32 {
     if run_out("bwrap", &["--version"]).is_some() {
         r.ok("bwrap", "present");
     } else {
-        r.fail("bwrap", "not found -- run: make install");
+        r.fail("bwrap", "not found -- run: make install-release");
     }
 
     // Nested KVM: required by the nested and inception images only.
@@ -170,7 +179,7 @@ pub fn check() -> u32 {
         }
     }
     if taps == 0 {
-        r.fail("tap pool", "no taps -- run: cella doctor fix (a reboot clears the pool; make install enables cella-network.service to recreate it at boot)");
+        r.fail("tap pool", "no taps -- run: cella doctor fix (a reboot clears the pool; make install-release enables cella-network.service to recreate it at boot)");
     }
 
     // The boot unit: without it a reboot silently eats the pool.
@@ -178,7 +187,7 @@ pub fn check() -> u32 {
         Some(v) if v.trim() == "enabled" => r.ok("boot unit", "cella-network.service enabled"),
         _ => r.fail(
             "boot unit",
-            "cella-network.service not enabled -- run: make install (a reboot then keeps the pool)",
+            "cella-network.service not enabled -- run: make install-release (a reboot then keeps the pool)",
         ),
     }
 
@@ -268,7 +277,9 @@ pub fn fix() -> u32 {
         .map(|s| s.success())
         .unwrap_or(false);
     if !ran {
-        println!("cella doctor: {net_bin} failed -- run: make install (grants it cap_net_admin)");
+        println!(
+            "cella doctor: {net_bin} failed -- run: make install-release (grants it cap_net_admin)"
+        );
     }
     // The goldens: building needs no root, thus fix builds what is
     // absent or unmanifested. The kernel compile takes minutes; the

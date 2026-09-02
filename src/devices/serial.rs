@@ -31,16 +31,23 @@ impl Trigger for IrqTrigger {
 /// thus Rc<RefCell<...>> and not a lock.
 pub type ConsoleClient = Rc<RefCell<Option<UnixStream>>>;
 
-/// The serial output: always to stdout (the console log of a
-/// detached machine), and to the connected console client when one
-/// exists. A client that fails a write is dropped: the guest must
-/// never block on a reader.
+/// The serial output. In the lab (debug-assertions on) it goes to
+/// stdout (the console log of a detached machine) and to the
+/// connected console client when one exists; a client that fails a
+/// write is dropped, because the guest must never block on a
+/// reader. In the field (a release build) the guest's ttyS0 bytes
+/// are consumed and discarded: the machine has no mouth, and its
+/// only crossings are the disk at birth and decided frames at the
+/// membrane (docs/NETWORK-MODEL.md).
 pub struct ConsoleOut {
     client: ConsoleClient,
 }
 
 impl Write for ConsoleOut {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if !cfg!(debug_assertions) {
+            return Ok(buf.len());
+        }
         let _ = io::stdout().write(buf);
         let mut c = self.client.borrow_mut();
         if let Some(stream) = c.as_mut() {
@@ -51,6 +58,9 @@ impl Write for ConsoleOut {
         Ok(buf.len())
     }
     fn flush(&mut self) -> io::Result<()> {
+        if !cfg!(debug_assertions) {
+            return Ok(());
+        }
         io::stdout().flush()
     }
 }

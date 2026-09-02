@@ -9,7 +9,7 @@
 set -uo pipefail
 
 cd "$(dirname "$0")/../.."
-BIN=target/release/cella
+BIN=target/smoke/cella
 TAP="${CELLA_TEST_TAP:-tap0}"
 HOST_IP="${CELLA_TAP_CIDR:-192.168.200.1/24}"; HOST_IP="${HOST_IP%%/*}"
 UDP_PORT=9053
@@ -17,7 +17,7 @@ UDP_PORT=9053
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 ip link show "$TAP" >/dev/null 2>&1 || { echo "SKIP: $TAP missing -- run: cella doctor fix"; exit 0; }
-command -v nc >/dev/null || { echo "SKIP: nc missing -- run: make install"; exit 0; }
+command -v nc >/dev/null || { echo "SKIP: nc missing -- run: make install-release"; exit 0; }
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 export CELLA_HOME=$(mktemp -d /tmp/cella-udp.XXXXXX)
