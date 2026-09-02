@@ -278,7 +278,7 @@ features, and per queue the ready flag, the size, the ring
 addresses, and the next-available and next-used indices (the
 private progress counters RAM does not hold) -- plus any held
 egress frames. The thaw restores each transport before the first
-KVM_RUN, and the demo runs on a rw root. The design, the egress
+KVM_RUN, and the shell gate runs on a rw root. The design, the egress
 hold, and the acceptance gates (`make smoke-device-state`) live in
 docs/DEVICE-STATE.md.
 

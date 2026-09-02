@@ -42,7 +42,8 @@ make smoke-thaw    # boot -> freeze -> thaw -> verify
 make smoke-ping    # the valve end to end: closed, open, release, closed again
 ```
 
-Or all at once: `make smoke` (or `make test-all` for everything).
+Or all at once: `make smoke` -- it runs the no-KVM `make test` first,
+then every gate (or `make test-all` for everything).
 
 ## What each target actually checks
 
@@ -53,7 +54,8 @@ Or all at once: `make smoke` (or `make test-all` for everything).
 | `make test-jail` | no | bwrap actually denies a path outside the bind set; `jail.sh` refuses to run without required args; no ambient `CAP_NET_ADMIN` inside the jail | `scripts/test/jail.sh` |
 | `make test-seccomp` | no | the **actual installed BPF filter** kills the process with `SIGSYS` on a disallowed syscall (not a simulation -- `install()` really runs, then a real forbidden syscall is really made) | `scripts/test/seccomp.sh`, hitting `cella --selftest-seccomp` |
 | `make smoke-boot` | **yes** | a real bzImage boots under real KVM all the way to a running init -- GDT/page-table/boot_params, virtio-mmio device negotiation, and a successful root mount, not just an early kernel banner | `scripts/test/boot.sh` |
-| `make smoke-thaw` | **yes** | full lifecycle: boot, `SIGUSR1` freeze, sidecar file exists with no leftover `.tmp`, re-invoking the same command line thaws instead of re-booting, `state` is gone afterward (one-shot enforcement) | `scripts/test/thaw.sh` |
+| `make smoke-thaw` | **yes** | full lifecycle through the verbs: create, start, freeze (sidecar present, no leftover `.tmp`), thaw, `state` gone afterward (one-shot enforcement); the clock probe follows | `scripts/test/thaw.sh` |
+| `make smoke-shell` | **yes** | the end-to-end story: a shell learns a value through `enter`, the machine freezes to files, thaws, and the same shell returns the value -- the one gate that drives the console interactively | `scripts/test/shell.sh` |
 | `make smoke-ping` | **yes** | the valve end to end: a machine born closed answers nothing; open parks the guest's echo reply and the park is the freeze; a release answers the next ping; close darkens even the allowed flow | `scripts/test/ping.sh` |
 | `make smoke-device-state` | **yes** | the four device-state acceptance gates: the disk survives the thaw (rw root), the network survives the thaw, a parked egress request completes after the thaw, and the world-ratchet -- the verdict external, against real endpoints | `scripts/test/device-state.sh` |
 | `make smoke-multinet` | **yes** | a machine takes N taps: both nics present in the guest, the parked echo reply is decided and eth0 answers, a claimed tap of the list is refused again, and a freeze and thaw carry two net transports in the sidecar -- the new epoch decides its reply again | `scripts/test/multinet.sh` |

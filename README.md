@@ -86,8 +86,8 @@ Properties, each deliberate:
 - **Devices continue.** Sidecar v8 carries each transport: status,
   queue select, ISR, negotiated features, and per queue the ready
   flag, size, ring addresses, and the next-available and next-used
-  indices -- the only progress counters RAM does not hold. The demo
-  runs on a rw root. See `docs/DEVICE-STATE.md`.
+  indices -- the only progress counters RAM does not hold. The shell
+  gate runs on a rw root. See `docs/DEVICE-STATE.md`.
 - **Egress can hold.** Under hold, an outbound frame parks between
   the TX ring and the TAP, and the verdict comes from outside:
   release (with an optional allow pass entry), or freeze -- the
@@ -175,7 +175,7 @@ scripts/
   setup/install.sh      host setup: deps, forward rules, the binary to ~/.local/bin
   build/                kernel/busybox config fragments, the init of each rootfs,
                         kernel-config-check.sh
-  test/                 one script per system test: boot, thaw, ping, demo,
+  test/                 one script per system test: boot, thaw, ping, shell,
                         device-state (the four acceptance gates), universe,
                         multinet, gateway, gateway-cli, ledger, nested-boot,
                         inception, jail, seccomp, machine
@@ -189,8 +189,8 @@ TESTING.md              what each target verifies, and how to reproduce
 Line counts (`make lines`):
 
 ```
-SOURCE ONLY (src/, excluding inline #[cfg(test)])         9889
-SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)        11213
+SOURCE ONLY (src/, excluding inline #[cfg(test)])        10058
+SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)        11393
 ```
 
 The count now carries the probes (they moved into src/bin at the
