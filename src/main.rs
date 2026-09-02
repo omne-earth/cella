@@ -11,8 +11,8 @@
 //! freeze.rs / seccomp.rs together.
 
 use cella::{
-    boot, config, devices, doctor, freeze, ledger, machine, memory, proto, seccomp, universe, vcpu,
-    warm,
+    boot, config, devices, doctor, freeze, gateway, ledger, machine, memory, proto, seccomp,
+    universe, vcpu, warm,
 };
 
 use std::path::PathBuf;
@@ -246,6 +246,29 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             _ => Err("usage: cella info <name>".to_string()),
         },
         "selftest" => machine::selftest(),
+        "gateway" => {
+            let usage = "usage: cella gateway <vm> <show [--all] | release <id> [--no-allow] | refuse <id> [--why TEXT] | open | close>";
+            let (Some(vm), Some(verb)) = (args.first(), args.get(1)) else {
+                usage_error(usage)
+            };
+            let rest = &args[2..];
+            match verb.as_str() {
+                "show" => gateway::show(vm, rest.first().map(|s| s.as_str()) == Some("--all")),
+                "release" => match rest {
+                    [id] => gateway::release(vm, id, true),
+                    [id, flag] if flag == "--no-allow" => gateway::release(vm, id, false),
+                    _ => usage_error(usage),
+                },
+                "refuse" => match rest {
+                    [id] => gateway::refuse(vm, id, "refused"),
+                    [id, flag, why] if flag == "--why" => gateway::refuse(vm, id, why),
+                    _ => usage_error(usage),
+                },
+                "close" => gateway::close(vm),
+                "open" => gateway::open(vm),
+                _ => usage_error(usage),
+            }
+        }
         "branch" => match args {
             [src, dst] => universe::branch(src, dst),
             _ => Err("usage: cella branch <existing-vm> <new-vm>".to_string()),
@@ -381,6 +404,12 @@ fn main() {
                 MACHINE_VERBS.join(", ")
             ));
         }
+        "cella-gateway" => {
+            let Some(_) = argv.first() else {
+                usage_error("usage: cella-gateway <vm> <show|release|refuse|open|close> ...")
+            };
+            run_verb("gateway", &argv);
+        }
         "cella-universe" => {
             let Some(first) = argv.first() else {
                 usage_error("usage: cella-universe <branch|archive|inspect> ...")
@@ -423,6 +452,7 @@ fn main() {
                 | "doctor"
                 | "probe"
                 | "network"
+                | "gateway"
                 | "branch"
                 | "archive"
                 | "inspect"

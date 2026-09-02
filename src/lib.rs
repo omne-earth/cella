@@ -9,6 +9,7 @@ pub mod config;
 pub mod devices;
 pub mod doctor;
 pub mod freeze;
+pub mod gateway;
 pub mod golden;
 pub mod ledger;
 pub mod machine;
