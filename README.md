@@ -21,9 +21,11 @@ classes with the pinned guest kernel (7.2.2). The virtio transports
 now ride the freeze sidecar (format v7), the egress-hold surface --
 park, report, release, allow -- is in place (`docs/DEVICE-STATE.md`),
 and the universe family treats machines as artifacts: branch,
-archive, inspect (`docs/LIFECYCLE.md`). The network model -- every
-machine shielded behind its own appliance -- is decided and being
-built (`docs/NETWORK-MODEL.md`).
+archive, inspect (`docs/LIFECYCLE.md`). The network model is
+decided and being built (`docs/NETWORK-MODEL.md`): every machine
+is born closed, an open valve is a membrane and never a free flow,
+every egress operation waits for a decision by id, and nothing
+outlives its epoch.
 
 ## The machine lifecycle
 
@@ -42,6 +44,8 @@ cella enter m1     # your terminal on its serial console (detach: Ctrl-])
 cella freeze m1    # the machine becomes files
 cella thaw m1      # the same machine, the same instant
 cella list         # every machine, one line each
+cella gateway m1 open      # born closed; open arms the membrane -- egress parks
+cella gateway m1 show      # the held operations; release/refuse decide by id
 cella branch m1 m2 # copy a still machine: frozen twin, or fresh-bootable
 cella archive m1   # a rock: storage stays, nothing resumes, start refuses
 cella inspect m1   # throwaway appliance; the evidence at /rock, ro + noexec
@@ -136,6 +140,8 @@ the `KVM_VCPU_TSC_OFFSET` attribute API.
 src/
   main.rs               the multi-call binary: personas, the run loop, freeze/thaw, verdicts
   doctor.rs             cella doctor: check, fix, verify
+  gateway.rs            cella gateway: show, release, refuse, open, close
+  ledger.rs             the chronicle, the id mint, the framed wire helpers
   universe.rs           branch, archive, inspect: machines as artifacts
   golden.rs             golden manifests: sha3-256, write/read (the seed of cella-libs)
   bin/cella-network.rs  the one CAP_NET_ADMIN holder (a real binary: file capability)
@@ -169,10 +175,10 @@ scripts/
   setup/install.sh      host setup: deps, forward rules, the binary to ~/.local/bin
   build/                kernel/busybox config fragments, the init of each rootfs,
                         kernel-config-check.sh
-  test/                 one script per system test: boot, thaw, net, demo,
+  test/                 one script per system test: boot, thaw, ping, demo,
                         device-state (the four acceptance gates), universe,
-                        multinet, gateway, nested-boot, inception, jail,
-                        seccomp, machine
+                        multinet, gateway, gateway-cli, ledger, nested-boot,
+                        inception, jail, seccomp, machine
   utils/count_lines.py  source-vs-tests line counting for `make lines`
 security/profiles/<cli>/  seccomp + SELinux placeholders per thin CLI (shakedown fills them)
 selinux/cella.te.example  policy sketch, reference only
@@ -184,8 +190,8 @@ TESTING.md              what each target verifies, and how to reproduce
 Line counts (`make lines`):
 
 ```
-SOURCE ONLY (src/, excluding inline #[cfg(test)])         9017
-SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)        10204
+SOURCE ONLY (src/, excluding inline #[cfg(test)])         9889
+SOURCE + ALL TESTS (inline #[cfg(test)] + tests/)        11213
 ```
 
 The count now carries the probes (they moved into src/bin at the

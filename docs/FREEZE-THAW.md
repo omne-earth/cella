@@ -66,7 +66,7 @@ sidecar thaws one time only.
 ```mermaid
 stateDiagram-v2
     [*] --> Running: boot (cella with a kernel, RAM maps ram.img)
-    Running --> Frozen: SIGUSR1, or a park under a closed valve<br/>(msync ram.img, write the sidecar, process exit)
+    Running --> Frozen: SIGUSR1, or a park under an open valve<br/>(msync ram.img, write the sidecar, process exit)
     Frozen --> Running: thaw (new process on the same state dir -- prefill, restore, delete the sidecar)
     Running --> [*]: guest shutdown
 ```
@@ -98,10 +98,10 @@ flowchart LR
 Two triggers reach the same freeze path:
 
 1. SIGUSR1 -- the freeze verb, from outside.
-2. A park under a closed valve -- the one-shot rule of the network
-   model (docs/NETWORK-MODEL.md): the run-loop pass completes, the
-   ledger flushes, and the machine stops before the guest runs
-   again.
+2. A park under an open valve -- the one-shot rule of the network
+   model (docs/NETWORK-MODEL.md): the membrane parks the egress
+   frame, the run-loop pass completes, the ledger flushes, and the
+   machine stops before the guest runs again.
 
 The sequence reads the TSC and the
 kvmclock as close together as possible, because the thaw writes them

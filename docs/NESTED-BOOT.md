@@ -87,10 +87,13 @@ each layer that it networks.
 | hybrid    | TAP + in-kernel IP | block device only  | + an ICMP reply from the outer guest |
 | www       | TAP + in-kernel IP | TAP + in-kernel IP | + an ICMP reply from the inner guest |
 
-In the www variant the inner cella creates its TAP inside the outer
-guest when it opens /dev/net/tun. The outer init gives the interface
-an address and pings the inner guest. The packet path is: outer init
--> tap0 -> inner cella virtio-net -> inner guest kernel -> back.
+In the www variant the inner machine is born closed, and the outer
+init is its engine: it opens the inner valve, pings, and the inner
+guest's echo reply parks and freezes the inner machine. The init
+releases the held operation, thaws, and pings again -- the ratchet
+turns one level down. The packet path is: outer init -> the
+in-guest tap -> inner cella virtio-net -> inner guest kernel ->
+back through the inner membrane, decided.
 
 - **SKIP**: the outer guest has no /dev/kvm (that host does not offer
   virtualization one layer deeper), no host /dev/kvm access, no

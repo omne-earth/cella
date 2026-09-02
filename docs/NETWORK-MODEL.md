@@ -45,6 +45,7 @@ cost (two VMMs per machine, at every depth) is accepted and paid.
 The chronicle is the machine's append-only record of what its
 operations did -- parked, released, lapsed, when and to where --
 written as history, never read back as truth.
+
 The membrane is a holder process inside the appliance guest --
 pure dataplane, no control agent. Its held state (parked
 operations, warm connections, buffered bytes) lives in the guest's
@@ -53,21 +54,32 @@ preserves the holds, and a thaw resumes them, the cryogenic
 principle doing the persistence. The sidecar carries no payload
 blocks; the ledger (below) is a chronicle, never the store.
 
-A closed valve does not hold-and-run: the first parked operation
-stops the machine. The VMM completes the TX batch in hand (every
-destination of the batch parks; the batch bounds the holds per
-instant, the ring size its ceiling), flushes the ledger, and
-freezes before the guest runs again -- park is freeze. Twins park
-and freeze identically, thus the ratchet is deterministic in the
-guest's frame; the adversarial spray cannot happen, because the
-sprayer is frozen after its first batch -- no operation cap
-exists, and none is needed. The valve itself ratchets one way:
-once a machine's chronicle exists, the valve is closed at every
-thaw, with no re-arm (the existence check is temporary-backend
-scaffolding; born-closed at create replaces it). The flow: park -> freeze -> the engine
-decides by id -> thaw applies the decisions in park order -> the
-answers land. An attended posture (park-and-run) is a possible
-future valve value, deliberately not built now.
+The valve has two postures, and no third: closed and open. A
+machine is born closed -- the coconut. Nothing goes in or out: no
+park, no ledger, no freeze. The machine runs dark, and its own
+calls fail at the tap. `cella gateway open` turns the tap into the
+membrane, never into a free flow: every egress frame -- an
+initiation or a reply, the echo reply included -- parks for a
+decision, and the first parked batch stops the machine. The VMM
+completes the TX batch in hand (the batch bounds the holds per
+instant, and the ring size is its ceiling), flushes the ledger,
+and freezes before the guest runs again: the park is the freeze.
+`close` returns the coconut and stops even the flows a decision
+allowed. The posture lives in the manifest, thus it survives stop,
+thaw, and restart; the verbs change it live through a Valve
+message. No unmanaged posture exists on any interface: the raw
+flag interface opens into the membrane like every other path.
+
+Nothing is inherited. A pass entry lives only in the running
+epoch; the rules evaluate atomically, from the canonical present,
+every time. A thaw starts a fresh epoch: traffic to a destination
+a past decision allowed parks again, and is decided again. Twins
+park and freeze identically, thus the ratchet is deterministic in
+the guest's frame. The adversarial spray cannot happen, because
+the sprayer freezes after its first batch: no operation cap
+exists, and none is needed. The flow: open -> park -> freeze ->
+the engine decides by id -> the thaw applies the decisions in park
+order -> the answers land.
 
 The membrane holds in both directions, for two different reasons:
 
@@ -77,9 +89,9 @@ The membrane holds in both directions, for two different reasons:
   frame; identifiers repeat across branched twins, thus the engine
   keys on machine name plus identifier -- branch demands a unique
   name, and the pair is unambiguous). A release delivers the
-  operation and installs the pass entry for its destination -- one
-  decision per new part of the world. A refusal answers the
-  machine cleanly, in-frame, instead of by timeout.
+  operation and installs the pass entry for its destination, for
+  the life of that epoch alone. A refusal answers the machine
+  cleanly, in-frame, instead of by timeout.
 - **Ingress waits for the frozen.** A machine may freeze while its
   appliance stands. The appliance keeps holding, decisions stay
   possible, and the answer waits at the membrane for delivery at
@@ -117,10 +129,11 @@ CAP_NET_ADMIN and the wiring verbs, nothing else):
   destination, age, frame count.
 - `release <id>` -- deliver one operation, and install its pass
   entry.
-- `open` / `close` -- the valve. Open forwards (a standing
-  release); close parks everything. Either way the frames pass
-  through the appliance: open opens the valve, it never removes
-  the pipe.
+- `refuse <id>` -- lapse one operation, with its why; the park
+  order advances.
+- `open` / `close` -- the valve. Closed is the coconut: nothing
+  goes in or out. Open is the membrane: egress parks for
+  decisions. No posture forwards freely.
 
 The ledger lives at `machines/<name>/network/ledger`: an
 append-only chronicle of operations (parked, released, lapsed,
@@ -154,8 +167,9 @@ engine's language since birth.
 
 There exists no cella machine whose frames reach a host tap
 without an appliance between -- only appliances touch pool taps --
-and the appliance's birth state is closed. The valve is a runtime
-verb on the appliance, never a property a machine is created with.
+and every machine is born closed. No posture forwards freely, no
+pass entry outlives its epoch, and no interface carries an
+unmanaged mode.
 
 ## The phases
 

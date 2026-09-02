@@ -10,7 +10,7 @@ Two tiers, split by whether they need `/dev/kvm`:
   walking, the freeze/thaw sidecar format, the installed BPF filter)
   rather than describing it.
 - **Needs real KVM + a kernel/rootfs** (`make smoke-boot` / `make smoke-thaw` /
-  `make smoke-net`): one target per feature that only exists once a guest can
+  `make smoke-ping`): one target per feature that only exists once a guest can
   actually run. These are the ones that touch the boot path (GDT, page
   tables, bzImage loading) that nothing else in this repo tests -- see
   the README's "What to check first."
@@ -39,7 +39,7 @@ make init          # once per host: deps, toolbox, tap0, goldens
 make golden        # the canonical goldens (no-op if init already did it)
 make smoke-boot    # boots a real kernel all the way to init
 make smoke-thaw    # boot -> freeze -> thaw -> verify
-make smoke-net     # best-effort ping over the TAP
+make smoke-ping    # the valve end to end: coconut, membrane, release, dark again
 ```
 
 Or all at once: `make smoke` (or `make test-all` for everything).
@@ -56,7 +56,9 @@ Or all at once: `make smoke` (or `make test-all` for everything).
 | `make smoke-thaw` | **yes** | full lifecycle: boot, `SIGUSR1` freeze, sidecar file exists with no leftover `.tmp`, re-invoking the same command line thaws instead of re-booting, `state` is gone afterward (one-shot enforcement) | `scripts/test/thaw.sh` |
 | `make smoke-ping` | **yes** | the valve end to end: a machine born closed answers nothing; open parks the guest's echo reply and the park is the freeze; a release answers the next ping; close darkens even the allowed flow | `scripts/test/ping.sh` |
 | `make smoke-device-state` | **yes** | the four device-state acceptance gates: the disk survives the thaw (rw root), the network survives the thaw, a parked egress request completes after the thaw, and the world-ratchet -- the verdict external, against real endpoints | `scripts/test/device-state.sh` |
-| `make smoke-multinet` | **yes** | a machine takes N taps: both nics present in the guest, the host pings eth0, a claimed tap of the list is refused again, and a freeze and thaw carry two net transports in the sidecar | `scripts/test/multinet.sh` |
+| `make smoke-multinet` | **yes** | a machine takes N taps: both nics present in the guest, the parked echo reply is decided and eth0 answers, a claimed tap of the list is refused again, and a freeze and thaw carry two net transports in the sidecar -- the new epoch decides its reply again | `scripts/test/multinet.sh` |
+| `make smoke-ledger` | **yes** | the chronicle end to end: one fetch parks as one operation with an id and both clocks, the operation survives a freeze and thaw as held, a release by id completes it with no phantom, and two operations release strictly in park order | `scripts/test/ledger.sh` |
+| `make smoke-gateway-cli` | **yes** | the gateway verbs: born closed asserted, open arms the membrane, show lists the hold, release by id prefix through the thaw, refuse lapses with its why, close darkens even the once-allowed, and a fresh epoch parks it again | `scripts/test/gateway-cli.sh` |
 | `make smoke-gateway` | **yes** | the appliance between an agent and the world: pair wiring (an addressless bridge and the host route), the agent reaches the host only through the appliance, and the pair freezes together (agent first) and thaws together (appliance first) with the world still reachable | `scripts/test/gateway.sh` |
 | `make smoke-universe` | **yes** | the universe family end to end: a frozen branch yields twins that thaw to the same instant, a rock refuses start/thaw/enter, the inspect appliance mounts the evidence at /rock (must read back, a write must fail loudly), the inspector dies on detach, the evidence stays byte-identical, and a branched rock stays a rock | `scripts/test/universe.sh` |
 | `make doctor` | no | the host facts (one line each, nonzero on FAIL) and every golden digest against its manifest | `cella doctor check` + `cella doctor verify` |

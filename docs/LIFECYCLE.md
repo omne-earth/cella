@@ -100,7 +100,7 @@ stateDiagram-v2
 | create  | Stages a named machine from the golden artifacts. No process starts | Rust only |
 | start   | Runs the machine. Detaches, writes the pid, signals readiness | Rust only |
 | stop    | Ends the machine as fast as possible, and clears the transients: ram.img, the pid file, the console socket, and any stale sidecar. An emergency maneuver: in-flight state is disposable, and the next start boots fresh from the disk | Rust only |
-| freeze  | Stops the machine and preserves the in-flight state: RAM, vCPU, clocks, devices, held operations. A machine with a closed valve also freezes itself on a park (docs/NETWORK-MODEL.md, one-shot). The next thaw resumes the same instant | Rust only |
+| freeze  | Stops the machine and preserves the in-flight state: RAM, vCPU, clocks, devices, held operations. A machine with an open valve also freezes itself on a park (docs/NETWORK-MODEL.md, one-shot). The next thaw resumes the same instant | Rust only |
 | thaw    | Resumes a frozen machine | Rust only |
 | enter   | Attaches the terminal to the serial console. An exit of the guest shell detaches | Rust only |
 | destroy | Deletes the machine and its artifacts, once and for all | Rust only |
@@ -110,7 +110,7 @@ stateDiagram-v2
 | doctor  | check: the host facts, one line each. fix: repairs what the uid can (the pool via cella-network, absent goldens via build), deletes nothing. verify: recomputes each golden digest against its manifest, and the recorded layer digests of a machine (verify <vm>) | Rust only |
 | probe   | The cryogenic diagnostics (cella-probe): wallclock, freeze-thaw-clock, sregs | Rust only |
 | network | The pool (cella-network): the one CAP_NET_ADMIN holder | file capability |
-| gateway | The membrane surface: show, release <id>, refuse <id>, open, close. A machine is born closed (the coconut); open arms the membrane, never a free flow | Rust only |
+| gateway | The membrane surface: show, release <id>, refuse <id>, open, close. A machine is born closed (the coconut: nothing in or out); open arms the membrane, never a free flow; no pass entry outlives its epoch | Rust only |
 
 The difference between stop and freeze is intent. Freeze preserves the
 in-flight reality of the guest, and time stays cryogenic across the
@@ -278,7 +278,8 @@ Status (2026-08-31): all five steps are done, and the restructure
 followed. The verbs run -- build (native, all six flavors, with
 manifests, and the input-staleness check), create, start, enter,
 freeze, thaw, stop, destroy, list, info, selftest, branch, archive,
-inspect, doctor, probe, and network -- and the make targets are
+inspect, doctor, gateway, probe, and network -- and the make
+targets are
 thin wrappers over them. The thin-CLI names exist as personas of
 the one binary (cella-machine, cella-universe, cella-build,
 cella-doctor, cella-vmm), with cella-network and cella-probe as

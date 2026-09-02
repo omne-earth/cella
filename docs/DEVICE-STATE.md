@@ -67,13 +67,14 @@ of docs/NETWORK-MODEL.md). The sidecar captures a clean parked
 state. Nothing ever freezes mid-operation, and the resumption is
 decide-then-deliver, not excavation.
 
-The polarity is default-hold, and the park is the freeze: the
-manager cannot know in advance which destination needs the world to
-grow, thus every egress frame to an undecided destination parks --
-and the first park stops the machine. The decision cost is
-amortized per destination: one park and one decision for each
-destination without a pass entry, an inline table match for every
-frame after it. Every policy lives outside the VMM.
+Under the open valve the polarity is default-hold, and the park is
+the freeze: the manager cannot know in advance which destination
+needs the world to grow, thus every egress frame to an undecided
+destination parks -- and the first park stops the machine. Within
+one epoch the decision cost is amortized per destination: one park
+and one decision for each destination without a pass entry, and an
+inline table match for every frame after it. A pass entry dies
+with its epoch, and every policy lives outside the VMM.
 
 ```mermaid
 sequenceDiagram
@@ -81,6 +82,7 @@ sequenceDiagram
     participant M as VMM (the membrane's seat today)
     participant L as ledger
     participant E as engine (the gates stand in)
+    E->>M: cella gateway open (the machine is born closed)
     G->>M: TX frame to an undecided destination
     M->>M: park (the operation gets its id, in the guest frame)
     M->>L: Parked (id, destination, both clocks)
@@ -96,6 +98,7 @@ sequenceDiagram
 The chronicle is the machine's append-only record of what its
 operations did -- parked, released, lapsed, when and to where --
 written as history, never read back as truth.
+
 The concrete surface, in order:
 
 1. A machine is born closed -- the coconut: nothing in or out, no
@@ -105,9 +108,9 @@ The concrete surface, in order:
 2. A park mints the operation id (v7-shaped, the guest frame in
    the timestamp bits), appends Parked to the chronicle at
    machines/<name>/network/ledger, and writes a report line.
-3. The pass completes, the ledger flushes, and the machine
-   freezes itself -- park is freeze. Held frames ride the sidecar;
-   the operation records ride the chronicle.
+3. The run-loop pass completes, the ledger flushes, and the
+   machine freezes itself -- the park is the freeze. Held frames
+   ride the sidecar; the operation records ride the chronicle.
 4. Decisions are framed proto messages in the verdict file, one
    per operation id, written by `cella gateway <vm> release|refuse
    <id>`. The thaw applies them strictly in park order: a release
@@ -181,9 +184,9 @@ target (`make device-state-ac1` .. `device-state-ac4`), and
 | Criterion | State |
 |---|---|
 | **AC1 -- the disk survives the thaw** | The sidecar (v7) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. |
-| **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, the transport restore covers virtio-net, and the gate pings the guest before the freeze and after the thaw. A missing tap fails at start; `setup net` recreates the pool by convention. |
-| **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, a signal turns the hold on, the sidecar carries the parked frames with their descriptor head indices, and the operations survive the thaw as held -- ids rebound through the ledger. A decision by id releases each one, in park order. The gate fetches a real www page: the fetch parks, the machine freezes, the engine decides while it sleeps, and the same request completes after the thaw. |
-| **AC4 -- the verdict is external** | Every egress frame parks under hold into an operation with an id, the park reports its destination, and the decisions come from outside, by id, applied in park order: release with allow installs a pass entry and the flow runs at full speed, or freeze, grow the world, decide, thaw. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. |
+| **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, and the transport restore covers virtio-net. The gate opens the valve, decides the guest's parked echo reply, pings, freezes, thaws, decides the reply of the new epoch, and pings again. A missing tap fails at start; `setup net` recreates the pool by convention. |
+| **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, the open verb arms the membrane, the sidecar carries the parked frames with their descriptor head indices, and the operations survive the thaw as held -- ids rebound through the ledger. A decision by id releases each one, in park order. The gate fetches a real www page: the fetch parks, the machine freezes, the engine decides while it sleeps, and the same request completes after the thaw. |
+| **AC4 -- the verdict is external** | Every egress frame parks under the open valve into an operation with an id, the park reports its destination, and the decisions come from outside, by id, applied in park order: a release with allow installs a pass entry for that epoch and the flow runs at full speed, or freeze, grow the world, decide, thaw. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. |
 
 The clock gates must not move: the transport restore adds host-time
 work outside the clock window, and the probes verify that nothing
@@ -196,7 +199,8 @@ world moves like a ratchet: each request for a missing part adds the
 part, and the world never moves backward. The sequence is demand
 paging applied to the world:
 
-1. The guest sends a request toward an endpoint that does not exist.
+1. The valve is open, and the guest sends a request toward an
+   endpoint that does not exist.
 2. The machine freezes itself at the egress moment -- the park is
    the freeze -- with the outbound frames in the sidecar and the
    operation in the chronicle.
@@ -216,9 +220,8 @@ VMM holds the request and the guest already considers it sent. The
 park precedes the freeze it triggers, thus the freeze itself stays
 ordinary. Which destination merits which decision lives outside the
 VMM and outside this document; the gate here proves the mechanism
-with a park, its self-freeze, a materialization, a decision by id,
-and a thaw driven by the test as
-the stand-in engine.
+with a park, its self-freeze, a materialization, a decision by
+id, and a thaw, driven by the test as the stand-in engine.
 
 ## Not in scope
 
