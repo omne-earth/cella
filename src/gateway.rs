@@ -123,17 +123,11 @@ fn running_pid(vm: &str) -> Option<i32> {
         .ok()
 }
 
-fn kick_or_wait(vm: &str) {
-    match running_pid(vm) {
-        Some(pid) => {
-            // SAFETY: the pid comes from the machine's own pid file.
-            unsafe { libc::kill(pid, libc::SIGWINCH) };
-            println!("cella: the decision applies now (the machine runs)");
-        }
-        None => {
-            println!("cella: the machine sleeps -- the decision applies at thaw, in park order");
-        }
-    }
+/// Decisions stage: the thaw edge alone applies them, in park
+/// order. Under one-shot a running machine froze at its first
+/// park, thus there is never a live delivery to kick.
+fn staged_note() {
+    println!("cella: the decision is staged -- it applies at the thaw, in park order");
 }
 
 fn append_decision(vm: &str, id: Vec<u8>, d: proto::decision::Decision) -> Result<(), String> {
@@ -195,7 +189,7 @@ pub fn release(vm: &str, prefix: &str) -> Result<(), String> {
         proto::decision::Decision::Release(proto::Release {}),
     )?;
     println!("cella: release {}", ledger::hex(&id));
-    kick_or_wait(vm);
+    staged_note();
     Ok(())
 }
 
@@ -210,7 +204,7 @@ pub fn refuse(vm: &str, prefix: &str, why: &str) -> Result<(), String> {
         }),
     )?;
     println!("cella: refuse {} ({why})", ledger::hex(&id));
-    kick_or_wait(vm);
+    staged_note();
     Ok(())
 }
 

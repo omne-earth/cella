@@ -1113,9 +1113,6 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     if m.attach != "none" {
         cmd.args(["--attach-ro", &m.attach]);
     }
-    if m.net != "none" {
-        cmd.args(["--valve", &m.valve]);
-    }
     cmd.args(["--mem-mb", &m.mem_mb.to_string()]);
     cmd.args(["--console", dir.join("console.sock").to_str().unwrap()]);
     cmd.args(["--cmdline", &cmdline_for(&m)]);

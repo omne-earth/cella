@@ -40,19 +40,14 @@ const ATTACH_MMIO_BASE: u64 = 0xd000_2000;
 const ATTACH_IRQ: u32 = 7;
 
 static FREEZE_REQUESTED: AtomicBool = AtomicBool::new(false);
-static HOLD_REQUESTED: AtomicBool = AtomicBool::new(false);
-static RELEASE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static VALVE_KICKED: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_sigusr1(_: libc::c_int) {
     FREEZE_REQUESTED.store(true, Ordering::SeqCst);
 }
 
-extern "C" fn on_sigusr2(_: libc::c_int) {
-    HOLD_REQUESTED.store(true, Ordering::SeqCst);
-}
-
 extern "C" fn on_sigwinch(_: libc::c_int) {
-    RELEASE_REQUESTED.store(true, Ordering::SeqCst);
+    VALVE_KICKED.store(true, Ordering::SeqCst);
 }
 
 // SIGIO from the TAP fd (see tap.rs). The handler's only job is to exist
@@ -69,10 +64,6 @@ struct Args {
     attach_ro: Option<PathBuf>,
     /// The taps, in order: eth0 is the first. --tap repeats.
     taps: Vec<String>,
-    /// The valve posture: closed or open (the
-    /// membrane). The raw flag interface defaults open -- managed,
-    /// like everything; the verbs pass the manifest's posture.
-    valve: devices::virtio::ValveState,
     mac: [u8; 6],
     kernel: Option<PathBuf>,
     cmdline: String,
@@ -86,7 +77,6 @@ fn parse_args() -> Args {
     let mut disk_ro = false;
     let mut attach_ro = None;
     let mut taps: Vec<String> = Vec::new();
-    let mut valve = devices::virtio::ValveState::Open;
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
     let mut console = None;
@@ -106,13 +96,6 @@ fn parse_args() -> Args {
             "--disk-ro" => disk_ro = true,
             "--attach-ro" => attach_ro = Some(PathBuf::from(next())),
             "--tap" => taps.push(next()),
-            "--valve" => {
-                valve = match next().as_str() {
-                    "closed" => devices::virtio::ValveState::Closed,
-                    "open" => devices::virtio::ValveState::Open,
-                    other => usage_error(&format!("unknown valve posture {other:?}")),
-                }
-            }
             "--mac" => mac = parse_mac(&next()),
             "--kernel" => kernel = Some(PathBuf::from(next())),
             "--console" => console = Some(PathBuf::from(next())),
@@ -135,7 +118,6 @@ fn parse_args() -> Args {
         disk_ro,
         attach_ro,
         taps,
-        valve,
         mac,
         kernel,
         cmdline,
@@ -623,8 +605,8 @@ fn main() {
             MMIO_LEN,
             MmioTransport::new(Box::new(net), irq_raiser.clone(), NET_IRQ + 2 * i as u32),
         ));
-        let last = mmio_devices.len() - 1;
-        mmio_devices[last].2.set_valve(args.valve);
+        // Born closed, always: no flag opens a valve. Only the
+        // gateway verb's Valve message does (see docs/NETWORK-MODEL.md).
         net_poll.push((mmio_devices.len() - 1, net_fd));
     }
 
@@ -845,16 +827,12 @@ fn run_loop(
     mem_size_bytes: u64,
 ) {
     loop {
-        if HOLD_REQUESTED.swap(false, Ordering::SeqCst) {
-            // The legacy signal: the membrane posture. The verbs
-            // set the valve through Valve messages instead.
-            for (_, _, t) in mmio_devices.iter_mut() {
-                t.set_valve(devices::virtio::ValveState::Open);
-            }
-            eprintln!("cella: valve open (the membrane)");
-        }
-        if RELEASE_REQUESTED.swap(false, Ordering::SeqCst) {
-            apply_verdicts(state_dir, mmio_devices, mem);
+        if VALVE_KICKED.swap(false, Ordering::SeqCst) {
+            // The live path carries valve edges alone. Decisions
+            // stage in the verdict file and the thaw edge applies
+            // them: under one-shot, a running machine froze at its
+            // first park, thus it never holds anything to deliver.
+            apply_valve_messages(state_dir, mmio_devices);
         }
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
             let device_states: Vec<_> = mmio_devices
@@ -1063,33 +1041,48 @@ fn poll_net_rx(
 /// appends to the file and sends SIGWINCH. Reapplying an
 /// already-seen decision is harmless: it names an id no longer at
 /// the front of any device's queue, and nothing happens for it.
+/// The valve edges of the verdict file, alone: the live path (a
+/// SIGWINCH against a running machine) carries postures and never
+/// decisions -- under one-shot a running machine holds nothing to
+/// deliver. The last posture stands.
+fn apply_valve_messages(
+    state_dir: &std::path::Path,
+    mmio_devices: &mut [(u64, u64, MmioTransport)],
+) {
+    let messages = ledger::read_all(&state_dir.join("verdict")).unwrap_or_default();
+    let mut posture = None;
+    for msg in &messages {
+        if let Some(proto::message::Body::Valve(v)) = &msg.body {
+            posture = Some(if v.v == proto::valve::V::Open as i32 {
+                devices::virtio::ValveState::Open
+            } else {
+                devices::virtio::ValveState::Closed
+            });
+        }
+    }
+    if let Some(state) = posture {
+        for (_, _, t) in mmio_devices.iter_mut() {
+            t.set_valve(state);
+        }
+        eprintln!("cella: valve {:?}", state);
+    }
+}
+
+/// The whole verdict file, at the thaw edge: the valve edges apply
+/// (the last posture stands), and the staged decisions apply in
+/// park order.
 fn apply_verdicts(
     state_dir: &std::path::Path,
     mmio_devices: &mut [(u64, u64, MmioTransport)],
     mem: &vm_memory::GuestMemoryMmap,
 ) {
+    apply_valve_messages(state_dir, mmio_devices);
     let messages = ledger::read_all(&state_dir.join("verdict")).unwrap_or_default();
     let mut decisions: std::collections::HashMap<Vec<u8>, proto::Decision> =
         std::collections::HashMap::new();
     for msg in &messages {
-        match &msg.body {
-            Some(proto::message::Body::Decision(d)) => {
-                decisions.insert(d.id.clone(), d.clone());
-            }
-            // The valve verbs write postures into the same file; the
-            // last one stands.
-            Some(proto::message::Body::Valve(v)) => {
-                let state = if v.v == proto::valve::V::Open as i32 {
-                    devices::virtio::ValveState::Open
-                } else {
-                    devices::virtio::ValveState::Closed
-                };
-                for (_, _, t) in mmio_devices.iter_mut() {
-                    t.set_valve(state);
-                }
-                eprintln!("cella: valve {:?}", state);
-            }
-            _ => {}
+        if let Some(proto::message::Body::Decision(d)) = &msg.body {
+            decisions.insert(d.id.clone(), d.clone());
         }
     }
     eprintln!(
@@ -1186,13 +1179,9 @@ fn install_sigusr1_handler() {
         // through it.
         sa.sa_flags = 0;
         libc::sigaction(libc::SIGUSR1, &sa, std::ptr::null_mut());
-        // SIGUSR2 turns the egress hold on, and SIGWINCH applies the
-        // verdict file (see docs/DEVICE-STATE.md).
-        let mut sa2: libc::sigaction = std::mem::zeroed();
-        sa2.sa_sigaction = on_sigusr2 as *const () as usize;
-        libc::sigemptyset(&mut sa2.sa_mask);
-        sa2.sa_flags = 0;
-        libc::sigaction(libc::SIGUSR2, &sa2, std::ptr::null_mut());
+        // SIGWINCH is the wire under the live valve edges (open
+        // and close against a running machine); decisions ride the
+        // verdict file and apply at the thaw.
         let mut sa3: libc::sigaction = std::mem::zeroed();
         sa3.sa_sigaction = on_sigwinch as *const () as usize;
         libc::sigemptyset(&mut sa3.sa_mask);
