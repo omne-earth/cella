@@ -82,6 +82,10 @@ fn resolve_id(book: &Book, prefix: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+fn is_incoming(op: &proto::Operation) -> bool {
+    op.direction == proto::operation::Direction::Incoming as i32
+}
+
 fn fmt_dest(op: &proto::Operation) -> String {
     match &op.destination {
         Some(d) => match ledger::Dest::from_message(d) {
@@ -123,11 +127,25 @@ fn running_pid(vm: &str) -> Option<i32> {
         .ok()
 }
 
-/// Decisions stage: the thaw edge alone applies them, in park
-/// order. Under one-shot a running machine froze at its first
-/// park, thus there is never a live delivery to kick.
-fn staged_note() {
-    println!("cella: the decision is staged -- it applies at the thaw, in park order");
+/// Each direction has one door and its own wire. An egress
+/// decision stages, and the thaw edge alone applies it (under
+/// one-shot a running machine froze at its first park and holds no
+/// egress). An incoming hold never freezes the machine, thus the
+/// ear's door is a live wire: the verb kicks a running machine and
+/// the mail moves now; a sleeping one applies at the thaw.
+fn decision_note(vm: &str, incoming: bool) {
+    if !incoming {
+        println!("cella: the decision is staged -- it applies at the thaw, in park order");
+        return;
+    }
+    match running_pid(vm) {
+        Some(pid) => {
+            // SAFETY: the pid comes from the machine's own pid file.
+            unsafe { libc::kill(pid, libc::SIGWINCH) };
+            println!("cella: the incoming decision applies now (the machine runs)");
+        }
+        None => println!("cella: the incoming decision applies at the thaw, in park order"),
+    }
 }
 
 fn append_decision(vm: &str, id: Vec<u8>, d: proto::decision::Decision) -> Result<(), String> {
@@ -140,20 +158,37 @@ fn append_decision(vm: &str, id: Vec<u8>, d: proto::decision::Decision) -> Resul
     ledger::append(&verdict_path(vm), &msg).map_err(|e| format!("writing the decision: {e}"))
 }
 
-pub fn show(vm: &str, all: bool) -> Result<(), String> {
+/// show renders the border's book. Bare show carries both
+/// directions with a DIRECTION and a neutral PEER column; a
+/// direction narrows it, and the column names the side honestly:
+/// DESTINATION for outgoing, SOURCE for incoming.
+pub fn show(vm: &str, all: bool, direction: Option<&str>) -> Result<(), String> {
     if !machine::machine_dir(vm).exists() {
         return Err(format!("no machine named {vm:?}"));
     }
     let book = read_book(vm)?;
-    println!(
-        "{:<34} {:<40} {:>6}  STATE",
-        "OPERATION", "DESTINATION", "AGE"
-    );
+    match direction {
+        None => println!(
+            "{:<34} {:<9} {:<40} {:>6}  STATE",
+            "OPERATION", "DIRECTION", "PEER", "AGE"
+        ),
+        Some("incoming") => println!("{:<34} {:<40} {:>6}  STATE", "OPERATION", "SOURCE", "AGE"),
+        _ => println!(
+            "{:<34} {:<40} {:>6}  STATE",
+            "OPERATION", "DESTINATION", "AGE"
+        ),
+    }
     let mut held = 0;
     for op in &book.parked {
         let open = is_open(&book, &op.id);
         if !open && !all {
             continue;
+        }
+        let incoming = is_incoming(op);
+        match direction {
+            Some("incoming") if !incoming => continue,
+            Some("outgoing") if incoming => continue,
+            _ => {}
         }
         let state = if open {
             held += 1;
@@ -166,13 +201,23 @@ pub fn show(vm: &str, all: bool) -> Result<(), String> {
                 .expect("resolved contains every non-open id");
             format!("{s} ({detail})")
         };
-        println!(
-            "{:<34} {:<40} {:>6}  {}",
-            ledger::hex(&op.id),
-            fmt_dest(op),
-            fmt_age(op.host_ns),
-            state
-        );
+        match direction {
+            None => println!(
+                "{:<34} {:<9} {:<40} {:>6}  {}",
+                ledger::hex(&op.id),
+                if incoming { "incoming" } else { "outgoing" },
+                fmt_dest(op),
+                fmt_age(op.host_ns),
+                state
+            ),
+            _ => println!(
+                "{:<34} {:<40} {:>6}  {}",
+                ledger::hex(&op.id),
+                fmt_dest(op),
+                fmt_age(op.host_ns),
+                state
+            ),
+        }
     }
     if held == 0 {
         println!("(no held operations)");
@@ -183,19 +228,32 @@ pub fn show(vm: &str, all: bool) -> Result<(), String> {
 pub fn release(vm: &str, prefix: &str) -> Result<(), String> {
     let book = read_book(vm)?;
     let id = resolve_id(&book, prefix)?;
+    let incoming = book
+        .parked
+        .iter()
+        .find(|op| op.id == id)
+        .map(is_incoming)
+        .unwrap_or(false);
     append_decision(
         vm,
         id.clone(),
         proto::decision::Decision::Release(proto::Release {}),
     )?;
-    println!("cella: release {}", ledger::hex(&id));
-    staged_note();
+    let dir = if incoming { "incoming" } else { "outgoing" };
+    println!("cella: release {} ({dir})", ledger::hex(&id));
+    decision_note(vm, incoming);
     Ok(())
 }
 
 pub fn refuse(vm: &str, prefix: &str, why: &str) -> Result<(), String> {
     let book = read_book(vm)?;
     let id = resolve_id(&book, prefix)?;
+    let incoming = book
+        .parked
+        .iter()
+        .find(|op| op.id == id)
+        .map(is_incoming)
+        .unwrap_or(false);
     append_decision(
         vm,
         id.clone(),
@@ -204,7 +262,7 @@ pub fn refuse(vm: &str, prefix: &str, why: &str) -> Result<(), String> {
         }),
     )?;
     println!("cella: refuse {} ({why})", ledger::hex(&id));
-    staged_note();
+    decision_note(vm, incoming);
     Ok(())
 }
 

@@ -58,7 +58,41 @@ pub struct Net {
     /// joins an existing operation emits no ledger event, and the
     /// park is the freeze for joins too (the one-shot rule).
     parked_flag: bool,
+    /// The inbound lane: frames the world pushed under an open
+    /// valve, held for a decision. An incoming hold never freezes
+    /// the machine -- the world's knock is not the resident's deed
+    /// -- and in the guest frame an undelivered packet is network
+    /// latency. Its own lane: park order advances per direction.
+    inbound: Vec<InboundOp>,
+    /// Bytes held across the inbound lane. Egress holds are bounded
+    /// by the ring and the freeze; ingress has neither bound, thus
+    /// the cap: beyond it, frames drop exactly as closed drops them
+    /// -- the protocols above retransmit -- and the counter counts.
+    inbound_bytes: usize,
+    inbound_dropped: u64,
+    /// Released incoming frames awaiting free RX descriptors, in
+    /// park order. A released operation that finds no posted buffer
+    /// stays here -- delivery is stillness until the guest offers a
+    /// descriptor, never a forced write.
+    deliver_queue: std::collections::VecDeque<Vec<u8>>,
 }
+
+/// One held ingress flow: the frames of every inbound frame that
+/// shares a source, grouped under one identifier -- the mirror of
+/// ParkedOp, named by the sender.
+struct InboundOp {
+    id: [u8; 16],
+    peer: Dest,
+    frames: Vec<Vec<u8>>,
+    /// True once the cap dropped a frame of this operation; the
+    /// first drop logs, the rest count.
+    dropped: bool,
+}
+
+/// The inbound lane's bounds. Beyond them the ear drops like the
+/// closed valve drops, and the counter records that it knocked.
+const MAX_INBOUND_OP_BYTES: usize = 256 * 1024;
+const MAX_INBOUND_TOTAL_BYTES: usize = 1024 * 1024;
 
 /// The name of one egress frame, at the most primitive level a
 /// frame has. An IPv4 frame refines to (ip, port, proto); every
@@ -93,6 +127,44 @@ fn frame_name(frame: &[u8]) -> Dest {
         };
         Some(Dest::Ipv4 {
             ip: dst,
+            port,
+            proto,
+        })
+    };
+    ipv4().unwrap_or_else(l2_name)
+}
+
+/// The name of one inbound frame: the sender, at the most
+/// primitive level. An IPv4 frame refines to (source ip, source
+/// port, proto); every other frame is named by its ethertype and
+/// source MAC. The frame starts with the 12-byte vnet header.
+fn frame_source_name(frame: &[u8]) -> Dest {
+    let l2_name = || {
+        let mut mac = [0u8; 6];
+        if let Some(b) = frame.get(18..24) {
+            mac.copy_from_slice(b);
+        }
+        let ethertype = frame
+            .get(24..26)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+            .unwrap_or(0);
+        Dest::L2 { ethertype, mac }
+    };
+    let ipv4 = || -> Option<Dest> {
+        let eth = frame.get(12..)?;
+        if eth.get(12..14)? != [0x08, 0x00] {
+            return None;
+        }
+        let ip = eth.get(14..)?;
+        let ihl = ((*ip.first()? & 0x0f) as usize) * 4;
+        let proto = *ip.get(9)?;
+        let src: [u8; 4] = ip.get(12..16)?.try_into().ok()?;
+        let port = match proto {
+            6 | 17 => u16::from_be_bytes(ip.get(ihl..ihl + 2)?.try_into().ok()?),
+            _ => 0,
+        };
+        Some(Dest::Ipv4 {
+            ip: src,
             port,
             proto,
         })
@@ -138,6 +210,10 @@ impl Net {
             guest_clock,
             pending_ledger: Vec::new(),
             parked_flag: false,
+            inbound: Vec::new(),
+            inbound_bytes: 0,
+            inbound_dropped: 0,
+            deliver_queue: std::collections::VecDeque::new(),
         })
     }
 
@@ -145,36 +221,22 @@ impl Net {
         self.tap.as_raw_fd()
     }
 
-    /// Drain as many pending TAP frames as there are free RX descriptors.
-    /// Called both on a guest QueueNotify(0) (new buffers posted) and
-    /// externally when the TAP fd becomes readable.
-    #[allow(clippy::while_let_loop)] // early-continue logic inside the loop body doesn't fit while-let cleanly
+    /// The RX pass. Released incoming frames deliver first, into
+    /// free descriptors, in park order; a frame that finds no
+    /// posted buffer stays queued -- stillness, never a forced
+    /// write. Then the TAP drains: under Closed every frame
+    /// discards; under Open every frame parks in the inbound lane
+    /// under its source's most primitive name -- the ear's customs.
+    /// No freeze: the world's knock is not the resident's deed.
+    /// Called on a guest QueueNotify(0), on the TAP turning
+    /// readable, and after an incoming decision applies.
     fn drain_rx(&mut self, mem: &GuestMemoryMmap, queue: &mut Queue) -> bool {
         let mut used_any = false;
-        let mut buf = vec![0u8; MAX_FRAME];
-        // Closed: nothing goes in. The TAP drains (the host must
-        // not see backpressure from a dark machine) and every frame
-        // discards; the guest's posted buffers stay posted.
-        if self.valve == ValveState::Closed {
-            while self.tap.read_frame(&mut buf).is_ok() {}
-            return false;
-        }
-        loop {
+        while let Some(frame) = self.deliver_queue.front() {
             let Some(mut chain) = queue.pop_descriptor_chain(mem) else {
                 break;
             };
-            let n = match self.tap.read_frame(&mut buf) {
-                Ok(n) => n,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    queue.go_to_previous_position();
-                    break;
-                }
-                Err(_) => {
-                    queue.go_to_previous_position();
-                    break;
-                }
-            };
-
+            let n = frame.len();
             let head_index = chain.head_index();
             let mut off = 0usize;
             for desc in chain.by_ref() {
@@ -182,15 +244,83 @@ impl Net {
                     break;
                 }
                 let take = (n - off).min(desc.len() as usize);
-                if mem.write_slice(&buf[off..off + take], desc.addr()).is_err() {
+                if mem
+                    .write_slice(&frame[off..off + take], desc.addr())
+                    .is_err()
+                {
                     break;
                 }
                 off += take;
             }
             let _ = queue.add_used(mem, head_index, n as u32);
             used_any = true;
+            self.deliver_queue.pop_front();
+        }
+        let mut buf = vec![0u8; MAX_FRAME];
+        loop {
+            let n = match self.tap.read_frame(&mut buf) {
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            match self.valve {
+                // Closed: nothing goes in. The TAP drains (the
+                // host must not see backpressure from a dark
+                // machine) and every frame discards.
+                ValveState::Closed => continue,
+                ValveState::Open => self.park_inbound(&buf[..n]),
+            }
         }
         used_any
+    }
+
+    /// Park one inbound frame in its lane: join the held operation
+    /// of its source, or mint a new one. The cap bounds the lane --
+    /// beyond it the frame drops as closed drops it, counted, the
+    /// first drop of each operation logged.
+    fn park_inbound(&mut self, frame: &[u8]) {
+        let peer = frame_source_name(frame);
+        if let Some(op) = self.inbound.iter_mut().find(|op| op.peer == peer) {
+            let op_bytes: usize = op.frames.iter().map(Vec::len).sum();
+            if op_bytes + frame.len() > MAX_INBOUND_OP_BYTES
+                || self.inbound_bytes + frame.len() > MAX_INBOUND_TOTAL_BYTES
+            {
+                self.inbound_dropped += 1;
+                if !op.dropped {
+                    op.dropped = true;
+                    eprintln!(
+                        "cella: inbound hold at its cap for {} -- dropping, the protocols retransmit",
+                        op.peer
+                    );
+                }
+                return;
+            }
+            self.inbound_bytes += frame.len();
+            op.frames.push(frame.to_vec());
+            return;
+        }
+        if self.inbound_bytes + frame.len() > MAX_INBOUND_TOTAL_BYTES {
+            self.inbound_dropped += 1;
+            return;
+        }
+        eprintln!("cella: parked ingress from {peer}");
+        let guest_ns = self.guest_clock.now_ns();
+        let id = ledger::uuid7(guest_ns);
+        self.pending_ledger.push(proto::Event {
+            event: Some(proto::event::Event::Parked(proto::Operation {
+                id: id.to_vec(),
+                destination: Some(peer.to_message()),
+                guest_ns,
+                host_ns: ledger::host_ns_now(),
+                direction: proto::operation::Direction::Incoming as i32,
+            })),
+        });
+        self.inbound_bytes += frame.len();
+        self.inbound.push(InboundOp {
+            id,
+            peer,
+            frames: vec![frame.to_vec()],
+            dropped: false,
+        });
     }
 
     #[allow(clippy::while_let_loop)] // early-continue logic inside the loop body doesn't fit while-let cleanly
@@ -271,6 +401,7 @@ impl Net {
                 destination: Some(dest.to_message()),
                 guest_ns,
                 host_ns: ledger::host_ns_now(),
+                direction: proto::operation::Direction::Outgoing as i32,
             })),
         });
         self.parked.push(ParkedOp {
@@ -361,6 +492,7 @@ impl VirtioDevice for Net {
                             destination: Some(dest.to_message()),
                             guest_ns,
                             host_ns: ledger::host_ns_now(),
+                            direction: proto::operation::Direction::Outgoing as i32,
                         })),
                     });
                     fresh
@@ -392,7 +524,123 @@ impl VirtioDevice for Net {
     }
 
     fn held_op_ids(&self) -> Vec<Vec<u8>> {
-        self.parked.iter().map(|op| op.id.to_vec()).collect()
+        self.parked
+            .iter()
+            .map(|op| op.id.to_vec())
+            .chain(self.inbound.iter().map(|op| op.id.to_vec()))
+            .collect()
+    }
+
+    fn held_ingress(&self) -> Vec<Vec<u8>> {
+        self.inbound
+            .iter()
+            .flat_map(|op| op.frames.clone())
+            .collect()
+    }
+
+    fn deliverable_ingress(&self) -> Vec<Vec<u8>> {
+        self.deliver_queue.iter().cloned().collect()
+    }
+
+    fn restore_ingress(
+        &mut self,
+        frames: Vec<Vec<u8>>,
+        deliverable: Vec<Vec<u8>>,
+        open: &[OpenOperation],
+    ) {
+        // The mirror of restore_held, for the inbound lane: each
+        // restored frame rejoins its operation by its source's
+        // primitive name, and the matcher never guesses -- zero or
+        // many candidates re-mint fresh, and the frames stay held.
+        let mut rebuilt: Vec<InboundOp> = Vec::new();
+        let mut bytes = 0usize;
+        for frame in frames {
+            let peer = frame_source_name(&frame);
+            bytes += frame.len();
+            if let Some(existing) = rebuilt.iter_mut().find(|op| op.peer == peer) {
+                existing.frames.push(frame);
+                continue;
+            }
+            let id = match match_open(open, &peer) {
+                Some(op) => id_array(&op.id),
+                None => {
+                    let guest_ns = self.guest_clock.now_ns();
+                    let fresh = ledger::uuid7(guest_ns);
+                    eprintln!(
+                        "cella: no unambiguous open ingress operation at thaw for \
+                         {peer}, minted {}",
+                        ledger::hex(&fresh)
+                    );
+                    self.pending_ledger.push(proto::Event {
+                        event: Some(proto::event::Event::Parked(proto::Operation {
+                            id: fresh.to_vec(),
+                            destination: Some(peer.to_message()),
+                            guest_ns,
+                            host_ns: ledger::host_ns_now(),
+                            direction: proto::operation::Direction::Incoming as i32,
+                        })),
+                    });
+                    fresh
+                }
+            };
+            rebuilt.push(InboundOp {
+                id,
+                peer,
+                frames: vec![frame],
+                dropped: false,
+            });
+        }
+        self.inbound = rebuilt;
+        self.inbound_bytes = bytes;
+        self.deliver_queue = deliverable.into();
+    }
+
+    fn resolve_ingress(&mut self, decisions: &HashMap<Vec<u8>, proto::Decision>) -> bool {
+        // The inbound lane's apply: its own park order, front
+        // first, independent of the egress lane -- an undecided
+        // egress must not block the mail, and undecided mail must
+        // not block the thaw. A release moves the frames to the
+        // deliver queue (free descriptors permitting -- see
+        // drain_rx); a refusal drops them silently, in-frame
+        // nothing arrived. Fail-closed: an undecided front stops
+        // the lane, and nothing pops on failure.
+        let mut moved = false;
+        while let Some(front) = self.inbound.first() {
+            let Some(decision) = decisions.get(front.id.as_slice()) else {
+                break;
+            };
+            let op = self.inbound.remove(0);
+            let op_bytes: usize = op.frames.iter().map(Vec::len).sum();
+            self.inbound_bytes = self.inbound_bytes.saturating_sub(op_bytes);
+            match &decision.decision {
+                Some(proto::decision::Decision::Release(_)) => {
+                    self.pending_ledger.push(proto::Event {
+                        event: Some(proto::event::Event::Released(proto::Released {
+                            id: op.id.to_vec(),
+                            first_response_ns: 0,
+                            bytes_in: op_bytes as u64,
+                            bytes_out: 0,
+                        })),
+                    });
+                    self.deliver_queue.extend(op.frames);
+                    moved = true;
+                }
+                Some(proto::decision::Decision::Refusal(refusal)) => {
+                    self.pending_ledger.push(proto::Event {
+                        event: Some(proto::event::Event::Lapsed(proto::Lapsed {
+                            id: op.id.to_vec(),
+                            why: refusal.why.clone(),
+                        })),
+                    });
+                    // The frames die unseen: no descriptor was
+                    // ever posted for them, thus nothing completes
+                    // and nothing wedges -- in the guest frame the
+                    // packet simply never arrived.
+                }
+                None => {}
+            }
+        }
+        moved
     }
 
     fn resolve_decisions(
@@ -455,6 +703,7 @@ mod tests {
             id: vec![id; 16],
             dest,
             guest_ns: 0,
+            incoming: false,
         }
     }
 
@@ -487,6 +736,56 @@ mod tests {
         assert!(match_open(&open, &WWW).is_none());
         let none: Vec<OpenOperation> = Vec::new();
         assert!(match_open(&none, &WWW).is_none());
+    }
+
+    /// The inbound name is the sender's: source MAC for the L2
+    /// shape, source ip and port for IPv4 -- the mirror of the
+    /// egress name, thus one frame carries two names and each lane
+    /// reads its own side.
+    #[test]
+    fn the_inbound_name_is_the_senders() {
+        // 12B vnet header, dst MAC, src MAC, ethertype 0x0800,
+        // then an IPv4 header: src 192.168.200.1, dst .2, UDP
+        // sport 9053, dport 68.
+        let mut f = vec![0u8; 12];
+        f.extend_from_slice(&[0x02; 6]); // dst MAC
+        f.extend_from_slice(&[0xaa; 6]); // src MAC
+        f.extend_from_slice(&[0x08, 0x00]);
+        let mut ip = vec![0x45, 0, 0, 0, 0, 0, 0, 0, 64, 17, 0, 0];
+        ip.extend_from_slice(&[192, 168, 200, 1]); // src
+        ip.extend_from_slice(&[192, 168, 200, 2]); // dst
+        ip.extend_from_slice(&9053u16.to_be_bytes()); // sport
+        ip.extend_from_slice(&68u16.to_be_bytes()); // dport
+        f.extend_from_slice(&ip);
+        assert_eq!(
+            frame_source_name(&f),
+            Dest::Ipv4 {
+                ip: [192, 168, 200, 1],
+                port: 9053,
+                proto: 17
+            }
+        );
+        assert_eq!(
+            frame_name(&f),
+            Dest::Ipv4 {
+                ip: [192, 168, 200, 2],
+                port: 68,
+                proto: 17
+            }
+        );
+        // An ARP frame names inbound by its source MAC.
+        let mut arp = vec![0u8; 12];
+        arp.extend_from_slice(&[0xff; 6]);
+        arp.extend_from_slice(&[0xbb; 6]);
+        arp.extend_from_slice(&[0x08, 0x06]);
+        arp.extend_from_slice(&[0u8; 28]);
+        assert_eq!(
+            frame_source_name(&arp),
+            Dest::L2 {
+                ethertype: 0x0806,
+                mac: [0xbb; 6]
+            }
+        );
     }
 
     /// Every frame gets a name: IPv4 refines, ARP and IPv6 name at

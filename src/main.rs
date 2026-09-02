@@ -250,13 +250,20 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
         },
         "selftest" => machine::selftest(),
         "gateway" => {
-            let usage = "usage: cella gateway <vm> <show [--all] | release <id> | refuse <id> [--why TEXT] | open | close>";
+            let usage = "usage: cella gateway <vm> <show [incoming|outgoing] [--all] | release <id> | refuse <id> [--why TEXT] | open | close>";
             let (Some(vm), Some(verb)) = (args.first(), args.get(1)) else {
                 usage_error(usage)
             };
             let rest = &args[2..];
             match verb.as_str() {
-                "show" => gateway::show(vm, rest.first().map(|s| s.as_str()) == Some("--all")),
+                "show" => {
+                    let all = rest.iter().any(|s| s == "--all");
+                    let dir = rest
+                        .iter()
+                        .find(|s| *s == "incoming" || *s == "outgoing")
+                        .map(|s| s.as_str());
+                    gateway::show(vm, all, dir)
+                }
                 "release" => match rest {
                     [id] => gateway::release(vm, id),
                     _ => usage_error(usage),
@@ -847,11 +854,16 @@ fn run_loop(
 ) {
     loop {
         if VALVE_KICKED.swap(false, Ordering::SeqCst) {
-            // The live path carries valve edges alone. Decisions
-            // stage in the verdict file and the thaw edge applies
-            // them: under one-shot, a running machine froze at its
-            // first park, thus it never holds anything to deliver.
+            // The live path carries the valve edges and the
+            // inbound lane. Egress decisions stage and the thaw
+            // edge alone applies them (under one-shot a running
+            // machine froze at its first park and holds no egress
+            // to deliver) -- but an incoming hold never freezes,
+            // thus the ear's door is a live wire: each direction
+            // has one door and its own wire (docs/FREEZE-THAW.md,
+            // "The two automata").
             apply_valve_record(state_dir, mmio_devices);
+            apply_ingress_verdicts(state_dir, mmio_devices, mem);
         }
         if FREEZE_REQUESTED.load(Ordering::SeqCst) {
             let device_states: Vec<_> = mmio_devices
@@ -1085,6 +1097,31 @@ fn apply_valve_record(state_dir: &std::path::Path, mmio_devices: &mut [(u64, u64
     eprintln!("cella: valve {:?}", state);
 }
 
+/// The inbound lane's decisions, applied live: a running machine
+/// can hold mail (an incoming hold never freezes it), thus the
+/// gateway verbs kick this path. Egress decisions in the same file
+/// stay staged -- the egress lane pops only at the thaw edge.
+fn apply_ingress_verdicts(
+    state_dir: &std::path::Path,
+    mmio_devices: &mut [(u64, u64, MmioTransport)],
+    mem: &vm_memory::GuestMemoryMmap,
+) {
+    let messages = ledger::read_all(&state_dir.join("verdict")).unwrap_or_default();
+    let mut decisions: std::collections::HashMap<Vec<u8>, proto::Decision> =
+        std::collections::HashMap::new();
+    for msg in &messages {
+        if let Some(proto::message::Body::Decision(d)) = &msg.body {
+            decisions.insert(d.id.clone(), d.clone());
+        }
+    }
+    if decisions.is_empty() {
+        return;
+    }
+    for (_, _, t) in mmio_devices.iter_mut() {
+        t.apply_ingress_decisions(&decisions, mem);
+    }
+}
+
 /// The staged decisions of the verdict file, at the thaw edge: they
 /// apply in park order.
 fn apply_verdicts(
@@ -1106,6 +1143,7 @@ fn apply_verdicts(
     );
     for (_, _, t) in mmio_devices.iter_mut() {
         t.apply_decisions(&decisions, mem);
+        t.apply_ingress_decisions(&decisions, mem);
     }
     // The bookkeeping lapse: a refusal whose id is open in the
     // chronicle but held by no device closes the book and touches
@@ -1508,8 +1546,13 @@ fn dump_ledger(path: &PathBuf) -> ! {
                         l2 => format!("l2={l2}"),
                     })
                     .unwrap_or_default();
+                let dir = if op.direction == proto::operation::Direction::Incoming as i32 {
+                    "incoming"
+                } else {
+                    "outgoing"
+                };
                 println!(
-                    "parked id={} {dest} guest_ns={} host_ns={}",
+                    "parked id={} dir={dir} {dest} guest_ns={} host_ns={}",
                     ledger::hex(&op.id),
                     op.guest_ns,
                     op.host_ns

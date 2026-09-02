@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# smoke-ping: the valve, end to end, under the total membrane. A
-# machine is born closed: a host ping fails, and nothing freezes.
-# Open turns the tap into the membrane: every egress frame parks --
-# the guest's ARP reply first, then its echo reply -- and each park
-# is a freeze. The pump (the stand-in engine) releases and thaws,
-# one decision per operation, and a reply lands inside the ping's
-# own wait window. Close returns the dark; a reopened valve
-# remembers nothing. See docs/NETWORK-MODEL.md and
-# docs/FREEZE-THAW.md, "The two automata".
+# smoke-ping: the valve, end to end, under the total membrane with
+# the ear's customs. A machine is born closed: a host ping fails,
+# and nothing freezes. Open arms both directions: the host's echo
+# request parks in the inbound lane -- and the machine keeps
+# running, because the world's knock is not the resident's deed.
+# Its release moves live (the ear's wire needs no thaw); the
+# guest's reply then parks in the egress lane, and that park is the
+# freeze. The pump decides both lanes, and a reply lands inside the
+# ping's own wait window. Close returns the dark; a reopened valve
+# remembers nothing, in either direction. See docs/NETWORK-MODEL.md
+# and docs/FREEZE-THAW.md, "The two automata".
 set -uo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -55,6 +57,12 @@ pump_while() { # pid
     # unsolicited (arp_accept=0), thus the cadence stays tight.
     local cycles=0
     while kill -0 "$1" 2>/dev/null; do
+        # The ear's live wire: mail moves without a thaw. Against a
+        # frozen machine the release stages and the next thaw
+        # applies it.
+        for id in $("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+            "$BIN" gateway "$VM" release "$id" >/dev/null
+        done
         if [ -f "$STATE" ]; then
             pid=$(cat "$M/pid" 2>/dev/null || true)
             [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { sleep 0.2; continue; }
@@ -104,18 +112,26 @@ say "step 1c: a valve verb works against a frozen machine (positive)"
 "$BIN" thaw "$VM" >/dev/null
 sleep 2
 
-say "step 2: open -- every egress parks, and the park is the freeze"
+say "step 2: open -- the knock parks in the inbound lane, and the machine keeps running"
 "$BIN" gateway "$VM" open >/dev/null
 sleep 1
 # Three requests, not one: the live kick applies on the next
 # run-loop pass, and a request that races it meets the closed
 # drain and parks nothing.
 ping -c 3 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
-wait_frozen || { echo "FAIL: the parked egress did not freeze the machine"; exit 1; }
-SHOW=$("$BIN" gateway "$VM" show)
+[ -f "$STATE" ] && { echo "FAIL: the machine froze on inbound -- the world's knock is not the resident's deed"; exit 1; }
+SHOW=$("$BIN" gateway "$VM" show incoming)
 echo "$SHOW" | sed "s/^/  /"
-echo "$SHOW" | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show lists nothing held"; exit 1; }
-echo "  the guest's first egress is held; the machine froze itself"
+echo "$SHOW" | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show incoming lists no held knock"; exit 1; }
+"$BIN" gateway "$VM" show outgoing | grep -qE "^[0-9a-f]{32} .*held$" && { echo "FAIL: the knock leaked into the egress lane"; exit 1; }
+echo "  the knock is held incoming; no freeze, and the lanes are separate"
+
+say "step 2b: the released knock reaches the guest; the reply parks, and that park is the freeze"
+ID_K=$("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p' | head -1)
+"$BIN" gateway "$VM" release "$ID_K" | grep -q "applies now" || { echo "FAIL: the incoming release did not apply live"; exit 1; }
+wait_frozen || { echo "FAIL: the guest's reply did not park and freeze"; exit 1; }
+"$BIN" gateway "$VM" show outgoing | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show outgoing lists no held reply"; exit 1; }
+echo "  mail moved live; the resident's own deed froze the machine"
 
 say "step 3: the engine decides, and a reply lands inside the ping's window"
 ping -c 20 -i 1 -W 25 "$GUEST_IP" >/dev/null 2>&1 &
@@ -134,12 +150,13 @@ ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a closed machine ans
 [ "$(cat "$M/valve")" = "closed" ] || { echo "FAIL: the valve record did not close"; exit 1; }
 echo "  dark: close blocks even the previously decided path"
 
-say "step 5: reopened, the valve remembers nothing (negative)"
+say "step 5: reopened, the valve remembers nothing, in either direction (negative)"
 "$BIN" gateway "$VM" open >/dev/null
 sleep 1
-ping -c 1 -W 3 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a reopened machine answered without a fresh decision"; exit 1; }
-wait_frozen || { echo "FAIL: the reopened machine did not park and freeze"; exit 1; }
-echo "  reopened: the first egress parked and froze -- nothing was inherited"
+ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a reopened machine answered without a fresh decision"; exit 1; }
+[ -f "$STATE" ] && { echo "FAIL: a reopened machine froze on inbound"; exit 1; }
+"$BIN" gateway "$VM" show incoming | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: the reopened knock did not park afresh"; exit 1; }
+echo "  reopened: the knock parked afresh, undelivered -- nothing was inherited"
 
 echo
 echo "PASS: fail, freeze, decide, reply, fail, remember nothing -- the valve holds"

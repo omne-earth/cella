@@ -67,6 +67,12 @@ pub struct TransportState {
     /// Parked egress frames: the descriptor head index, and the frame
     /// bytes (vnet header included).
     pub held_frames: Vec<(u16, Vec<u8>)>,
+    /// The inbound lane's held frames (undecided), and the judged
+    /// frames still awaiting free RX descriptors. Frames alone: at
+    /// thaw the ids rebind through the chronicle by the never-guess
+    /// matcher, like the egress lane's.
+    pub ingress_held: Vec<Vec<u8>>,
+    pub ingress_deliverable: Vec<Vec<u8>>,
 }
 
 pub struct MmioTransport {
@@ -274,6 +280,8 @@ impl MmioTransport {
                 })
                 .collect(),
             held_frames: self.device.held_frames(),
+            ingress_held: self.device.held_ingress(),
+            ingress_deliverable: self.device.deliverable_ingress(),
         }
     }
 
@@ -309,7 +317,16 @@ impl MmioTransport {
             q.set_next_used(qs.next_used);
             q.set_ready(qs.ready);
         }
-        self.device.restore_held(st.held_frames.clone(), open_ops);
+        let outgoing: Vec<crate::ledger::OpenOperation> =
+            open_ops.iter().filter(|o| !o.incoming).cloned().collect();
+        let incoming: Vec<crate::ledger::OpenOperation> =
+            open_ops.iter().filter(|o| o.incoming).cloned().collect();
+        self.device.restore_held(st.held_frames.clone(), &outgoing);
+        self.device.restore_ingress(
+            st.ingress_held.clone(),
+            st.ingress_deliverable.clone(),
+            &incoming,
+        );
     }
 
     /// Set the valve posture (see docs/NETWORK-MODEL.md).
@@ -331,6 +348,26 @@ impl MmioTransport {
     /// The ids of the operations the device holds.
     pub fn held_op_ids(&self) -> Vec<Vec<u8>> {
         self.device.held_op_ids()
+    }
+
+    /// The held inbound frames and the judged-but-undelivered
+    /// ones, for the sidecar's ingress blocks.
+    pub fn held_ingress(&self) -> Vec<Vec<u8>> {
+        self.device.held_ingress()
+    }
+    pub fn deliverable_ingress(&self) -> Vec<Vec<u8>> {
+        self.device.deliverable_ingress()
+    }
+
+    /// Rebind restored inbound frames and the deliver queue, at
+    /// the thaw (the never-guess matcher, the incoming lane).
+    pub fn restore_ingress(
+        &mut self,
+        frames: Vec<Vec<u8>>,
+        deliverable: Vec<Vec<u8>>,
+        open: &[crate::ledger::OpenOperation],
+    ) {
+        self.device.restore_ingress(frames, deliverable, open);
     }
 
     /// Apply a decision map to the device's held operations, oldest-
@@ -369,6 +406,28 @@ impl MmioTransport {
         }
         self.isr |= 0x1;
         self.irq_raiser.pulse(self.irq);
+    }
+
+    /// Apply the inbound lane's decisions: releases move frames to
+    /// the deliver queue, and the RX pass hands them to free
+    /// descriptors -- what finds no buffer stays queued. The ear's
+    /// own door: it writes the guest's RX ring, never the TAP.
+    pub fn apply_ingress_decisions(
+        &mut self,
+        decisions: &std::collections::HashMap<Vec<u8>, crate::proto::Decision>,
+        mem: &GuestMemoryMmap,
+    ) {
+        if !self.device.resolve_ingress(decisions) {
+            return;
+        }
+        let qidx = self.device.ingress_queue() as usize;
+        let Some(queue) = self.queues.get_mut(qidx) else {
+            return;
+        };
+        if self.device.process_queue(qidx as u16, mem, queue) {
+            self.isr |= 0x1;
+            self.irq_raiser.pulse(self.irq);
+        }
     }
 
     /// Re-poll every queue for available work without a guest notification

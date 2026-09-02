@@ -96,10 +96,43 @@ pub trait VirtioDevice: Send {
     fn take_parked_flag(&mut self) -> bool {
         false
     }
-    /// The ids of the operations this device holds, for the
-    /// bookkeeping lapse at the thaw edge (see main::apply_verdicts).
+    /// The ids of the operations this device holds, both lanes,
+    /// for the bookkeeping lapse at the thaw edge (see
+    /// main::apply_verdicts).
     fn held_op_ids(&self) -> Vec<Vec<u8>> {
         Vec::new()
+    }
+    /// The held inbound frames, for the sidecar's ingress block.
+    fn held_ingress(&self) -> Vec<Vec<u8>> {
+        Vec::new()
+    }
+    /// Released inbound frames still awaiting free RX descriptors,
+    /// for the sidecar: judged, not yet delivered.
+    fn deliverable_ingress(&self) -> Vec<Vec<u8>> {
+        Vec::new()
+    }
+    /// Rebind restored inbound frames to the open incoming
+    /// operations, by the never-guess matcher, and restore the
+    /// deliver queue. The default is inert.
+    fn restore_ingress(
+        &mut self,
+        _frames: Vec<Vec<u8>>,
+        _deliverable: Vec<Vec<u8>>,
+        _open: &[crate::ledger::OpenOperation],
+    ) {
+    }
+    /// Apply the inbound lane's decisions, front first, its own
+    /// park order. True when a release moved frames toward the
+    /// guest. The default is inert.
+    fn resolve_ingress(
+        &mut self,
+        _decisions: &std::collections::HashMap<Vec<u8>, crate::proto::Decision>,
+    ) -> bool {
+        false
+    }
+    /// The RX queue's index, for the ingress delivery pass.
+    fn ingress_queue(&self) -> u16 {
+        0
     }
     /// Resolve every operation that a decision map lets resolve
     /// right now, oldest-parked first, and return the frames a

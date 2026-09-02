@@ -31,13 +31,15 @@ const MAGIC: &[u8; 8] = b"MVMMFRZ1";
 // device registers. Version 7 added the virtio transport blocks and
 // the held egress frames (see docs/DEVICE-STATE.md). Version 8 added
 // the nested-state block: a guest can run KVM itself, and the inner
-// VM's entry state lives in the host kernel. Each of these
+// VM's entry state lives in the host kernel. Version 9 added the
+// ingress blocks per transport: the inbound lane's held frames and
+// the judged frames awaiting free RX descriptors. Each of these
 // changes moves all data that comes after it in the file. Therefore a
 // binary must not read a sidecar that has a different version.
 // read_state compares the version and refuses the file if it does not
 // agree. No sidecar files exist at an older version, but this check is
 // what makes that assumption safe.
-const FORMAT_VERSION: u32 = 8;
+const FORMAT_VERSION: u32 = 9;
 
 pub struct FrozenState {
     pub mem_size: u64,
@@ -205,6 +207,13 @@ fn write_devices(f: &mut impl Write, devices: &[TransportState]) -> Result<(), E
             f.write_all(&(frame.len() as u32).to_le_bytes())?;
             f.write_all(frame)?;
         }
+        for lane in [&d.ingress_held, &d.ingress_deliverable] {
+            f.write_all(&(lane.len() as u32).to_le_bytes())?;
+            for frame in lane {
+                f.write_all(&(frame.len() as u32).to_le_bytes())?;
+                f.write_all(frame)?;
+            }
+        }
     }
     Ok(())
 }
@@ -303,6 +312,15 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
             let len = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
             held_frames.push((head, take(len)?.to_vec()));
         }
+        let mut lanes: [Vec<Vec<u8>>; 2] = [Vec::new(), Vec::new()];
+        for lane in &mut lanes {
+            let n = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+            for _ in 0..n {
+                let len = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+                lane.push(take(len)?.to_vec());
+            }
+        }
+        let [ingress_held, ingress_deliverable] = lanes;
         devices.push(TransportState {
             status,
             queue_sel,
@@ -310,6 +328,8 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
             driver_features,
             queues,
             held_frames,
+            ingress_held,
+            ingress_deliverable,
         });
     }
 
@@ -424,6 +444,8 @@ mod tests {
                 next_used: 17,
             }],
             held_frames: vec![(3, vec![0xaa; 60]), (9, vec![0x55; 1514])],
+            ingress_held: vec![vec![0x11; 90]],
+            ingress_deliverable: vec![vec![0x22; 128]],
         }]
     }
 

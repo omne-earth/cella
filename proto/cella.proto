@@ -19,8 +19,9 @@ message Message {
 // The version handshake: two ends agree on the language before
 // anything else crosses. Version 2: releases carry no allow --
 // field 1 of Release and field 5 of Released are retired, and a
-// release delivers one named operation, once. Two ends can never
-// disagree about whether releases carry allows.
+// release delivers one named operation, once. Version 3: the
+// Operation carries its direction -- the border judges both ways,
+// and the chronicle records which way each crossing faced.
 message Accord {
   uint32 version = 1;
 }
@@ -52,10 +53,18 @@ message Destination {
 // ride along -- guest_ns is the T of the timeline rewrite,
 // host_ns serves the ledger math.
 message Operation {
+  // Which way the crossing faces. OUTGOING names the peer by the
+  // frame's destination; INCOMING names it by the frame's source.
+  // Old entries decode as OUTGOING, which is what they were.
+  enum Direction {
+    OUTGOING = 0;
+    INCOMING = 1;
+  }
   bytes id = 1;
   Destination destination = 2;
   uint64 guest_ns = 3;
   uint64 host_ns = 4;
+  Direction direction = 5;
 }
 
 // A ledger entry: the chronicle of one operation's life.

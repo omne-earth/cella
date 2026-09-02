@@ -7,9 +7,10 @@ include!(concat!(env!("OUT_DIR"), "/cella.rs"));
 
 use prost::Message as _;
 
-/// The Accord version this binary speaks. Version 2: releases
-/// carry no allow (proto/cella.proto, the Accord comment).
-pub const ACCORD_VERSION: u32 = 2;
+/// The Accord version this binary speaks. Version 3: the
+/// Operation carries its direction (proto/cella.proto, the Accord
+/// comment).
+pub const ACCORD_VERSION: u32 = 3;
 
 /// Frame one Message for the wire: a varint length, then the bytes
 /// (the standard length-delimited protobuf form).
@@ -51,6 +52,7 @@ mod tests {
             }),
             guest_ns: 1_000_000_007,
             host_ns: 9_000_000_001,
+            direction: 0,
         }
     }
 

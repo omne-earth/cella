@@ -177,10 +177,14 @@ pub fn hex(bytes: &[u8]) -> String {
 /// thaw (see docs/NETWORK-MODEL.md, "Egress parks for decisions")
 /// so a restored frame rejoins the id it parked under, instead of
 /// a freeze minting a phantom the book never named.
+#[derive(Clone)]
 pub struct OpenOperation {
     pub id: Vec<u8>,
     pub dest: Dest,
     pub guest_ns: u64,
+    /// Which way the crossing faces: the lanes are separate, and
+    /// the never-guess matcher must never match across them.
+    pub incoming: bool,
 }
 
 /// The still-open operations of one ledger: every Parked whose id
@@ -211,6 +215,7 @@ pub fn open_operations(path: &Path) -> std::io::Result<Vec<OpenOperation>> {
                     id: op.id.clone(),
                     dest: Dest::from_message(&d),
                     guest_ns: op.guest_ns,
+                    incoming: op.direction == proto::operation::Direction::Incoming as i32,
                 });
             }
             None => {}
@@ -296,6 +301,7 @@ mod tests {
             }),
             guest_ns: 111,
             host_ns: 222,
+            direction: 0,
         };
         let msg = event_message(Event {
             event: Some(proto::event::Event::Parked(op.clone())),
@@ -330,6 +336,7 @@ mod tests {
                     }),
                     guest_ns,
                     host_ns: 0,
+                    direction: 0,
                 },
             )),
         })
