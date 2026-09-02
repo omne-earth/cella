@@ -347,6 +347,45 @@ requires a decision, nothing stands, and the mouth closes.
       anything else kills the process. SELinux goes ENFORCING the
       moment the shakedown completes, every host, no
       permissive-forever dev exception.
+      The lanes, one subtask each -- authorship parallelizes in
+      isolated worktrees, the batteries serialize at each merge,
+      the reviewer merges one lane at a time:
+      - [ ] 1.6.14a Identity and the jail, one fused lane (the
+            subuid mapping lives inside the bwrap invocation --
+            the same edit surface). Each machine runs as its own
+            sub-user; the spawn maps it; the bwrap profile goes
+            per persona (jail.sh, security/profiles/, the spawn
+            in cella-libs). Lane gate: a cross-machine file touch
+            fails by uid before SELinux exists to deny it, and a
+            persona runs under its own profile alone.
+      - [ ] 1.6.14b Seccomp, per binary. Each persona's allowlist
+            shrinks to its own verbs' needs; the VMM's shrinks to
+            the run loop, and the ioctl filter lands: the exact
+            KVM request numbers, anything else kills -- the
+            gvisor shape, stricter. Lane gate: the per-persona
+            selftest dies by SIGSYS on a syscall outside its own
+            list, and a KVM ioctl outside the request set kills
+            the VMM.
+      - [ ] 1.6.14c SELinux, bound to the identity. The example
+            policy becomes the enforced policy, per persona, per
+            machine sub-user; lateral movement between machine
+            directories dies; LIFECYCLE's one "planned" cell
+            turns "enforced"; ENFORCING lands on every host at
+            the merge. Lane gate: a cross-machine touch denies
+            with an AVC, and cella doctor harvest files that
+            denial -- the 1.6.11 verb meets its purpose.
+      - [ ] 1.6.14d The hash chain. Field 15 fills: every Audit
+            and Event entry carries the digest of its
+            predecessor, both books, and the chain survives
+            branch and archive (the twin's chain forks with its
+            history). Rides with the SELinux lane by schedule,
+            not dependency. Lane gate: a book with one edited
+            entry fails verification loudly, and an intact book
+            verifies end to end.
+      The join stays the parent's gate: the full battery green
+      under enforcement on both machines, and the known
+      cross-lane leak (a jail or SELinux mechanism needing a
+      syscall the seccomp lane removed) fails loudly there.
 
 - [ ] 1.6.7 The documents state the tightened law, and the
       retired phases make "Not in scope" the permanent scope
