@@ -14,18 +14,28 @@ cella also hosts itself: a cella guest runs cella, and the same time
 guarantees hold one nesting level down (`make smoke-nested-boot`,
 `make probe-inception`).
 
+cella is not a final design, and cella does not claim one. The
+claim is size: the whole trusted computing base is near ten
+thousand lines, and the whole of it fits in one reading -- one
+person, or one model, can hold every line at once, and an audit of
+cella is a complete reading, never a sampling argument. The size
+sets the repair speed: a found hole is patched, gated, tested, and
+deployed in hours, without a compromise of the prior trusted
+computing base: the standing gates prove that the old walls stand
+while the new wall goes up. cella is small enough to re-verify
+entirely, every time.
+
 **Status: verified on real KVM, on bare metal and on a nested-KVM
-host.** Every gate is derived from measurement; no gate uses a tuned
-constant. The full suite (`make test-all`) passes on both machine
-classes with the pinned guest kernel (7.2.2). The virtio transports
-now ride the freeze sidecar (format v8), the egress-hold surface --
-park, report, release, allow -- is in place (`docs/DEVICE-STATE.md`),
-and the universe family treats machines as artifacts: branch,
-archive, inspect (`docs/LIFECYCLE.md`). The network model is
-decided and being built (`docs/NETWORK-MODEL.md`): every machine
-is born closed, an open valve is a membrane and never a free flow,
-every egress operation waits for a decision by id, and nothing
-outlives its epoch.
+host.** Every gate is derived from measurement; no gate uses a
+tuned constant. The full suite (`make test-all`) passes on both
+machine classes with the pinned guest kernel (7.2.2). The virtio
+transports ride the freeze sidecar (format v9), the total membrane
+is in place (`docs/NETWORK-MODEL.md`): every machine is born
+closed, an open valve is a membrane and never a free flow, every
+frame in either direction waits for a decision by id, nothing
+outlives its epoch, and every verb -- the operator's included --
+lands in an audit book. The universe family treats machines as
+artifacts: branch, archive, inspect (`docs/LIFECYCLE.md`).
 
 ## The machine lifecycle
 

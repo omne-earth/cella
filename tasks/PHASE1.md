@@ -246,7 +246,17 @@ requires a decision, nothing stands, and the mouth closes.
       the digest churn named in its commit. The L2-park law
       keeps its proof regardless: ARP is the in-guest
       representative, and the unit tests carry the exotic
-      ethertypes.
+      ethertypes. Groomed 2026-09-02: ipv6.disable=1 STAYS in
+      DEFAULT_BASE_ARGS after the kill -- the flag is the
+      VMM-wide floor, harmless on an IPv6-less kernel and
+      protective on a foreign flavor a user brings; the fragment
+      kill governs the goldens. Both kernel flavors rebuild
+      (nested builds atop the canonical fragment), and the
+      nested and inception images rebake -- they carry the inner
+      goldens. Gates: kernel-config-check asserts CONFIG_IPV6 is
+      not set, and smoke-udp gains the in-guest negative --
+      /proc/sys/net/ipv6 must not exist. The full local battery
+      follows the rebuild in the same sitting.
 
 - [ ] 1.6.13 The source goes thin with the surface (ruled
       2026-09-02): one workspace split, per-persona crates over a
