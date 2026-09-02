@@ -2,16 +2,17 @@
 # The ledger backend's gate. See docs/NETWORK-MODEL.md, "The control
 # plane", and .claude/TASKS.md phase 1.
 #
-# Part A: hold, one fetch parks, the ledger holds one operation with
-# an id and both clocks; freeze and thaw leave it still held, not
-# delivered; a release by id (the cella gateway verb) completes
-# the fetch, and the
-# ledger shows the same id parked and released -- never a phantom.
+# Part A: under the total membrane a fetch's first egress is the
+# guest's ARP -- it parks as an L2 operation with an id and both
+# clocks; its release resolves the neighbor, and the SYN parks
+# next, refined to address and port. A thaw with no decision keeps
+# everything held; a release by id records in the chronicle, and
+# every released id was first parked -- never a phantom.
 #
-# Part B: two operations park in order; a decision for the second
-# one first delivers nothing (its predecessor is undecided); a
-# decision for the first then delivers both, in park order, and the
-# ledger's Released order matches the Parked order.
+# Part B: two operations park in one batch, in order; a decision
+# for the second one first applies nothing (its predecessor is
+# undecided); a decision for the first then applies both, in park
+# order, and the Released order matches the Parked order.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -74,49 +75,71 @@ say "step 2: the valve opens, through the verb -- the membrane arms"
 "$BIN" gateway "$VM" open >/dev/null
 sleep 1
 
-say "step 3: one fetch parks -- and the park is the freeze (one-shot)"
+say "step 3: one fetch parks its ARP first -- and the park is the freeze (one-shot)"
 python3 -m http.server 8080 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV1=$!
 sleep 1
 type_in "H=http://$HOST_IP"
 type_in 'wget -q -O /dev/null $H:8080 && echo fetch-a-don"e" &'
 STATE="$CELLA_HOME/machines/$VM/state"
 wait_frozen() {
+    # The sidecar lands before the old VMM exits: wait for both.
     local deadline=$((SECONDS + 20))
     until [ -f "$STATE" ]; do
         [ $SECONDS -lt $deadline ] || return 1
         sleep 1
+    done
+    local pid
+    pid=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
+    while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do
+        [ $SECONDS -lt $deadline ] || return 1
+        sleep 0.2
     done
 }
 wait_frozen || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
 [ -s "$LEDGER" ] || { echo "FAIL: no ledger file at $LEDGER"; exit 1; }
 echo "  parked; the machine froze itself (one-shot)"
 
-say "step 4: the ledger holds one operation, with an id and both clocks"
+say "step 4: the ledger holds one L2 operation, with an id and both clocks"
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
 echo "$DUMP" | sed "s/^/  /"
 COUNT=$(echo "$DUMP" | grep -c "^parked ")
-[ "$COUNT" = "1" ] || { echo "FAIL: expected exactly one parked operation (retransmits should join it), got $COUNT"; exit 1; }
+[ "$COUNT" = "1" ] || { echo "FAIL: expected exactly one parked operation (the ARP; retransmits join), got $COUNT"; exit 1; }
 echo "$DUMP" | grep -qE "^parked id=[0-9a-f]{32} " || { echo "FAIL: no well-formed id on the operation"; exit 1; }
-echo "$DUMP" | grep -q "ip=$HOST_IP port=8080" || { echo "FAIL: the operation does not name the fetched destination"; exit 1; }
+echo "$DUMP" | grep -q "l2=arp" || { echo "FAIL: the first operation is not the ARP at its primitive name"; exit 1; }
 echo "$DUMP" | grep -q "guest_ns=[1-9]" || { echo "FAIL: no guest_ns on the operation"; exit 1; }
 echo "$DUMP" | grep -q "host_ns=[1-9]" || { echo "FAIL: no host_ns on the operation"; exit 1; }
-ID_A=$(id_of "$DUMP" "port=8080")
-[ -n "$ID_A" ] || { echo "FAIL: could not read the operation's id"; exit 1; }
 
 say "step 5: thaw with no decision -- the operation stays held, not delivered"
 "$BIN" thaw "$VM" >/dev/null
-sleep 2
+sleep 1
 not_yet "fetch-a-done" || { echo "FAIL: the fetch completed without a decision"; exit 1; }
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
 echo "$DUMP" | grep -q "^released " && { echo "FAIL: something released without a decision"; exit 1; }
-echo "  the ledger still shows only the parked operation; thaw delivered nothing"
+echo "  the ledger still shows only held operations; the thaw delivered nothing"
 
-say "step 6: release by id -- the fetch completes, and the ledger records it"
-"$BIN" gateway "$VM" release "$ID_A" >/dev/null
-wait_for "fetch-a-done" || { echo "FAIL: the released fetch did not complete"; exit 1; }
+say "step 6: release the ARP; the engine cycles until the SYN parks, refined -- no phantom"
+ID_ARP=$(echo "$DUMP" | grep "^parked .*l2=arp" | tail -1 | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p')
+[ -n "$ID_ARP" ] || { echo "FAIL: could not read the ARP operation's id"; exit 1; }
+# Each cycle: decide everything held, thaw, and watch for the
+# fetch to land -- the SYN parks refined on the way (the budget
+# bounds the ratchet, AC3-style).
+cycles=0
+until grep -aq "fetch-a-done" "$CON"; do
+    cycles=$((cycles + 1))
+    [ $cycles -le 10 ] || { echo "FAIL: the fetch did not land within 10 engine cycles"; exit 1; }
+    "$BIN" freeze "$VM" >/dev/null 2>&1 || true
+    for id in $("$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+        "$BIN" gateway "$VM" release "$id" >/dev/null
+    done
+    "$BIN" thaw "$VM" >/dev/null
+    sleep 3
+done
+"$BIN" --dump-ledger "$LEDGER" | grep -q "^parked .*ip=$HOST_IP port=8080" || { echo "FAIL: the SYN never parked refined to its destination"; exit 1; }
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
 echo "$DUMP" | sed "s/^/  /"
-echo "$DUMP" | grep -q "^released id=$ID_A " || { echo "FAIL: the ledger did not release $ID_A"; exit 1; }
+echo "$DUMP" | grep -q "^released id=$ID_ARP " || { echo "FAIL: the ledger did not release $ID_ARP"; exit 1; }
+echo "  ($cycles engine cycles)"
+ID_A=$(id_of "$DUMP" "port=8080")
 RELEASED_IDS=$(echo "$DUMP" | grep "^released " | sed -n 's/^released id=\([0-9a-f]*\).*/\1/p')
 PARKED_IDS=$(echo "$DUMP" | grep "^parked " | sed -n 's/^parked id=\([0-9a-f]*\).*/\1/p')
 for rid in $RELEASED_IDS; do
@@ -124,46 +147,61 @@ for rid in $RELEASED_IDS; do
 done
 echo "  released id matches the parked id; no phantom"
 
-say "step 7: the valve persisted -- C parks and freezes; thaw; D parks and freezes"
-python3 -m http.server 8081 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV2=$!
-python3 -m http.server 8082 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV3=$!
-sleep 1
-# No signal anywhere below: the chronicle exists, thus the valve is
-# closed across every thaw, and each new destination is one park,
-# one self-freeze, one cycle of the ratchet.
-type_in 'wget -q -O /dev/null $H:8081 && echo fetch-c-don"e" &'
-wait_frozen || { echo "FAIL: C did not park-and-freeze (valve persistence)"; exit 1; }
-"$BIN" thaw "$VM" >/dev/null
-sleep 2
-type_in 'wget -q -O /dev/null $H:8082 && echo fetch-d-don"e" &'
-wait_frozen || { echo "FAIL: D did not park-and-freeze"; exit 1; }
-"$BIN" thaw "$VM" >/dev/null
-sleep 2
+say "step 7: the valve persisted -- C and D park in one batch, in order"
+# Settle flow A's tail (its FIN and teardown park too): decide
+# everything until the machine stands quiet with nothing held.
+for _ in 1 2 3 4; do
+    "$BIN" freeze "$VM" >/dev/null 2>&1 || true
+    sleep 1
+    for id in $("$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+        "$BIN" gateway "$VM" release "$id" >/dev/null
+    done
+    "$BIN" thaw "$VM" >/dev/null 2>&1 || true
+    sleep 2
+done
+# Both new fetches park in one typed line: two operations, one
+# batch, one self-freeze. The chronicle exists, thus the valve is
+# open across every thaw until the closing verb.
+type_in 'for p in 8081 8082; do wget -q $H:$p & done'
+wait_frozen || { echo "FAIL: C and D did not park-and-freeze (valve persistence)"; exit 1; }
+# The guest may freeze on C's batch before D's sender ran: thaw
+# (deciding nothing) until both operations stand held, in order.
+tries=0
+until "$BIN" --dump-ledger "$LEDGER" | grep -q "port=8082"; do
+    tries=$((tries + 1))
+    [ $tries -le 4 ] || { echo "FAIL: D never parked"; exit 1; }
+    "$BIN" thaw "$VM" >/dev/null
+    wait_frozen || { echo "FAIL: the machine did not refreeze while D was due"; exit 1; }
+done
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
 ID_C=$(id_of "$DUMP" "port=8081")
 ID_D=$(id_of "$DUMP" "port=8082")
 [ -n "$ID_C" ] && [ -n "$ID_D" ] || { echo "FAIL: could not read both operation ids"; exit 1; }
 echo "  C=$ID_C D=$ID_D"
 
-say "step 8: decide D first -- nothing delivers, D's predecessor C is undecided"
+say "step 8: decide D first -- nothing applies, D's predecessor C is undecided"
 "$BIN" gateway "$VM" release "$ID_D" >/dev/null
+"$BIN" thaw "$VM" >/dev/null
 sleep 2
-not_yet "fetch-d-done" || { echo "FAIL: D delivered before its predecessor C resolved"; exit 1; }
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
 echo "$DUMP" | grep -q "^released id=$ID_D " && { echo "FAIL: the ledger released D before C resolved"; exit 1; }
-echo "  neither C nor D delivered; D's decision waits"
+echo "  D's decision waits behind the undecided C"
 
-say "step 9: decide C -- both deliver, in park order"
+say "step 9: decide C -- both apply, in park order"
 "$BIN" gateway "$VM" release "$ID_C" >/dev/null
-wait_for "fetch-c-done" || { echo "FAIL: C did not deliver once decided"; exit 1; }
-wait_for "fetch-d-done" || { echo "FAIL: D did not deliver once its predecessor C resolved"; exit 1; }
+"$BIN" freeze "$VM" >/dev/null 2>&1 || true
+"$BIN" thaw "$VM" >/dev/null
+sleep 2
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
+echo "$DUMP" | grep -q "^released id=$ID_C " || { echo "FAIL: the ledger did not release C"; exit 1; }
+echo "$DUMP" | grep -q "^released id=$ID_D " || { echo "FAIL: the ledger did not release D once its predecessor resolved"; exit 1; }
 C_LINE=$(echo "$DUMP" | grep -n "^released id=$ID_C " | head -1 | cut -d: -f1)
 D_LINE=$(echo "$DUMP" | grep -n "^released id=$ID_D " | head -1 | cut -d: -f1)
 [ -n "$C_LINE" ] && [ -n "$D_LINE" ] || { echo "FAIL: the ledger did not release both"; exit 1; }
 [ "$C_LINE" -lt "$D_LINE" ] || { echo "FAIL: the Released order does not match the Parked order (C then D)"; exit 1; }
-echo "  both delivered; released C before released D, matching park order"
+echo "  both applied; released C before released D, matching park order"
 
 echo
 echo "PASS: the ledger names, holds, and releases by id, in park order"
-"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
+"$BIN" stop "$VM" >/dev/null 2>&1 || true
+"$BIN" destroy "$VM" >/dev/null

@@ -68,11 +68,29 @@ wait_frozen() {
         sleep 1
     done
 }
+# The stand-in engine: while the given pid runs, release every held
+# operation of the frozen outer machine and thaw it.
+pump_while() { # pid
+    local cycles=0
+    while kill -0 "$1" 2>/dev/null; do
+        if [ -f "$STATE" ]; then
+            pid=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { sleep 0.2; continue; }
+            for id in $("$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+                "$BIN" gateway "$VM" release "$id" >/dev/null
+            done
+            "$BIN" thaw "$VM" >/dev/null
+            cycles=$((cycles + 1))
+        fi
+        sleep 0.2
+    done
+    echo "  ($cycles engine cycles)"
+}
 
 say "step 1: create the outer machine through the verbs"
 NET_FLAG="--net none"; [ "$MODE" != airgapped ] && NET_FLAG="--net $TAP"
 "$BIN" create "$VM" --kernel nested --rootfs nested --mem-mb 768 $NET_FLAG >/dev/null
-grep -q '"valve": "closed"' "$CELLA_HOME/machines/$VM/manifest.json" || { echo "FAIL: not born closed"; exit 1; }
+[ "$(cat "$CELLA_HOME/machines/$VM/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 if [ "$MODE" = www ]; then
     # The mode marker rides the disk: a verb machine cannot extend
     # the kernel command line.
@@ -106,17 +124,16 @@ if [ "$MODE" != airgapped ]; then
     [ -f "$STATE" ] && { echo "FAIL: a closed machine froze on inbound traffic"; exit 1; }
     echo "  no reply, no freeze: dark"
 
-    say "step 4: open -- the reply parks and freezes; no answer before the decision (negative)"
+    say "step 4: open -- every egress parks and freezes; the engine lands a reply (negative + positive)"
     "$BIN" gateway "$VM" open >/dev/null
     sleep 1
     ping -c 1 -W 3 "$OUTER_IP" >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
-    wait_frozen || { echo "FAIL: the parked reply did not freeze the outer machine"; exit 1; }
-    ID_R=$("$BIN" gateway "$VM" show | grep "$HOST_IP" | awk "{print \$1}" | tail -1)
-    [ -n "$ID_R" ] || { echo "FAIL: show lists no parked reply"; exit 1; }
-    "$BIN" gateway "$VM" release "$ID_R" >/dev/null
-    "$BIN" thaw "$VM" >/dev/null
-    sleep 2
-    ping -c 2 -W 3 "$OUTER_IP" >/dev/null || { echo "FAIL: no ICMP reply after the release"; exit 1; }
+    wait_frozen || { echo "FAIL: the parked egress did not freeze the outer machine"; exit 1; }
+    "$BIN" gateway "$VM" show | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show lists nothing held"; exit 1; }
+    ping -c 20 -i 1 -W 30 "$OUTER_IP" >/dev/null 2>&1 & P4=$!
+    pump_while "$P4"
+    wait "$P4" || { echo "FAIL: no ICMP reply landed while the engine decided"; exit 1; }
+    if [ -f "$STATE" ]; then "$BIN" thaw "$VM" >/dev/null; sleep 1; fi
     echo "  parked, frozen, decided: the outer machine answers"
 fi
 

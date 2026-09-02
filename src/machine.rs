@@ -514,7 +514,28 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
     };
     for n in first..first + taps {
         let tap = format!("tap{n}");
-        let (_, host) = tap_addresses(&tap);
+        let (guest, host) = tap_addresses(&tap);
+        // The pool knows its guest by convention: the guest's eth0
+        // MAC is the VMM default, deterministic like the tap's own.
+        // The permanent neighbor entry frees the host from ARP
+        // toward a machine that freezes on its every egress: under
+        // the total membrane the guest's ARP reply parks, and by
+        // its release the host's probe window has closed
+        // (arp_accept=0 drops the late reply). The host must not
+        // need to ask.
+        let neigh = |t: &str, g: &str| {
+            let _ = ip(&[
+                "neigh",
+                "replace",
+                g,
+                "lladdr",
+                "02:fc:00:00:00:01",
+                "dev",
+                t,
+                "nud",
+                "permanent",
+            ]);
+        };
         if std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
             // Converge, do not skip: an interrupted setup leaves a tap
             // without its address or MAC, and a second run must heal
@@ -530,6 +551,7 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
             ]);
             let _ = ip(&["addr", "replace", &format!("{host}/24"), "dev", &tap]);
             ip(&["link", "set", &tap, "up"])?;
+            neigh(&tap, &guest);
             println!("cella: {tap} already exists, converged ({host}/24)");
             continue;
         }
@@ -547,6 +569,7 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
         ])?;
         ip(&["addr", "add", &format!("{host}/24"), "dev", &tap])?;
         ip(&["link", "set", &tap, "up"])?;
+        neigh(&tap, &guest);
         println!("cella: created {tap} owned by uid {owner}, host side {host}/24");
     }
     // Guest egress needs forwarding on, and a forward path past the

@@ -75,18 +75,22 @@ pump() { # marker cycles
         sleep 2
     done
 }
-type_in ag 'ping -c 1 -W 20 10.77.0.1 >/dev/null && echo pair-o"k"'
-pump "pair-ok" 8 || { echo "FAIL: the agent cannot reach the gateway over the pair"; exit 1; }
+type_in ag 'ping -c20 -W60 10.77.0.1 >/dev/null && echo pair-o"k"'
+pump "pair-ok" 45 || { echo "FAIL: the agent cannot reach the gateway over the pair"; exit 1; }
 echo "  agent -> gateway over the L2 pair, one decision at a time"
 
 say "step 4: the agent reaches the host, through the gateway"
-type_in ag 'ping -c 1 -W 30 192.168.201.1 >/dev/null && echo world-o"k"'
-pump "world-ok" 8 || { echo "FAIL: the gateway does not forward to the world"; exit 1; }
+type_in ag 'ping -c20 -W60 192.168.201.1 >/dev/null && echo world-o"k"'
+pump "world-ok" 45 || { echo "FAIL: the gateway does not forward to the world"; exit 1; }
 echo "  agent -> gateway -> host: the appliance forwards, every hop decided"
 
 say "step 5: the pair freezes together (agent first), thaws together (gateway first)"
-"$BIN" freeze ag >/dev/null
-"$BIN" freeze gw >/dev/null
+# A member may already stand frozen on its own park: the pair
+# freeze takes each machine as it finds it, agent first.
+for m in ag gw; do
+    [ -f "$CELLA_HOME/machines/$m/state" ] && continue
+    "$BIN" freeze $m >/dev/null
+done
 "$BIN" thaw gw >/dev/null
 wait_con gw "forwarding on" >/dev/null 2>&1 || true
 "$BIN" thaw ag >/dev/null
@@ -94,8 +98,11 @@ sleep 2
 # A thaw starts a fresh epoch on both machines: nothing is
 # inherited, and every hop parks and is decided again. The pump
 # stands in for the engine here too.
-type_in ag 'ping -c 1 -W 30 192.168.201.1 >/dev/null && echo world-agai"n"'
-pump "world-again" 8 || { echo "FAIL: the pair did not survive the freeze"; exit 1; }
+# ICMP never retransmits on its own, and a reply that lands while
+# a member is frozen is lost at the tap: the repeating ping gives
+# the chain fresh echoes until one crossing survives every hop.
+type_in ag 'ping -c20 -W60 192.168.201.1 >/dev/null && echo world-agai"n"'
+pump "world-again" 45 || { echo "FAIL: the pair did not survive the freeze"; exit 1; }
 echo "  the pair froze and thawed; the agent reaches the world again, re-decided"
 
 echo

@@ -12,7 +12,11 @@
 /// devices. The console is ttyS0 because the 8250 serial device is the
 /// only channel out of the guest. `pci=off` is correct because cella
 /// emulates no PCI bus.
-pub const DEFAULT_BASE_ARGS: &str = "console=ttyS0 reboot=k panic=1 pci=off";
+// ipv6.disable=1: the guest needs no IPv6, and under the total
+// membrane its router solicitations and MLD reports would park and
+// freeze the machine on chatter no one sent (docs/NETWORK-MODEL.md).
+// Chatter that exists still parks; this removes the pointless source.
+pub const DEFAULT_BASE_ARGS: &str = "console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1";
 
 /// The kernel arguments that control time in the guest.
 ///

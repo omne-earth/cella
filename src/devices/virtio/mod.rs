@@ -89,16 +89,26 @@ pub trait VirtioDevice: Send {
     fn drain_ledger_events(&mut self) -> Vec<crate::proto::Event> {
         Vec::new()
     }
+    /// True when any frame parked since the last take. A frame that
+    /// joins an existing operation emits no ledger event, thus the
+    /// freeze trigger cannot key on events alone: the park is the
+    /// freeze, joins included (the one-shot rule).
+    fn take_parked_flag(&mut self) -> bool {
+        false
+    }
     /// Resolve every operation that a decision map lets resolve
     /// right now, oldest-parked first, and return the frames a
     /// release delivers (see docs/NETWORK-MODEL.md, "Release names
-    /// an id, and decisions apply in park order"). A refusal drops
-    /// its frames and never appears in the return value. The
+    /// an id, and decisions apply in park order"). Released frames
+    /// carry their bytes; refused ones carry the head index alone
+    /// -- their buffers must still complete (the guest posted the
+    /// descriptor, and without a completion its driver watchdog
+    /// declares the queue dead), but nothing is delivered. The
     /// default is inert.
     fn resolve_decisions(
         &mut self,
         _decisions: &std::collections::HashMap<Vec<u8>, crate::proto::Decision>,
-    ) -> Vec<(u16, Vec<u8>)> {
-        Vec::new()
+    ) -> (Vec<(u16, Vec<u8>)>, Vec<u16>) {
+        (Vec::new(), Vec::new())
     }
 }

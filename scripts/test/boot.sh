@@ -83,6 +83,23 @@ done
 
 if [ "$init_seen" -eq 1 ]; then
     echo "PASS: kernel booted, mounted root, and reached a running init in ${boot_elapsed}s (full boot confirmed)"
+    # The field flavor's negative, when its binary exists: a release
+    # machine boots dark -- no console.log, no console.sock, and the
+    # VMM stands regardless.
+    REL="$ROOT/target/release/cella"
+    if [ -x "$REL" ]; then
+        "$BIN" stop "$VM" >/dev/null 2>&1 || true
+        "$BIN" destroy "$VM" >/dev/null 2>&1 || true
+        "$REL" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net "$TAP" >/dev/null
+        "$REL" start "$VM" >/dev/null
+        VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
+        sleep 3
+        kill -0 "$VMM_PID" 2>/dev/null || { echo "FAIL: the release VMM exited"; exit 1; }
+        [ -f "$CELLA_HOME/machines/$VM/console.log" ] && { echo "FAIL: a release machine wrote a console.log"; exit 1; }
+        [ -e "$CELLA_HOME/machines/$VM/console.sock" ] && { echo "FAIL: a release machine served a console.sock"; exit 1; }
+        "$REL" enter "$VM" >/dev/null 2>&1 && { echo "FAIL: enter did not refuse against the release flavor"; exit 1; }
+        echo "PASS: the field flavor boots dark -- no console byte, and enter refuses"
+    fi
     exit 0
 fi
 echo "--- vmm.log ---"

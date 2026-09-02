@@ -322,6 +322,12 @@ impl MmioTransport {
         self.device.drain_ledger_events()
     }
 
+    /// True when any frame parked since the last take (joins
+    /// included) -- the freeze trigger of the one-shot rule.
+    pub fn take_parked_flag(&mut self) -> bool {
+        self.device.take_parked_flag()
+    }
+
     /// Apply a decision map to the device's held operations, oldest-
     /// parked first (see docs/NETWORK-MODEL.md, "Release names an
     /// id"): every operation the map lets resolve right now
@@ -337,13 +343,21 @@ impl MmioTransport {
         decisions: &std::collections::HashMap<Vec<u8>, crate::proto::Decision>,
         mem: &GuestMemoryMmap,
     ) {
-        let frames = self.device.resolve_decisions(decisions);
-        if frames.is_empty() {
+        let (frames, refused) = self.device.resolve_decisions(decisions);
+        if frames.is_empty() && refused.is_empty() {
             return;
         }
         let qidx = self.device.egress_queue() as usize;
         for (head, frame) in &frames {
             self.device.write_egress(frame);
+            if let Some(q) = self.queues.get_mut(qidx) {
+                let _ = q.add_used(mem, *head, 0);
+            }
+        }
+        // A refused frame dies, and its buffer returns: the guest
+        // posted the descriptor, and without a completion its
+        // driver watchdog declares the queue dead.
+        for head in &refused {
             if let Some(q) = self.queues.get_mut(qidx) {
                 let _ = q.add_used(mem, *head, 0);
             }

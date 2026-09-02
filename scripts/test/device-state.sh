@@ -45,6 +45,28 @@ wait_for() {
     done
     return 1
 }
+STATE="$CELLA_HOME/machines/$VM/state"
+held_ids() { "$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'; }
+# The stand-in engine: while the given pid runs, release every held
+# operation of the frozen machine and thaw it -- every frame is a
+# fresh decision under the total membrane.
+pump_while() { # pid
+    local cycles=0
+    while kill -0 "$1" 2>/dev/null; do
+        if [ -f "$STATE" ]; then
+            local vp
+            vp=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
+            [ -n "$vp" ] && kill -0 "$vp" 2>/dev/null && { sleep 0.2; continue; }
+            for id in $(held_ids); do
+                "$BIN" gateway "$VM" release "$id" >/dev/null
+            done
+            "$BIN" thaw "$VM" >/dev/null
+            cycles=$((cycles + 1))
+        fi
+        sleep 0.2
+    done
+    echo "  ($cycles engine cycles)"
+}
 
 case "$ac" in
 ac1)
@@ -91,52 +113,31 @@ ac2)
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 
-	say "step 2: open, prime the reply path, then the host pings the guest"
-
-	# Born closed: open the valve, then prime the reply path -- the
-	# first ping parks the guest's reply and freezes the machine;
-	# the release makes the pass entry, and pings answer after.
+	say "step 2: open -- every egress parks, and the engine lands a reply"
 	"$BIN" gateway "$VM" open >/dev/null
 	sleep 1
-	ping -c 1 -W 3 $GUEST_IP >/dev/null 2>&1 || true
-	deadline=$((SECONDS + 20))
-	until [ -f "$CELLA_HOME/machines/$VM/state" ]; do
-		[ $SECONDS -lt $deadline ] || { echo "FAIL: the reply did not park and freeze"; exit 1; }
-		sleep 1
-	done
-	ID_P=$("$BIN" gateway "$VM" show | grep "$HOST_IP" | awk "{print \$1}")
-	[ -n "$ID_P" ] || { echo "FAIL: show lists no parked reply"; exit 1; }
-	"$BIN" gateway "$VM" release "$ID_P" >/dev/null
-	"$BIN" thaw "$VM" >/dev/null
-	sleep 2
-	ping -c 3 -W 2 "$GUEST_IP" >/dev/null || { echo "FAIL: no ICMP reply after the release"; exit 1; }
-	echo "  $GUEST_IP answers over $TAP"
+	ping -c 20 -i 1 -W 25 "$GUEST_IP" >/dev/null 2>&1 & P2=$!
+	pump_while "$P2"
+	wait "$P2" || { echo "FAIL: no reply landed while the engine decided"; exit 1; }
+	echo "  $GUEST_IP answers over $TAP, every frame decided"
 
 	say "step 3: freeze, then thaw (the tap claim rides the manifest)"
+	if [ -f "$STATE" ]; then "$BIN" thaw "$VM" >/dev/null; sleep 1; fi
 	"$BIN" freeze "$VM" >/dev/null
 	grep -q "$TAP" "$CELLA_HOME/machines/$VM/manifest.json" || { echo "FAIL: the manifest lost the tap claim"; exit 1; }
 	"$BIN" thaw "$VM" >/dev/null
 	sleep 2
 
-	say "step 4: the host pings the guest again, through the thawed transport"
-	# No allow survives an epoch: the post-thaw ping parks again,
-	# and the engine decides again -- atomically, every time.
-	ping -c 1 -W 3 "$GUEST_IP" >/dev/null 2>&1 || true
-	deadline=$((SECONDS + 20))
-	until [ -f "$CELLA_HOME/machines/$VM/state" ]; do
-		[ $SECONDS -lt $deadline ] || { echo "FAIL: the post-thaw reply did not park"; exit 1; }
-		sleep 1
-	done
-	ID_P2=$("$BIN" gateway "$VM" show | grep "$HOST_IP" | awk "{print \$1}" | tail -1)
-	"$BIN" gateway "$VM" release "$ID_P2" >/dev/null
-	"$BIN" thaw "$VM" >/dev/null
-	sleep 2
-	ping -c 3 -W 2 "$GUEST_IP" >/dev/null || { echo "FAIL: no ICMP reply after the thaw (see docs/DEVICE-STATE.md)"; exit 1; }
+	say "step 4: the host pings again through the thawed transport, re-decided"
+	ping -c 20 -i 1 -W 25 "$GUEST_IP" >/dev/null 2>&1 & P4=$!
+	pump_while "$P4"
+	wait "$P4" || { echo "FAIL: no reply landed after the thaw (see docs/DEVICE-STATE.md)"; exit 1; }
 	echo "  $GUEST_IP answers over $TAP"
 
 	echo
 	echo "PASS: AC2 -- the network survived the thaw"
-	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
+	"$BIN" stop "$VM" >/dev/null 2>&1 || true
+	"$BIN" destroy "$VM" >/dev/null
 	;;
 ac3)
 	echo "AC3: the in-flight layer is exact (a parked egress request is delivered"
@@ -148,23 +149,31 @@ ac3)
 		exit 0
 	fi
 
+	command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoint)"; exit 0; }
+	pkill -f "http.server 8080 --bind $HOST_IP" 2>/dev/null || true
+	WWW=$(mktemp -d); echo world > "$WWW/index.html"
+	SRV1=""
+	trap 'kill $SRV1 2>/dev/null; rm -rf "$WWW"; "$BIN" stop "$VM" >/dev/null 2>&1 || true
+    [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true; rm -rf "$CELLA_HOME"' EXIT
+
 	say "step 1: create and start a machine on $TAP"
 	"$BIN" create "$VM" --net "$TAP" >/dev/null
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 
-	# The host answers for reachability: a guest probe cannot run
-	# under a born-closed valve.
-	curl -s --max-time 8 -o /dev/null http://huggingface.co || {
-		echo "SKIP: this host has no route to the www"; exit 0; }
-
 	# The serial RX FIFO holds 64 bytes; every typed line stays short.
+	# The endpoint is the host's stand-in: a freeze loses in-flight
+	# server segments (no ingress hold until the appliance), and a
+	# remote TLS burst depends on the sender's retransmission
+	# patience -- the single-segment stand-in keeps the exactness
+	# claim deterministic.
 	say "step 2: the valve opens -- the membrane, never a free flow"
+	python3 -m http.server 8080 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV1=$!
+	sleep 1
 	"$BIN" gateway "$VM" open >/dev/null
 	sleep 1
-	type_in 'mkdir -p /etc; echo nameserver 1.1.1.1 >/etc/resolv.conf'
-	type_in 'U=http://huggingface.co'
+	type_in "U=http://$HOST_IP:8080"
 
 	say "step 3: the fetch -- the park is the freeze"
 	type_in 'wget -q -O /dev/null $U && echo held-o"k" &'
@@ -180,9 +189,10 @@ ac3)
 	echo "  parked; the machine froze itself (one-shot); frames in the sidecar"
 
 	say "step 4: the engine loop -- decide while it sleeps, thaw, repeat"
-	# The fetch resolves a name first: the DNS operation parks and
-	# freezes one cycle, its release lets the TCP operation park and
-	# freeze the next. The loop is the stand-in engine.
+	# Under the total membrane every frame is a fresh decision: the
+	# ARP, the DNS, and each TCP batch park and freeze in turn. The
+	# loop is the stand-in engine, and the budget bounds the churn
+	# (let it churn).
 	LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
 	VERDICT="$CELLA_HOME/machines/$VM/verdict"
 	open_ids() {
@@ -194,8 +204,8 @@ ac3)
 	cycles=0
 	until grep -aq "held-ok" "$CON"; do
 		cycles=$((cycles + 1))
-		[ $cycles -le 12 ] || {
-			echo "FAIL: the request did not complete within 12 engine cycles"
+		[ $cycles -le 120 ] || {
+			echo "FAIL: the request did not complete within 120 engine cycles"
 			echo "-- ledger:"; "$BIN" --dump-ledger "$LEDGER" | sed "s/^/   /"
 			echo "-- console:"; tail -4 "$CON" | sed "s/^/   /"
 			exit 1
@@ -206,6 +216,9 @@ ac3)
 			sleep 1
 		done
 		grep -aq "held-ok" "$CON" && break
+		# The sidecar lands before the old VMM exits: wait it out.
+		vp=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
+		while [ -n "$vp" ] && kill -0 "$vp" 2>/dev/null; do sleep 0.2; done
 		for id in $(open_ids); do
 			"$BIN" gateway "$VM" release "$id" >/dev/null
 		done
@@ -216,7 +229,8 @@ ac3)
 
 	echo
 	echo "PASS: AC3 -- the in-flight layer is exact"
-	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
+	"$BIN" stop "$VM" >/dev/null 2>&1 || true
+	"$BIN" destroy "$VM" >/dev/null
 	;;
 ac4)
 	echo "AC4: the verdict is external (the world-ratchet gate). Every egress"
@@ -230,7 +244,7 @@ ac4)
 	command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoints)"; exit 0; }
 	# A stand-in endpoint leaked by an interrupted run squats its port
 	# and serves a deleted directory; sweep them first.
-	pkill -f "http.server (8080|9090) --bind $HOST_IP" 2>/dev/null || true
+	pkill -f "http.server 9090 --bind $HOST_IP" 2>/dev/null || true
 	WWW=$(mktemp -d); echo world > "$WWW/index.html"
 	SRV1=""; SRV2=""
 	stop_srv() { kill $SRV1 $SRV2 2>/dev/null; rm -rf "$WWW"; }
@@ -244,85 +258,59 @@ ac4)
 	sleep 6
 	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 
-	say "step 2: prove the path to the host endpoint, before any hold"
-	python3 -m http.server 8080 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV1=$!
+	say "step 2: the request toward a world that does not exist -- it parks, and reports"
+	"$BIN" gateway "$VM" open >/dev/null
 	sleep 1
 	type_in "H=http://$HOST_IP"
-	type_in 'wget -q -O /dev/null $H:8080 && echo pre-o"k"'
-	if ! wait_for "pre-ok"; then
-		# ICMP passes through most zones; unsolicited TCP to the host
-		# does not. The taps must sit in the trusted zone.
-		echo "SKIP: the guest cannot reach $HOST_IP:8080 -- rerun: sudo cella setup net"
-		exit 0
-	fi
-
-	curl -s -o /dev/null "http://$HOST_IP:8080/" || { echo "FAIL: the stand-in endpoint died after the pre-check"; exit 1; }
-
-	say "step 3: the valve closes; the same request parks, reports, and freezes"
-	"$BIN" gateway "$VM" close >/dev/null
-	sleep 1
-	type_in 'wget -q -O /dev/null $H:8080 && echo rel-o"k" &'
-	STATE="$CELLA_HOME/machines/$VM/state"
-	deadline=$((SECONDS + 20))
-	until [ -f "$STATE" ]; do
-		[ $SECONDS -lt $deadline ] || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
-		sleep 1
-	done
-	grep -aq "parked egress to $HOST_IP:8080" "$VMM" || { echo "FAIL: no park report for :8080"; exit 1; }
-	grep -aq "rel-ok" "$CON" && { echo "FAIL: the request passed without a verdict"; exit 1; }
-	echo "  parked, reported; the machine froze itself (one-shot)"
-
-	say "step 4: the engine renders release with allow, by id; the thaw applies"
+	type_in 'wget -q -T 90 -O /dev/null $H:9090 && echo world-o"k" &'
+	# The engine releases everything except the :9090 operation --
+	# the ARP resolves, and the SYN toward the missing endpoint
+	# parks and stays held. Nothing may reach a world that does not
+	# exist.
 	LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
-	VERDICT="$CELLA_HOME/machines/$VM/verdict"
-	ID_REL=$("$BIN" gateway "$VM" show | grep "$HOST_IP:8080" | awk "{print \$1}")
-	[ -n "$ID_REL" ] || { echo "FAIL: show lists no held operation for :8080"; exit 1; }
-	"$BIN" gateway "$VM" release "$ID_REL" >/dev/null
-	"$BIN" thaw "$VM" >/dev/null
-	wait_for "rel-ok" || {
-		echo "FAIL: the released request did not complete"
-		echo "-- vmm.log:"; tail -6 "$VMM" | sed "s/^/   /"
-		echo "-- console:"; tail -4 "$CON" | sed "s/^/   /"
-		echo "-- listeners:"; ss -ltn | grep -E "8080|9090" | sed "s/^/   /" || true
-		exit 1
-	}
-	PARKS=$(grep -ac "parked egress to $HOST_IP:8080" "$VMM")
-	type_in 'wget -q -O /dev/null $H:8080 && echo rel2-o"k"'
-	wait_for "rel2-ok" || { echo "FAIL: the allowed flow did not run at full speed"; exit 1; }
-	[ "$(grep -ac "parked egress to $HOST_IP:8080" "$VMM")" = "$PARKS" ] \
-		|| { echo "FAIL: the allow entry did not pass the second request"; exit 1; }
-	echo "  one park and one verdict per destination; later frames match inline"
-
-	say "step 5: a request to a part of the world that does not exist -- it parks"
-	type_in 'wget -q -O /dev/null $H:9090 && echo world-o"k" &'
-	deadline=$((SECONDS + 15))
-	until grep -aq "parked egress to $HOST_IP:9090" "$VMM"; do
-		[ $SECONDS -lt $deadline ] || { echo "FAIL: no park report for :9090"; exit 1; }
+	cycles=0
+	until "$BIN" gateway "$VM" show | grep -q ":9090.*held"; do
+		cycles=$((cycles + 1))
+		[ $cycles -le 8 ] || { echo "FAIL: the :9090 operation never parked"; exit 1; }
+		if [ -f "$STATE" ]; then
+			vp=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
+			[ -n "$vp" ] && kill -0 "$vp" 2>/dev/null && { sleep 0.5; continue; }
+			for id in $("$BIN" gateway "$VM" show | grep -v ":9090" | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+				"$BIN" gateway "$VM" release "$id" >/dev/null
+			done
+			if [ -n "$("$BIN" gateway "$VM" show | grep ":9090.*held")" ]; then break; fi
+			"$BIN" thaw "$VM" >/dev/null
+		fi
 		sleep 1
 	done
-	echo "  parked, and reported"
-
-	say "step 6: the machine froze itself on the park; the world grows"
-	deadline=$((SECONDS + 20))
-	until [ -f "$STATE" ]; do
-		[ $SECONDS -lt $deadline ] || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
-		sleep 1
-	done
+	grep -aq "parked egress to $HOST_IP:9090" "$VMM" || { echo "FAIL: no park report for :9090"; exit 1; }
+	grep -aq "world-ok" "$CON" && { echo "FAIL: the request passed without a verdict"; exit 1; }
+	[ -f "$STATE" ] || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
 	grep -aq "held egress frame" "$VMM" || { echo "FAIL: the freeze holds no egress frame"; exit 1; }
+	echo "  parked, reported, frozen; the frames ride the sidecar"
+
+	say "step 3: the world grows while the machine sleeps"
 	python3 -m http.server 9090 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV2=$!
 	sleep 1
 	echo "  the endpoint at :9090 now exists"
 
-	say "step 7: the engine decides by id; the thaw lands the same request"
-	ID_W=$("$BIN" gateway "$VM" show | grep "$HOST_IP:9090" | awk "{print \$1}")
+	say "step 4: the engine decides by id; the ratchet lands the same request"
+	ID_W=$("$BIN" gateway "$VM" show | grep ":9090" | awk "{print \$1}" | head -1)
 	[ -n "$ID_W" ] || { echo "FAIL: show lists no held operation for :9090"; exit 1; }
 	"$BIN" gateway "$VM" release "$ID_W" >/dev/null
 	"$BIN" thaw "$VM" >/dev/null
-	wait_for "world-ok" || { echo "FAIL: the parked request did not land after the thaw"; exit 1; }
-	echo "  the request completed against the new endpoint; the guest saw no failure"
+	# Every further frame of the flow is its own decision: the pump
+	# carries the request to completion.
+	( until grep -aq "world-ok" "$CON"; do sleep 1; done ) & WAITER=$!
+	( sleep 90; kill $WAITER 2>/dev/null ) & KILLER=$!
+	pump_while "$WAITER"
+	kill "$KILLER" 2>/dev/null || true
+	grep -aq "world-ok" "$CON" || { echo "FAIL: the parked request did not land after the thaw"; exit 1; }
+	echo "  the request completed against the endpoint that now exists; the guest saw no failure"
 
 	echo
 	echo "PASS: AC4 -- the verdict is external"
-	"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
+	"$BIN" stop "$VM" >/dev/null 2>&1 || true
+	"$BIN" destroy "$VM" >/dev/null
 	;;
 esac

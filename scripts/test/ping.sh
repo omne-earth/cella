@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# smoke-ping: the valve, end to end. A machine is born closed (the
-# closed): a host ping fails. Open turns the tap into the membrane:
-# the guest's echo reply parks, and the park is the freeze. A release
-# and a thaw let the reply flow, and the next ping answers. Close
-# closes the machine: ping fails again. Fail, freeze, release,
-# reply, fail -> PASS. See docs/NETWORK-MODEL.md.
-set -euo pipefail
+# smoke-ping: the valve, end to end, under the total membrane. A
+# machine is born closed: a host ping fails, and nothing freezes.
+# Open turns the tap into the membrane: every egress frame parks --
+# the guest's ARP reply first, then its echo reply -- and each park
+# is a freeze. The pump (the stand-in engine) releases and thaws,
+# one decision per operation, and a reply lands inside the ping's
+# own wait window. Close returns the dark; a reopened valve
+# remembers nothing. See docs/NETWORK-MODEL.md and
+# docs/FREEZE-THAW.md, "The two automata".
+set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
-[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
+[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 TAP="${CELLA_TEST_TAP:-tap0}"
 HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
@@ -26,14 +29,16 @@ cp "$REAL_HOME/kernel/canonical/bzImage" "$CELLA_HOME/kernel/canonical/"
 cp "$REAL_HOME/rootfs/cella/rootfs.ext4" "$CELLA_HOME/rootfs/cella/"
 
 VM=pingtest
+M="$CELLA_HOME/machines/$VM"
 teardown() {
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
+    VMM_PID=$(cat "$M/pid" 2>/dev/null || true)
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
     rm -rf "$CELLA_HOME"
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
-STATE="$CELLA_HOME/machines/$VM/state"
+STATE="$M/state"
 wait_frozen() {
     local deadline=$((SECONDS + 20))
     until [ -f "$STATE" ]; do
@@ -41,41 +46,73 @@ wait_frozen() {
         sleep 1
     done
 }
+# The stand-in engine: while the given pid runs, release every held
+# operation of the frozen machine and thaw it -- one decision per
+# operation, each park a fresh freeze.
+pump_while() { # pid
+    # The pump races the host's own ARP timers: a reply released
+    # after the host's probe window closes is dropped as
+    # unsolicited (arp_accept=0), thus the cadence stays tight.
+    local cycles=0
+    while kill -0 "$1" 2>/dev/null; do
+        if [ -f "$STATE" ]; then
+            pid=$(cat "$M/pid" 2>/dev/null || true)
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { sleep 0.2; continue; }
+            for id in $("$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+                "$BIN" gateway "$VM" release "$id" >/dev/null
+            done
+            "$BIN" thaw "$VM" >/dev/null
+            cycles=$((cycles + 1))
+        fi
+        sleep 0.2
+    done
+    echo "  ($cycles engine cycles)"
+}
 
 say "step 1: born closed -- the machine answers nothing"
 "$BIN" create "$VM" --net "$TAP" >/dev/null
-grep -q '"valve": "closed"' "$CELLA_HOME/machines/$VM/manifest.json" || { echo "FAIL: the manifest is not born closed"; exit 1; }
+[ "$(cat "$M/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 "$BIN" start "$VM" >/dev/null
 sleep 4
-VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
+VMM_PID=$(cat "$M/pid")
 ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a closed machine answered a ping"; exit 1; }
 [ -f "$STATE" ] && { echo "FAIL: a closed machine froze on inbound traffic"; exit 1; }
 echo "  no reply, no freeze, no ledger: dark"
 
-say "step 2: open -- the membrane; the reply parks, and the park is the freeze"
+say "step 2: open -- every egress parks, and the park is the freeze"
 "$BIN" gateway "$VM" open >/dev/null
 sleep 1
 ping -c 1 -W 3 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
-wait_frozen || { echo "FAIL: the parked reply did not freeze the machine"; exit 1; }
+wait_frozen || { echo "FAIL: the parked egress did not freeze the machine"; exit 1; }
 SHOW=$("$BIN" gateway "$VM" show)
 echo "$SHOW" | sed "s/^/  /"
-echo "$SHOW" | grep -q "$HOST_IP.*held" || { echo "FAIL: show does not list the parked reply"; exit 1; }
-echo "  the guest's reply is held; the machine froze itself"
+echo "$SHOW" | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show lists nothing held"; exit 1; }
+echo "  the guest's first egress is held; the machine froze itself"
 
-say "step 3: release the reply; the next ping answers"
-ID_R=$(echo "$SHOW" | grep "$HOST_IP" | awk "{print \$1}")
-"$BIN" gateway "$VM" release "$ID_R" >/dev/null
-"$BIN" thaw "$VM" >/dev/null
-sleep 2
-ping -c 2 -W 3 "$GUEST_IP" >/dev/null || { echo "FAIL: no reply after the release"; exit 1; }
-echo "  released: the pass entry stands, and pings answer"
+say "step 3: the engine decides, and a reply lands inside the ping's window"
+ping -c 20 -i 1 -W 25 "$GUEST_IP" >/dev/null 2>&1 &
+PING_PID=$!
+pump_while "$PING_PID"
+wait "$PING_PID" || { echo "FAIL: no reply landed while the engine decided"; exit 1; }
+echo "  parked, frozen, decided, delivered -- the ratchet turned"
 
-say "step 4: close -- the machine is closed again"
+say "step 4: close -- the machine is dark again (negative)"
+# The pump left the machine frozen or running; a closed valve needs
+# a standing machine to prove its silence.
+if [ -f "$STATE" ]; then "$BIN" thaw "$VM" >/dev/null; sleep 1; fi
 "$BIN" gateway "$VM" close >/dev/null
 sleep 1
 ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a closed machine answered a ping"; exit 1; }
-echo "  dark again: close kills even the allowed flow"
+[ "$(cat "$M/valve")" = "closed" ] || { echo "FAIL: the valve record did not close"; exit 1; }
+echo "  dark: close blocks even the previously decided path"
+
+say "step 5: reopened, the valve remembers nothing (negative)"
+"$BIN" gateway "$VM" open >/dev/null
+sleep 1
+ping -c 1 -W 3 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a reopened machine answered without a fresh decision"; exit 1; }
+wait_frozen || { echo "FAIL: the reopened machine did not park and freeze"; exit 1; }
+echo "  reopened: the first egress parked and froze -- nothing was inherited"
 
 echo
-echo "PASS: fail, freeze, release, reply, fail -- the valve holds"
-"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
+echo "PASS: fail, freeze, decide, reply, fail, remember nothing -- the valve holds"
+"$BIN" destroy "$VM" >/dev/null 2>&1 || { "$BIN" stop "$VM" >/dev/null 2>&1 || true; "$BIN" destroy "$VM" >/dev/null; }

@@ -54,6 +54,10 @@ pub struct Net {
     /// Ledger events waiting for the run loop to append to the
     /// chronicle -- one per new operation, never one per frame.
     pending_ledger: Vec<proto::Event>,
+    /// True when any frame parked since the last take: a frame that
+    /// joins an existing operation emits no ledger event, and the
+    /// park is the freeze for joins too (the one-shot rule).
+    parked_flag: bool,
 }
 
 /// The name of one egress frame, at the most primitive level a
@@ -133,6 +137,7 @@ impl Net {
             parked: Vec::new(),
             guest_clock,
             pending_ledger: Vec::new(),
+            parked_flag: false,
         })
     }
 
@@ -246,7 +251,11 @@ impl Net {
     /// docs/NETWORK-MODEL.md, "one decision per new part of the
     /// world").
     fn park(&mut self, dest: Dest, head_index: u16, frame: Vec<u8>) {
+        self.parked_flag = true;
         if let Some(op) = self.parked.iter_mut().find(|op| op.dest == dest) {
+            if cfg!(debug_assertions) {
+                eprintln!("cella: parked egress to {dest} (joined)");
+            }
             op.frames.push((head_index, frame));
             return;
         }
@@ -378,10 +387,14 @@ impl VirtioDevice for Net {
         std::mem::take(&mut self.pending_ledger)
     }
 
+    fn take_parked_flag(&mut self) -> bool {
+        std::mem::take(&mut self.parked_flag)
+    }
+
     fn resolve_decisions(
         &mut self,
         decisions: &HashMap<Vec<u8>, proto::Decision>,
-    ) -> Vec<(u16, Vec<u8>)> {
+    ) -> (Vec<(u16, Vec<u8>)>, Vec<u16>) {
         // Oldest-parked first, and strictly in that order: an
         // operation resolves only once every operation parked
         // before it has itself resolved (see docs/NETWORK-MODEL.md
@@ -390,6 +403,7 @@ impl VirtioDevice for Net {
         // reapplying an already-resolved decision finds nothing at
         // the front to match and is harmless.
         let mut released_frames = Vec::new();
+        let mut refused_heads = Vec::new();
         while let Some(front) = self.parked.first() {
             let Some(decision) = decisions.get(front.id.as_slice()) else {
                 break;
@@ -415,11 +429,16 @@ impl VirtioDevice for Net {
                             why: refusal.why.clone(),
                         })),
                     });
+                    // The frames die, and the buffers return: a
+                    // refusal answers the machine cleanly, in-frame
+                    // -- an uncompleted descriptor would wedge the
+                    // guest's TX queue (NETDEV watchdog).
+                    refused_heads.extend(op.frames.iter().map(|(head, _)| *head));
                 }
                 None => {}
             }
         }
-        released_frames
+        (released_frames, refused_heads)
     }
 }
 

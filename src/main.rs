@@ -944,11 +944,16 @@ fn flush_ledger(
     for (_, _, t) in mmio_devices.iter_mut() {
         events.extend(t.drain_ledger_events());
     }
+    // The freeze trigger: any parked frame, not any Parked event. A
+    // frame that joins an existing held operation emits no event,
+    // and the park is the freeze for joins too (the one-shot rule).
     let mut parked_any = false;
-    for event in events {
-        if matches!(event.event, Some(proto::event::Event::Parked(_))) {
+    for (_, _, t) in mmio_devices.iter_mut() {
+        if t.take_parked_flag() {
             parked_any = true;
         }
+    }
+    for event in events {
         let msg = ledger::event_message(event);
         if let Err(e) = ledger::append(ledger_path, &msg) {
             eprintln!("cella: ledger append failed: {e}");
@@ -1457,15 +1462,20 @@ fn dump_ledger(path: &PathBuf) -> ! {
         };
         match &ev.event {
             Some(proto::event::Event::Parked(op)) => {
-                let d = op.destination.as_ref();
-                let ip: Vec<String> = d
-                    .map(|d| d.ip.iter().map(u8::to_string).collect())
+                let dest = op
+                    .destination
+                    .as_ref()
+                    .map(ledger::Dest::from_message)
+                    .map(|d| match d {
+                        ledger::Dest::Ipv4 { ip, port, .. } => {
+                            format!("ip={}.{}.{}.{} port={port}", ip[0], ip[1], ip[2], ip[3])
+                        }
+                        l2 => format!("l2={l2}"),
+                    })
                     .unwrap_or_default();
-                let port = d.map(|d| d.port).unwrap_or(0);
                 println!(
-                    "parked id={} ip={} port={port} guest_ns={} host_ns={}",
+                    "parked id={} {dest} guest_ns={} host_ns={}",
                     ledger::hex(&op.id),
-                    ip.join("."),
                     op.guest_ns,
                     op.host_ns
                 );

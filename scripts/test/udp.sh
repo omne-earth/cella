@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# smoke-udp: no datagram leaves the machine undecided, proven from
+# smoke-udp: no frame leaves the machine undecided, proven from
 # within the guest. The guest itself sends UDP and ICMP toward the
-# host. Closed drops the datagram with no freeze. Open parks it as an
-# operation (proto and port visible in show) and the park is the
-# freeze. A refusal delivers nothing: the host listener stays empty,
-# and the guest sees its own send time out in-frame. Every assertion
-# reads either the guest console or a host capture -- never a claim.
+# host. Closed drops everything with no freeze. Open parks every
+# frame under its most primitive name: the guest's broadcast ARP
+# parks first (the L2 negative -- an unrefined ethertype never
+# passes), its release lets the datagram park as an operation with
+# proto and port, and a refusal delivers nothing: the host listener
+# stays empty, and the guest sees its own send time out in-frame.
+# Every assertion reads the guest console, the chronicle, or a host
+# capture -- never a claim.
 set -uo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -43,10 +46,18 @@ STATE="$CELLA_HOME/machines/$VM/state"
 # echoed before the pipe closes.
 type_in() { (printf '%s\n' "$1"; sleep 3) | timeout 15 "$BIN" enter "$VM" >/dev/null 2>&1 || true; }
 wait_frozen() {
+    # The sidecar lands before the old VMM exits: wait for both, or
+    # the next thaw refuses a machine still running.
     local deadline=$((SECONDS + 20))
     until [ -f "$STATE" ]; do
         [ $SECONDS -lt $deadline ] || return 1
         sleep 1
+    done
+    local pid
+    pid=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
+    while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do
+        [ $SECONDS -lt $deadline ] || return 1
+        sleep 0.2
     done
 }
 wait_con() {
@@ -66,6 +77,7 @@ LISTEN_PID=$!
 
 say "step 1: born closed -- the guest's own datagram dies at the tap (negative)"
 "$BIN" create "$VM" --net "$TAP" >/dev/null
+[ "$(cat "$CELLA_HOME/machines/$VM/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 "$BIN" start "$VM" >/dev/null
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 sleep 4
@@ -77,16 +89,28 @@ sleep 2
 [ -f "$STATE" ] && { echo "FAIL: a closed machine froze on its own egress"; exit 1; }
 echo "  the datagram died at the tap: no delivery, no freeze"
 
-say "step 2: open -- the datagram parks as an operation, and the park is the freeze"
+say "step 2: open -- the L2 name parks first, then the datagram (negative + positive)"
 "$BIN" gateway "$VM" open >/dev/null
 sleep 1
 type_in "echo op > /dev/udp/$HOST_IP/$UDP_PORT"
-wait_frozen || { echo "FAIL: the parked datagram did not freeze the machine"; exit 1; }
+wait_frozen || { echo "FAIL: the parked frame did not freeze the machine"; exit 1; }
+"$BIN" gateway "$VM" show | sed 's/^/   /'
+# The most primitive name first: the guest's broadcast ARP parks as
+# an L2 operation -- an unrefined ethertype never passes the
+# membrane.
+ID_A=$("$BIN" gateway "$VM" show | grep "arp " | awk '{print $1}' | tail -1)
+[ -n "$ID_A" ] || { echo "FAIL: show lists no held L2 operation for the ARP"; exit 1; }
+[ -s "$CAPTURE" ] && { echo "FAIL: something reached the host before a decision"; exit 1; }
+"$BIN" gateway "$VM" release "$ID_A" >/dev/null
+"$BIN" thaw "$VM" >/dev/null
+# The resolution lands at the thaw edge, and the datagram itself
+# parks next, refined: address, port, protocol.
+wait_frozen || { echo "FAIL: the datagram did not park after the resolution"; exit 1; }
 "$BIN" gateway "$VM" show | sed 's/^/   /'
 ID_U=$("$BIN" gateway "$VM" show | grep "$HOST_IP:$UDP_PORT" | awk '{print $1}' | tail -1)
 [ -n "$ID_U" ] || { echo "FAIL: show lists no held operation for $HOST_IP:$UDP_PORT"; exit 1; }
 [ -s "$CAPTURE" ] && { echo "FAIL: the datagram reached the host before a decision"; exit 1; }
-echo "  held: $ID_U ($HOST_IP:$UDP_PORT), nothing delivered"
+echo "  held: arp first, then $HOST_IP:$UDP_PORT -- nothing delivered"
 
 say "step 3: refuse -- the datagram never leaves, and the guest sees the silence"
 "$BIN" gateway "$VM" refuse "$ID_U" --why "smoke-udp: the world side carries no datagrams" >/dev/null
