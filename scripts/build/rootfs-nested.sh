@@ -23,7 +23,7 @@ ln -s /root/.cella/kernel /tmp/cella/kernel
 ln -s /root/.cella/rootfs /tmp/cella/rootfs
 export CELLA_HOME=/tmp/cella
 
-if grep -q cella_nested_mode=www /proc/cmdline; then
+if grep -q cella_nested_mode=www /proc/cmdline || [ -f /etc/cella-www ]; then
     # tap1, not tap0: the pool convention gives tap1 the 192.168.201
     # subnet, and the outer guest's own eth0 already uses 192.168.200.
     # tap1 must exist before the jailed start: the inner VMM runs in a

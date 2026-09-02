@@ -225,6 +225,115 @@ pub fn restore(vcpu: &VcpuFd, state: &VcpuState) -> Result<(), Error> {
     Ok(())
 }
 
+// The nested virtualization state. A guest can run KVM itself, and the
+// state of its inner VM lives partly in the host kernel (the VMCS or
+// VMCB cache), not in guest RAM. A freeze that drops this state makes
+// the next VM entry of the thawed guest fail, and the guest triple
+// faults. kvm-ioctls 0.19 has no wrapper for these two ioctls, thus
+// the raw numbers stand here: _IOWR/_IOW(KVMIO=0xAE, 0xbe/0xbf,
+// struct kvm_nested_state) with the 128-byte fixed header.
+const KVM_GET_NESTED_STATE: libc::c_ulong = 0xc080_aebe;
+const KVM_SET_NESTED_STATE: libc::c_ulong = 0x4080_aebf;
+
+/// Read the nested state as raw bytes: the fixed header plus the
+/// variable data region. An empty vector means the host offers no
+/// nested state (the capability is absent), and the thaw skips the
+/// restore.
+pub fn save_nested(vcpu: &VcpuFd) -> Result<Vec<u8>, Error> {
+    use std::os::unix::io::AsRawFd;
+    let hdr = std::mem::size_of::<kvm_bindings::kvm_nested_state>();
+    let mut buf = vec![0u8; hdr];
+    loop {
+        let cap = buf.len() as u32;
+        buf[4..8].copy_from_slice(&cap.to_le_bytes());
+        // SAFETY: buf holds at least the fixed header, and its size
+        // field tells the kernel the capacity of the buffer.
+        let r = unsafe { libc::ioctl(vcpu.as_raw_fd(), KVM_GET_NESTED_STATE, buf.as_mut_ptr()) };
+        if r == 0 {
+            let used = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;
+            buf.truncate(used.clamp(hdr, buf.len()));
+            return Ok(buf);
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            // The state does not fit: the kernel wrote the required
+            // size into the size field. Grow and retry.
+            Some(libc::E2BIG) => {
+                let need = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;
+                buf = vec![0u8; need.max(hdr)];
+            }
+            // The host has no nested-state capability.
+            Some(libc::ENOTTY) | Some(libc::EINVAL) => return Ok(Vec::new()),
+            _ => return Err(Error::Kvm(kvm_ioctls::Error::last())),
+        }
+    }
+}
+
+/// The MSRs of nested virtualization, per vendor. On AMD,
+/// MSR_VM_HSAVE_PA holds the host-save area that VMRUN uses: a thaw
+/// that zeroes it makes the inner KVM's next VMRUN triple fault the
+/// guest. On Intel, IA32_FEATURE_CONTROL carries the locked VMX
+/// enable bit that the guest kernel sets at boot. Each MSR exists on
+/// one vendor alone, thus none can join SAVED_MSRS (a strict list
+/// that every host must read in full). `save_nested_msrs` probes
+/// each one and keeps the readable set.
+const NESTED_MSRS: &[u32] = &[
+    0x0000_003a, // MSR_IA32_FEATURE_CONTROL (Intel)
+    0xc001_0114, // MSR_VM_CR (AMD)
+    0xc001_0117, // MSR_VM_HSAVE_PA (AMD)
+];
+
+/// Read the nested-virtualization MSRs that this host offers. An MSR
+/// the host cannot read is left out, not an error.
+pub fn save_nested_msrs(vcpu: &VcpuFd) -> Vec<(u32, u64)> {
+    let mut out = Vec::new();
+    for &index in NESTED_MSRS {
+        let mut req = Msrs::from_entries(&[kvm_msr_entry {
+            index,
+            ..Default::default()
+        }])
+        .expect("one entry is well-formed");
+        if let Ok(1) = vcpu.get_msrs(&mut req) {
+            out.push((index, req.as_slice()[0].data));
+        }
+    }
+    out
+}
+
+/// Write the nested-virtualization MSRs back, before the first
+/// KVM_RUN.
+pub fn restore_nested_msrs(vcpu: &VcpuFd, msrs: &[(u32, u64)]) -> Result<(), Error> {
+    if msrs.is_empty() {
+        return Ok(());
+    }
+    let entries: Vec<kvm_msr_entry> = msrs
+        .iter()
+        .map(|&(index, data)| kvm_msr_entry {
+            index,
+            data,
+            ..Default::default()
+        })
+        .collect();
+    let req = Msrs::from_entries(&entries).map_err(|_| Error::MsrCountMismatch)?;
+    if vcpu.set_msrs(&req)? != entries.len() {
+        return Err(Error::MsrCountMismatch);
+    }
+    Ok(())
+}
+
+/// Write the nested state back, before the first KVM_RUN. The bytes
+/// are exactly what `save_nested` read.
+pub fn restore_nested(vcpu: &VcpuFd, data: &[u8]) -> Result<(), Error> {
+    use std::os::unix::io::AsRawFd;
+    // SAFETY: data begins with the fixed header that save_nested wrote,
+    // and its size field covers the whole slice.
+    let r = unsafe { libc::ioctl(vcpu.as_raw_fd(), KVM_SET_NESTED_STATE, data.as_ptr()) };
+    if r == 0 {
+        Ok(())
+    } else {
+        Err(Error::Kvm(kvm_ioctls::Error::last()))
+    }
+}
+
 /// The interrupt hardware that KVM keeps, and that guest RAM does not
 /// contain: the two legacy PICs, the IOAPIC, and the PIT.
 ///
@@ -347,7 +456,11 @@ pub fn dispatch(exit: VcpuExit, devices: &mut Devices) -> RunResult {
             RunResult::Continue
         }
         VcpuExit::Hlt => RunResult::Halted,
-        VcpuExit::Shutdown | VcpuExit::FailEntry(..) => RunResult::Shutdown,
+        VcpuExit::Shutdown => RunResult::Shutdown,
+        VcpuExit::FailEntry(reason, cpu) => {
+            eprintln!("cella: KVM entry failed: reason {reason:#x} on cpu {cpu}");
+            RunResult::Shutdown
+        }
         VcpuExit::Intr | VcpuExit::IrqWindowOpen => RunResult::Continue,
         _ => RunResult::Continue,
     }

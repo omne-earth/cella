@@ -15,8 +15,11 @@ artifacts, the boot path, the pass criteria, and the results.
    runs a VMM uses the CPUID filter (VMX must pass through), /dev/kvm,
    and the interrupt paths harder than a plain Linux guest does.
 3. **It is the recursion primitive.** A world that can contain worlds
-   is a required property for the larger goal. The boot is the first
-   step; a freeze of a hypervisor guest is a later one.
+   is a required property for the larger goal. The boot was the
+   first step; the freeze of a hypervisor guest is delivered too.
+   The sidecar (v8) carries the nested-virtualization state (see
+   docs/DEVICE-STATE.md), and the hybrid and www gates freeze the
+   outer machine while its inner VM runs.
 
 ## The layers
 

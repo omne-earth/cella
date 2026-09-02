@@ -713,6 +713,15 @@ fn main() {
         serial = SerialDevice::restore(vm.clone(), frozen_state.serial, console_client.clone());
         vcpu::restore_irqchip(&vm, &frozen_state.irqchip)
             .unwrap_or_else(|e| fatal(&format!("restoring irqchip/PIT: {e:?}")));
+        // A guest that runs KVM itself froze with inner-VM entry state
+        // in the host kernel. Put it back before the first KVM_RUN, or
+        // the guest triple faults on its next VM entry.
+        if !frozen_state.nested.is_empty() {
+            vcpu::restore_nested(&vcpu_fd, &frozen_state.nested)
+                .unwrap_or_else(|e| fatal(&format!("restoring nested state: {e:?}")));
+        }
+        vcpu::restore_nested_msrs(&vcpu_fd, &frozen_state.nested_msrs)
+            .unwrap_or_else(|e| fatal(&format!("restoring nested MSRs: {e:?}")));
         // The transports above came up at reset state, and the guest
         // driver in RAM holds a negotiated state. Put the device side
         // back before the first KVM_RUN, or the first request lands in
@@ -1136,6 +1145,19 @@ fn do_freeze(
     );
     let irqchip =
         vcpu::save_irqchip(vm).unwrap_or_else(|e| fatal(&format!("saving irqchip/PIT: {e:?}")));
+    // The guest can run KVM itself: the entry state of its inner VM
+    // lives in the host kernel, not in guest RAM. Without this block a
+    // thawed nested host triple faults on its next VM entry.
+    let nested = vcpu::save_nested(vcpu_fd)
+        .unwrap_or_else(|e| fatal(&format!("saving nested state: {e:?}")));
+    let nested_msrs = vcpu::save_nested_msrs(vcpu_fd);
+    if !nested.is_empty() {
+        eprintln!(
+            "cella: nested state: {} bytes, {} MSR(s)",
+            nested.len(),
+            nested_msrs.len()
+        );
+    }
     let tsc_khz = vcpu_fd.get_tsc_khz().unwrap_or(0);
 
     let frozen = freeze::FrozenState {
@@ -1146,6 +1168,8 @@ fn do_freeze(
         clock,
         irqchip,
         devices: device_states.to_vec(),
+        nested,
+        nested_msrs,
     };
     freeze::write_state(state_dir, &frozen)
         .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));

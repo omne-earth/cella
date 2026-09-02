@@ -56,7 +56,7 @@ Two qualifications:
 ## Architecture
 
 Guest RAM is one MAP_SHARED file (`ram.img`). The RAM file is the
-freeze image. A sidecar file (`state`, format v7) holds the vCPU
+freeze image. A sidecar file (`state`, format v8) holds the vCPU
 state, the irqchip and PIT state, the kvmclock value, the serial
 registers, one block per virtio transport (with any held egress
 frames), and the format version.
@@ -87,7 +87,7 @@ flowchart LR
     C1 -->|"write"| SC
     subgraph state["state dir"]
         RAM["ram.img (guest RAM, MAP_SHARED)"]
-        SC["state (sidecar, format v7)"]
+        SC["state (sidecar, format v8)"]
     end
     RAM -->|"map"| C2["cella, second process<br/>(thaw, then continue)"]
     SC -->|"restore, then delete"| C2

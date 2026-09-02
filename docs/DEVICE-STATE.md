@@ -1,7 +1,7 @@
 # Device state across freeze and thaw
 
 This document designs the last piece of the cryogenic principle:
-the virtio devices. The design is delivered -- sidecar format v7
+the virtio devices. The design is delivered -- sidecar format v8
 carries the transports, and the acceptance table below records the
 state of each criterion. Before it, the clocks, the vCPU, the
 interrupt hardware, the serial registers, and the RNG state
@@ -125,7 +125,7 @@ The concrete surface, in order:
 Therefore the save is a copy of registers, indices, and the held
 egress frames; no drain step exists beyond them.
 
-## The design: sidecar format v7
+## The design: sidecar format v8
 
 The sidecar gains one block per transport, in device order (block,
 then net when present):
@@ -137,6 +137,15 @@ then net when present):
 - held egress frames: a count, then each frame with its descriptor
   head index and its length (frames read from the TX ring and not
   yet written to the TAP at the freeze instant)
+
+Version 8 adds the nested-virtualization block, after the
+transports: the raw KVM nested-state bytes and the vendor MSRs the
+host can read (MSR_VM_HSAVE_PA on AMD, IA32_FEATURE_CONTROL on
+Intel). A guest can run KVM
+itself, and the entry state of its inner VM lives in the host
+kernel, not in guest RAM. A freeze that drops this state makes the
+thawed guest triple fault on its next VM entry. A host without the
+capability writes an empty block, and the thaw skips it.
 
 At thaw, after the vCPU restore and before the first KVM_RUN, each
 transport rebuilds from its block: the Queue objects take their
@@ -183,7 +192,7 @@ target (`make device-state-ac1` .. `device-state-ac4`), and
 
 | Criterion | State |
 |---|---|
-| **AC1 -- the disk survives the thaw** | The sidecar (v7) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. |
+| **AC1 -- the disk survives the thaw** | The sidecar (v8) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. |
 | **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, and the transport restore covers virtio-net. The gate opens the valve, decides the guest's parked echo reply, pings, freezes, thaws, decides the reply of the new epoch, and pings again. A missing tap fails at start; `setup net` recreates the pool by convention. |
 | **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, the open verb arms the membrane, the sidecar carries the parked frames with their descriptor head indices, and the operations survive the thaw as held -- ids rebound through the ledger. A decision by id releases each one, in park order. The gate fetches a real www page: the fetch parks, the machine freezes, the engine decides while it sleeps, and the same request completes after the thaw. |
 | **AC4 -- the verdict is external** | Every egress frame parks under the open valve into an operation with an id, the park reports its destination, and the decisions come from outside, by id, applied in park order: a release with allow installs a pass entry for that epoch and the flow runs at full speed, or freeze, grow the world, decide, thaw. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. |

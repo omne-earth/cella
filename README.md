@@ -18,7 +18,7 @@ guarantees hold one nesting level down (`make smoke-nested-boot`,
 host.** Every gate is derived from measurement; no gate uses a tuned
 constant. The full suite (`make test-all`) passes on both machine
 classes with the pinned guest kernel (7.2.2). The virtio transports
-now ride the freeze sidecar (format v7), the egress-hold surface --
+now ride the freeze sidecar (format v8), the egress-hold surface --
 park, report, release, allow -- is in place (`docs/DEVICE-STATE.md`),
 and the universe family treats machines as artifacts: branch,
 archive, inspect (`docs/LIFECYCLE.md`). The network model is
@@ -83,7 +83,7 @@ Properties, each deliberate:
   the thaw prefills the stage-2 tables (`KVM_PRE_FAULT_MEMORY`) and
   runs the warming stub (`warm.rs`), which reaches every hypervisor
   layer below. See `docs/FREEZE-THAW.md` and `docs/NESTED-BOOT.md`.
-- **Devices continue.** Sidecar v7 carries each transport: status,
+- **Devices continue.** Sidecar v8 carries each transport: status,
   queue select, ISR, negotiated features, and per queue the ready
   flag, size, ring addresses, and the next-available and next-used
   indices -- the only progress counters RAM does not hold. The demo
@@ -151,7 +151,7 @@ src/
   config.rs             guest defaults in one place (cmdline, thaw warming)
   memory.rs             guest RAM: a MAP_SHARED file (also the freeze image)
   vcpu.rs               vCPU creation, KVM_RUN dispatch, register save/restore
-  freeze.rs             sidecar format (v7), crash-consistent write, thaw
+  freeze.rs             sidecar format (v8), crash-consistent write, thaw
   warm.rs               stage-2 warming stub, run at thaw before the clock restore
   seccomp.rs            hand-rolled BPF allowlist + a self-test hook
   boot/x86_64.rs        GDT, page tables, bzImage load, long-mode entry

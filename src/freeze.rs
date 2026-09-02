@@ -29,13 +29,15 @@ const MAGIC: &[u8; 8] = b"MVMMFRZ1";
 // PIT state. Version 4 added the xsave and xcrs blocks. Version 5
 // added MSR_IA32_XSS to SAVED_MSRS. Version 6 added the serial
 // device registers. Version 7 added the virtio transport blocks and
-// the held egress frames (see docs/DEVICE-STATE.md). Each of these
+// the held egress frames (see docs/DEVICE-STATE.md). Version 8 added
+// the nested-state block: a guest can run KVM itself, and the inner
+// VM's entry state lives in the host kernel. Each of these
 // changes moves all data that comes after it in the file. Therefore a
 // binary must not read a sidecar that has a different version.
 // read_state compares the version and refuses the file if it does not
 // agree. No sidecar files exist at an older version, but this check is
 // what makes that assumption safe.
-const FORMAT_VERSION: u32 = 7;
+const FORMAT_VERSION: u32 = 8;
 
 pub struct FrozenState {
     pub mem_size: u64,
@@ -52,6 +54,13 @@ pub struct FrozenState {
     /// carry the device-side registers, indices, and any held egress
     /// frames (see docs/DEVICE-STATE.md).
     pub devices: Vec<TransportState>,
+    /// The raw KVM nested-state bytes (vcpu::save_nested). Empty when
+    /// the host offers no nested-state capability; the thaw then skips
+    /// the restore.
+    pub nested: Vec<u8>,
+    /// The nested-virtualization MSRs (vcpu::save_nested_msrs). AMD
+    /// alone offers them; the set holds what the host could read.
+    pub nested_msrs: Vec<(u32, u64)>,
 }
 
 #[allow(dead_code)] // fields read via {:?} in error messages, not field access
@@ -106,6 +115,8 @@ pub fn write_state(dir: &Path, st: &FrozenState) -> Result<(), Error> {
         clock,
         irqchip,
         devices,
+        nested,
+        nested_msrs,
     } = st;
     fs::create_dir_all(dir)?;
     let tmp = state_tmp_path(dir);
@@ -144,6 +155,14 @@ pub fn write_state(dir: &Path, st: &FrozenState) -> Result<(), Error> {
     }
     f.write_all(serial)?;
     write_devices(&mut f, devices)?;
+    f.write_all(&(nested.len() as u32).to_le_bytes())?;
+    f.write_all(nested)?;
+    f.write_all(&(nested_msrs.len() as u32).to_le_bytes())?;
+    for (index, data) in nested_msrs {
+        f.write_all(&index.to_le_bytes())?;
+        f.write_all(&0u32.to_le_bytes())?; // pad
+        f.write_all(&data.to_le_bytes())?;
+    }
     f.sync_all()?;
     drop(f);
 
@@ -294,6 +313,17 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
         });
     }
 
+    let nested_len = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+    let nested = take(nested_len)?.to_vec();
+    let n_nested_msrs = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+    let mut nested_msrs = Vec::with_capacity(n_nested_msrs);
+    for _ in 0..n_nested_msrs {
+        let index = u32::from_le_bytes(take(4)?.try_into().unwrap());
+        let _pad = take(4)?;
+        let data = u64::from_le_bytes(take(8)?.try_into().unwrap());
+        nested_msrs.push((index, data));
+    }
+
     Ok(FrozenState {
         mem_size,
         serial,
@@ -312,6 +342,8 @@ pub fn read_state(dir: &Path) -> Result<FrozenState, Error> {
         clock,
         irqchip,
         devices,
+        nested,
+        nested_msrs,
     })
 }
 
@@ -449,6 +481,8 @@ mod tests {
                 clock,
                 irqchip: sample_irqchip(),
                 devices: sample_devices(),
+                nested: vec![0xc5; 96],
+                nested_msrs: vec![(0xc001_0117, 0x7fee_d000)],
             },
         )
         .unwrap();
@@ -474,6 +508,9 @@ mod tests {
         // The indices and the held frames are what AC1 and AC3 stand
         // on; the equality here covers every field.
         assert_eq!(read_back.devices, sample_devices());
+        // The nested-state block ends the file (version 8).
+        assert_eq!(read_back.nested, vec![0xc5; 96]);
+        assert_eq!(read_back.nested_msrs, vec![(0xc001_0117, 0x7fee_d000)]);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -496,6 +533,8 @@ mod tests {
                 clock,
                 irqchip: sample_irqchip(),
                 devices: sample_devices(),
+                nested: vec![0xc5; 96],
+                nested_msrs: vec![(0xc001_0117, 0x7fee_d000)],
             },
         )
         .unwrap();
@@ -540,6 +579,8 @@ mod tests {
                 clock,
                 irqchip: sample_irqchip(),
                 devices: sample_devices(),
+                nested: vec![0xc5; 96],
+                nested_msrs: vec![(0xc001_0117, 0x7fee_d000)],
             },
         )
         .unwrap();
@@ -580,6 +621,8 @@ mod tests {
             clock: kvm_clock_data::default(),
             irqchip: sample_irqchip(),
             devices: sample_devices(),
+            nested: vec![0xc5; 96],
+            nested_msrs: vec![(0xc001_0117, 0x7fee_d000)],
         };
         assert!(check_hardware(&frozen, 2_500_000).is_ok());
         assert!(matches!(

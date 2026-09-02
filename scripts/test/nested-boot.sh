@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
-# Smoke test: cella hosts cella. Three variants, selected by $1:
+# Smoke test: cella hosts cella, through the verbs at both layers.
+# Three variants, selected by $1:
 #
-#   airgapped  no network on either layer. The outer guest runs
-#              without a TAP, and the inner guest gets the block
-#              device only.
-#   hybrid     the outer guest is on the network (TAP + ip=), and the
-#              inner guest stays airgapped. PASS needs the inner boot
-#              and an ICMP reply from the outer guest.
-#   www        both layers are networked. The inner cella gets a TAP
-#              inside the outer guest (see rootfs-nested.sh), and the
-#              outer init pings the inner guest. PASS needs the inner
-#              boot, the outer ICMP reply, and the inner ICMP reply.
+#   airgapped  no network on either layer.
+#   hybrid     the outer machine is networked; the inner stays
+#              airgapped. PASS needs the inner boot and an outer
+#              ICMP reply -- decided through the membrane.
+#   www        both layers networked. The outer init is the inner
+#              machine's engine (see rootfs-nested.sh). PASS needs
+#              the inner boot, the outer ICMP reply, and the inner
+#              ICMP reply.
 #
-# The outer init prints "cella-nested:" lines only, thus a
-# "cella-rootfs:" line can come from the inner guest alone. On a
-# nested development host this test is one layer deeper than the host
-# itself; a missing /dev/kvm in the outer guest is a SKIP.
+# The outer machine is born closed, like every machine. The gate
+# proves the negatives first: a closed machine answers nothing and
+# does not freeze on inbound; an open machine answers nothing
+# before a decision. The outer init prints "cella-nested:" lines
+# only, thus a "cella-rootfs:" line can come from the inner guest
+# alone.
 set -euo pipefail
 
 MODE="${1:-airgapped}"
@@ -23,79 +24,111 @@ case "$MODE" in airgapped|hybrid|www) ;; *) echo "usage: $0 airgapped|hybrid|www
 
 cd "$(dirname "$0")/../.."
 BIN=target/release/cella
-CH="${CELLA_HOME:-$HOME/.cella}"
-KERNEL="$CH/kernel/nested/bzImage"
-DISK="$CH/rootfs/nested/rootfs.ext4"
 TAP="${CELLA_TEST_TAP:-tap0}"
 HOST_IP="${CELLA_TAP_CIDR:-192.168.200.1/24}"; HOST_IP="${HOST_IP%%/*}"
 OUTER_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
-TIMEOUT=120
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
-[ -f "$KERNEL" ] && [ -f "$DISK" ] || { echo "SKIP: nested assets missing -- run: make golden-nested"; exit 0; }
-"$BIN" doctor gate kvm || exit 0
+"$BIN" doctor gate kvm golden:kernel:nested golden:rootfs:nested || exit 0
 if [ "$MODE" != airgapped ] && [ ! -e "/sys/class/net/$TAP" ]; then
-    echo "SKIP: $TAP does not exist -- run: make setup-tap"
+    echo "SKIP: $TAP does not exist -- run: cella doctor fix"
     exit 0
 fi
 
-TMP=$(mktemp -d /tmp/cella-nested-boot.XXXXXX)
-trap 'kill $PID 2>/dev/null || true; wait $PID 2>/dev/null || true' EXIT
-mkdir -p "$TMP/state"
-cp "$DISK" "$TMP/disk.img"
+REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
+export CELLA_HOME=$(mktemp -d /tmp/cella-nested.XXXXXX)
+mkdir -p "$CELLA_HOME/kernel/nested" "$CELLA_HOME/rootfs/nested"
+cp "$REAL_HOME/kernel/nested/bzImage" "$CELLA_HOME/kernel/nested/"
+cp "$REAL_HOME/kernel/nested/golden.json" "$CELLA_HOME/kernel/nested/" 2>/dev/null || true
+cp "$REAL_HOME/rootfs/nested/rootfs.ext4" "$CELLA_HOME/rootfs/nested/"
+cp "$REAL_HOME/rootfs/nested/golden.json" "$CELLA_HOME/rootfs/nested/" 2>/dev/null || true
 
-BASE="$("$BIN" --print-default-cmdline)"
-if [ "$MODE" = airgapped ]; then
-    CMDLINE="$BASE root=/dev/vda rw virtio_mmio.device=4K@0xd0000000:5"
-    "$BIN" --state-dir "$TMP/state" --kernel "$KERNEL" --disk "$TMP/disk.img" \
-        --mem-mb 256 --cmdline "$CMDLINE" >"$TMP/serial.log" 2>"$TMP/cella.err" &
-else
-    CMDLINE="$BASE root=/dev/vda rw \
-virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 \
-ip=${OUTER_IP}::${HOST_IP}:255.255.255.0::eth0:off"
-    [ "$MODE" = www ] && CMDLINE="$CMDLINE cella_nested_mode=www"
-    "$BIN" --state-dir "$TMP/state" --kernel "$KERNEL" --disk "$TMP/disk.img" \
-        --tap "$TAP" --mem-mb 256 --cmdline "$CMDLINE" >"$TMP/serial.log" 2>"$TMP/cella.err" &
+VM=outer
+teardown() {
+    "$BIN" stop "$VM" >/dev/null 2>&1 || true
+    [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
+    rm -rf "$CELLA_HOME"
+}
+trap teardown EXIT
+say() { echo; echo "==> $1"; }
+CON="$CELLA_HOME/machines/$VM/console.log"
+STATE="$CELLA_HOME/machines/$VM/state"
+wait_con() {
+    local marker="$1" deadline=$((SECONDS + ${2:-60}))
+    while [ $SECONDS -lt $deadline ]; do
+        grep -aq "$marker" "$CON" 2>/dev/null && return 0
+        sleep 1
+    done
+    return 1
+}
+wait_frozen() {
+    local deadline=$((SECONDS + 20))
+    until [ -f "$STATE" ]; do
+        [ $SECONDS -lt $deadline ] || return 1
+        sleep 1
+    done
+}
+
+say "step 1: create the outer machine through the verbs"
+NET_FLAG="--net none"; [ "$MODE" != airgapped ] && NET_FLAG="--net $TAP"
+"$BIN" create "$VM" --kernel nested --rootfs nested --mem-mb 768 $NET_FLAG >/dev/null
+grep -q '"valve": "closed"' "$CELLA_HOME/machines/$VM/manifest.json" || { echo "FAIL: not born closed"; exit 1; }
+if [ "$MODE" = www ]; then
+    # The mode marker rides the disk: a verb machine cannot extend
+    # the kernel command line.
+    echo www > "$CELLA_HOME/mode"
+    # The golden rootfs has no /etc; make it before the write. debugfs
+    # exits 0 on a failed command, thus the verification is the read
+    # back of the marker.
+    debugfs -w -R "mkdir /etc" "$CELLA_HOME/machines/$VM/disk.img" >/dev/null 2>&1 || true
+    debugfs -w -R "write $CELLA_HOME/mode /etc/cella-www" \
+        "$CELLA_HOME/machines/$VM/disk.img" >/dev/null 2>&1 || true
+    debugfs -R "cat /etc/cella-www" "$CELLA_HOME/machines/$VM/disk.img" 2>/dev/null \
+        | grep -q www || { echo "SKIP: debugfs cannot write the mode marker"; exit 0; }
 fi
-PID=$!
+"$BIN" start "$VM" >/dev/null
+VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 
-echo "--- nested boot ($MODE): waiting up to ${TIMEOUT}s ---"
-inner_boot=""
-outer_icmp=""
-inner_icmp=""
-for _ in $(seq "$TIMEOUT"); do
-    [ -z "$inner_boot" ] && grep -aq "cella-rootfs: init running" "$TMP/serial.log" && {
-        inner_boot=yes; echo "ok: the inner guest booted"; }
-    if [ "$MODE" != airgapped ] && [ -z "$outer_icmp" ]; then
-        ping -c 1 -W 1 "$OUTER_IP" >/dev/null 2>&1 && {
-            outer_icmp=yes; echo "ok: the outer guest answered ICMP at $OUTER_IP"; }
-    fi
-    [ "$MODE" = www ] && [ -z "$inner_icmp" ] && grep -aq "cella-nested: inner answered ICMP" "$TMP/serial.log" && {
-        inner_icmp=yes; echo "ok: the inner guest answered ICMP inside the outer guest"; }
-    done=yes
-    [ -n "$inner_boot" ] || done=""
-    [ "$MODE" = airgapped ] || [ -n "$outer_icmp" ] || done=""
-    [ "$MODE" != www ] || [ -n "$inner_icmp" ] || done=""
-    if [ -n "$done" ]; then
-        echo "PASS ($MODE): all layers reported"
-        grep -a "cella-nested:" "$TMP/serial.log" | head -6
-        rm -rf "$TMP"
-        exit 0
-    fi
-    grep -aq "cella-nested: FAIL" "$TMP/serial.log" && break
-    kill -0 "$PID" 2>/dev/null || break
+say "step 2: the outer guest boots, and hosts the inner machine"
+wait_con "cella-nested: outer init running" 30 || { echo "FAIL: the outer init never ran"; exit 1; }
+if grep -aq "cella-nested: FAIL: no /dev/kvm" "$CON"; then
+    echo "SKIP: the outer guest has no /dev/kvm -- no nested virtualization one layer deeper"
+    exit 0
+fi
+wait_con "cella-rootfs: init running" 90 || {
+    echo "FAIL: the inner guest never booted"
+    tail -20 "$CON" | sed "s/^/   /"; exit 1; }
+echo "  the inner guest booted, one level down"
+
+if [ "$MODE" != airgapped ]; then
+    say "step 3: born closed -- the outer machine answers nothing (negative)"
+    ping -c 2 -W 2 "$OUTER_IP" >/dev/null 2>&1 && { echo "FAIL: a closed machine answered a ping"; exit 1; }
+    [ -f "$STATE" ] && { echo "FAIL: a closed machine froze on inbound traffic"; exit 1; }
+    echo "  no reply, no freeze: dark"
+
+    say "step 4: open -- the reply parks and freezes; no answer before the decision (negative)"
+    "$BIN" gateway "$VM" open >/dev/null
     sleep 1
-done
-
-echo "--- outer serial (last 25 lines) ---"
-tail -n 25 "$TMP/serial.log" || true
-echo "--- outer cella stderr (last 5 lines) ---"
-tail -n 5 "$TMP/cella.err" || true
-if grep -aqE "cella-nested: FAIL: no /dev/kvm" "$TMP/serial.log"; then
-    echo "SKIP: the outer guest has no /dev/kvm -- this host does not offer nested virtualization one layer deeper"
-    echo "(logs kept: $TMP)"
-    exit 0
+    ping -c 1 -W 3 "$OUTER_IP" >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
+    wait_frozen || { echo "FAIL: the parked reply did not freeze the outer machine"; exit 1; }
+    ID_R=$("$BIN" gateway "$VM" show | grep "$HOST_IP" | awk "{print \$1}" | tail -1)
+    [ -n "$ID_R" ] || { echo "FAIL: show lists no parked reply"; exit 1; }
+    "$BIN" gateway "$VM" release "$ID_R" >/dev/null
+    "$BIN" thaw "$VM" >/dev/null
+    sleep 2
+    ping -c 2 -W 3 "$OUTER_IP" >/dev/null || { echo "FAIL: no ICMP reply after the release"; exit 1; }
+    echo "  parked, frozen, decided: the outer machine answers"
 fi
-echo "FAIL ($MODE): incomplete within ${TIMEOUT}s (inner boot=${inner_boot:-no} outer icmp=${outer_icmp:-n/a} inner icmp=${inner_icmp:-n/a})"
-echo "(logs kept: $TMP)"
-exit 1
+
+if [ "$MODE" = www ]; then
+    say "step 5: the inner ICMP, decided by the outer init as the engine"
+    wait_con "cella-nested: inner answered ICMP" 90 || {
+        echo "FAIL: the inner guest never answered inside the outer guest"
+        grep -a "cella-nested:" "$CON" | tail -8 | sed "s/^/   /"; exit 1; }
+    echo "  the ratchet turned one level down"
+fi
+
+echo
+echo "PASS ($MODE): all layers reported"
+grep -a "cella-nested:" "$CON" | head -6
+"$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null
