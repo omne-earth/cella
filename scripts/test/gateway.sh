@@ -63,6 +63,10 @@ pump() { # marker cycles
         [ $cycles -le "$budget" ] || return 1
         for m in ag gw; do
             [ -f "$CELLA_HOME/machines/$m/state" ] || continue
+            # The sidecar lands before the old VMM exits: wait out
+            # the gap, or the thaw refuses a machine still running.
+            pid=$(cat "$CELLA_HOME/machines/$m/pid" 2>/dev/null || true)
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && continue
             for id in $("$BIN" gateway $m show | sed -n "s/^\([0-9a-f]\{32\}\) .*held\$/\1/p"); do
                 "$BIN" gateway $m release "$id" >/dev/null
             done
@@ -87,9 +91,12 @@ say "step 5: the pair freezes together (agent first), thaws together (gateway fi
 wait_con gw "forwarding on" >/dev/null 2>&1 || true
 "$BIN" thaw ag >/dev/null
 sleep 2
-type_in ag 'ping -c 1 -W 5 192.168.201.1 >/dev/null && echo world-agai"n"'
-wait_con ag "world-again" || { echo "FAIL: the pair did not survive the freeze"; exit 1; }
-echo "  the pair froze and thawed; the agent still reaches the world"
+# A thaw starts a fresh epoch on both machines: nothing is
+# inherited, and every hop parks and is decided again. The pump
+# stands in for the engine here too.
+type_in ag 'ping -c 1 -W 30 192.168.201.1 >/dev/null && echo world-agai"n"'
+pump "world-again" 8 || { echo "FAIL: the pair did not survive the freeze"; exit 1; }
+echo "  the pair froze and thawed; the agent reaches the world again, re-decided"
 
 echo
 echo "PASS: the gateway ladder -- pair wiring, forwarding, pair freeze"
