@@ -282,7 +282,11 @@ impl MmioTransport {
     /// must agree before the first KVM_RUN. The feature bits go to the
     /// device backend again: the guest negotiated them once, before
     /// the freeze, and does not negotiate again.
-    pub fn restore_state(&mut self, st: &TransportState) {
+    pub fn restore_state(
+        &mut self,
+        st: &TransportState,
+        open_ops: &[crate::ledger::OpenOperation],
+    ) {
         if st.status & STATUS_FEATURES_OK != 0 {
             self.device.ack_features(st.driver_features);
         }
@@ -305,7 +309,7 @@ impl MmioTransport {
             q.set_next_used(qs.next_used);
             q.set_ready(qs.ready);
         }
-        self.device.restore_held(st.held_frames.clone());
+        self.device.restore_held(st.held_frames.clone(), open_ops);
     }
 
     /// Turn the egress hold on or off (see docs/DEVICE-STATE.md).
@@ -323,13 +327,22 @@ impl MmioTransport {
         self.device.drain_ledger_events()
     }
 
-    /// Deliver the parked egress frames, at thaw: write each frame to
-    /// the TAP, oldest first, and complete it -- the buffer is marked
-    /// used and the interrupt is raised. At the trap instant the
-    /// guest owned no completion, and without this step its driver
-    /// would leak the descriptor.
-    pub fn deliver_held(&mut self, mem: &GuestMemoryMmap) {
-        let frames = self.device.take_held();
+    /// Apply a decision map to the device's held operations, oldest-
+    /// parked first (see docs/NETWORK-MODEL.md, "Release names an
+    /// id"): every operation the map lets resolve right now
+    /// delivers its frames to the TAP and completes them -- the
+    /// buffer is marked used and the interrupt is raised, because at
+    /// the park instant the guest owned no completion, and without
+    /// this step its driver would leak the descriptor. A refusal
+    /// resolves silently, with no completion: its frames never
+    /// reach the guest's used ring, the same as a request that
+    /// never sent.
+    pub fn apply_decisions(
+        &mut self,
+        decisions: &std::collections::HashMap<Vec<u8>, crate::proto::Decision>,
+        mem: &GuestMemoryMmap,
+    ) {
+        let frames = self.device.resolve_decisions(decisions);
         if frames.is_empty() {
             return;
         }

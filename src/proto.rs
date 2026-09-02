@@ -41,6 +41,7 @@ mod tests {
                 host: "huggingface.co".into(),
                 ip: vec![1, 2, 3, 4],
                 port: 443,
+                proto: 6,
             }),
             guest_ns: 1_000_000_007,
             host_ns: 9_000_000_001,

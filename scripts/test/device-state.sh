@@ -28,6 +28,7 @@ cp "$REAL_HOME/rootfs/cella/rootfs.ext4" "$CELLA_HOME/rootfs/cella/"
 VM=devstate
 teardown() {
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
+    [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
     rm -rf "$CELLA_HOME"
 }
 trap teardown EXIT
@@ -148,10 +149,15 @@ ac3)
 		|| { echo "FAIL: the freeze holds no egress frame"; exit 1; }
 	grep -a "held egress frame" "$CELLA_HOME/machines/$VM/vmm.log" | tail -1 | sed "s/^/  /"
 
-	say "step 5: thaw -- the held frames are delivered and completed"
+	say "step 5: the engine decides while the machine sleeps; the thaw applies"
+	LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
+	VERDICT="$CELLA_HOME/machines/$VM/verdict"
+	for id in $("$BIN" --dump-ledger "$LEDGER" | sed -n "s/^parked id=\([0-9a-f]*\) .*/\1/p"); do
+		"$BIN" --write-decision "$VERDICT" "$id" allow
+	done
 	"$BIN" thaw "$VM" >/dev/null
-	wait_for "held-ok" || { echo "FAIL: the parked request did not complete after the thaw"; exit 1; }
-	echo "  the same request landed, and the page came back"
+	wait_for "held-ok" || { echo "FAIL: the released request did not complete after the thaw"; exit 1; }
+	echo "  the decisions applied in park order, and the same request landed"
 
 	echo
 	echo "PASS: AC3 -- the in-flight layer is exact"
@@ -173,7 +179,8 @@ ac4)
 	WWW=$(mktemp -d); echo world > "$WWW/index.html"
 	SRV1=""; SRV2=""
 	stop_srv() { kill $SRV1 $SRV2 2>/dev/null; rm -rf "$WWW"; }
-	trap 'stop_srv; "$BIN" stop "$VM" >/dev/null 2>&1 || true; rm -rf "$CELLA_HOME"' EXIT
+	trap 'stop_srv; "$BIN" stop "$VM" >/dev/null 2>&1 || true
+    [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true; rm -rf "$CELLA_HOME"' EXIT
 	VMM="$CELLA_HOME/machines/$VM/vmm.log"
 
 	say "step 1: create and start a machine on $TAP"
@@ -194,6 +201,8 @@ ac4)
 		exit 0
 	fi
 
+	curl -s -o /dev/null "http://$HOST_IP:8080/" || { echo "FAIL: the stand-in endpoint died after the pre-check"; exit 1; }
+
 	say "step 3: egress hold on; the same request parks, and reports"
 	kill -USR2 "$VMM_PID"
 	sleep 1
@@ -206,13 +215,18 @@ ac4)
 	grep -aq "rel-ok" "$CON" && { echo "FAIL: the request passed without a verdict"; exit 1; }
 	echo "  parked, and reported"
 
-	say "step 4: the engine renders release with allow -- the flow completes"
-	echo "allow $HOST_IP:8080" > "$CELLA_HOME/machines/$VM/verdict"
+	say "step 4: the engine renders release with allow, by id -- the flow completes"
+	LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
+	VERDICT="$CELLA_HOME/machines/$VM/verdict"
+	ID_REL=$("$BIN" --dump-ledger "$LEDGER" | sed -n "s/^parked id=\([0-9a-f]*\) .*port=8080.*/\1/p" | tail -1)
+	[ -n "$ID_REL" ] || { echo "FAIL: no parked operation in the ledger for :8080"; exit 1; }
+	"$BIN" --write-decision "$VERDICT" "$ID_REL" allow
 	kill -WINCH "$VMM_PID"
 	wait_for "rel-ok" || {
 		echo "FAIL: the released request did not complete"
 		echo "-- vmm.log:"; tail -6 "$VMM" | sed "s/^/   /"
 		echo "-- console:"; tail -4 "$CON" | sed "s/^/   /"
+		echo "-- listeners:"; ss -ltn | grep -E "8080|9090" | sed "s/^/   /" || true
 		exit 1
 	}
 	PARKS=$(grep -ac "parked egress to $HOST_IP:8080" "$VMM")
@@ -238,14 +252,12 @@ ac4)
 	sleep 1
 	echo "  the endpoint at :9090 now exists"
 
-	say "step 7: thaw -- the same request lands on the endpoint that now exists"
+	say "step 7: the engine decides by id; the thaw lands the same request"
+	ID_W=$("$BIN" --dump-ledger "$LEDGER" | sed -n "s/^parked id=\\([0-9a-f]*\\) .*port=9090.*/\\1/p" | tail -1)
+	[ -n "$ID_W" ] || { echo "FAIL: no parked operation in the ledger for :9090"; exit 1; }
+	"$BIN" --write-decision "$VERDICT" "$ID_W" allow
 	"$BIN" thaw "$VM" >/dev/null
-	wait_for "world-ok" || {
-		echo "FAIL: the parked request did not land after the thaw"
-		echo "-- vmm.log:"; tail -6 "$VMM" | sed "s/^/   /"
-		echo "-- console:"; tail -4 "$CON" | sed "s/^/   /"
-		exit 1
-	}
+	wait_for "world-ok" || { echo "FAIL: the parked request did not land after the thaw"; exit 1; }
 	echo "  the request completed against the new endpoint; the guest saw no failure"
 
 	echo

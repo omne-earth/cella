@@ -50,11 +50,16 @@ pub trait VirtioDevice: Send {
     fn held_frames(&self) -> Vec<(u16, Vec<u8>)> {
         Vec::new()
     }
-    /// Put parked frames back, at thaw, before delivery.
-    fn restore_held(&mut self, _frames: Vec<(u16, Vec<u8>)>) {}
-    /// Drain the parked frames, for delivery.
-    fn take_held(&mut self) -> Vec<(u16, Vec<u8>)> {
-        Vec::new()
+    /// Rebind restored frames to the operations the ledger still
+    /// holds open, at thaw (see docs/NETWORK-MODEL.md, "Egress
+    /// parks for decisions"). The freeze suspended these
+    /// operations; it did not resolve them, and no delivery happens
+    /// here -- only a release names delivery now.
+    fn restore_held(
+        &mut self,
+        _frames: Vec<(u16, Vec<u8>)>,
+        _open: &[crate::ledger::OpenOperation],
+    ) {
     }
     /// Write one frame out of the machine, past the park point.
     fn write_egress(&mut self, _frame: &[u8]) {}
@@ -70,6 +75,18 @@ pub trait VirtioDevice: Send {
     /// docs/NETWORK-MODEL.md, "The control plane"). Only virtio-net
     /// implements this; the default is inert.
     fn drain_ledger_events(&mut self) -> Vec<crate::proto::Event> {
+        Vec::new()
+    }
+    /// Resolve every operation that a decision map lets resolve
+    /// right now, oldest-parked first, and return the frames a
+    /// release delivers (see docs/NETWORK-MODEL.md, "Release names
+    /// an id, and decisions apply in park order"). A refusal drops
+    /// its frames and never appears in the return value. The
+    /// default is inert.
+    fn resolve_decisions(
+        &mut self,
+        _decisions: &std::collections::HashMap<Vec<u8>, crate::proto::Decision>,
+    ) -> Vec<(u16, Vec<u8>)> {
         Vec::new()
     }
 }

@@ -8,6 +8,7 @@
 //! RX both become "copy bytes between a descriptor chain and the TAP
 //! fd" with no header translation at all.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use virtio_queue::{Queue, QueueOwnedT, QueueT};
@@ -15,7 +16,7 @@ use vm_memory::{Bytes, GuestMemoryMmap};
 
 use super::tap::Tap;
 use super::{VirtioDevice, VIRTIO_F_VERSION_1};
-use crate::ledger::{self, GuestClock};
+use crate::ledger::{self, GuestClock, OpenOperation};
 use crate::proto;
 
 const QUEUE_RX: u16 = 0;
@@ -30,8 +31,6 @@ const MAX_FRAME: usize = 65550; // 65535 + vnet hdr + slack
 /// retransmitted SYN joins the operation that is already parked for
 /// its destination; it does not mint a second one.
 struct ParkedOp {
-    #[allow(dead_code)]
-    // read by release-by-id in phase 1.3; written now so the ledger's id matches the operation it names
     id: [u8; 16],
     dest: ([u8; 4], u16, u8),
     /// The descriptor head index and the frame bytes, oldest first
@@ -81,6 +80,28 @@ fn ipv4_destination(frame: &[u8]) -> Option<([u8; 4], u16, u8)> {
         _ => 0,
     };
     Some((dst, port, proto))
+}
+
+/// The wire Destination for one (ip, port, proto) triple.
+fn dest_message(dest: ([u8; 4], u16, u8)) -> proto::Destination {
+    let (ip, port, ip_proto) = dest;
+    proto::Destination {
+        host: String::new(),
+        ip: ip.to_vec(),
+        port: port as u32,
+        proto: ip_proto as u32,
+    }
+}
+
+/// An id from the ledger (a Vec<u8>, since that is the wire type) as
+/// the fixed array ParkedOp keeps. Short or long input pads or
+/// truncates rather than panicking: a malformed ledger entry must
+/// not crash the VMM.
+fn id_array(bytes: &[u8]) -> [u8; 16] {
+    let mut id = [0u8; 16];
+    let n = bytes.len().min(16);
+    id[..n].copy_from_slice(&bytes[..n]);
+    id
 }
 
 impl Net {
@@ -217,11 +238,7 @@ impl Net {
         self.pending_ledger.push(proto::Event {
             event: Some(proto::event::Event::Parked(proto::Operation {
                 id: id.to_vec(),
-                destination: Some(proto::Destination {
-                    host: String::new(),
-                    ip: ip.to_vec(),
-                    port: port as u32,
-                }),
+                destination: Some(dest_message(dest)),
                 guest_ns,
                 host_ns: ledger::host_ns_now(),
             })),
@@ -274,36 +291,60 @@ impl VirtioDevice for Net {
             .collect()
     }
 
-    fn restore_held(&mut self, frames: Vec<(u16, Vec<u8>)>) {
-        // Operation ids and their destination grouping do not
-        // survive a freeze in this temporary backend: each restored
-        // frame becomes its own singleton operation, the same reset
-        // precedent as the pass-entry list below. No ledger event
-        // fires here -- the appliance of phase 2 keeps its held
-        // state in ram.img instead, and this reconstruction retires
-        // with it. One clock read for the whole batch: the vCPU and
-        // clock restore already ran (see main.rs's thaw ordering),
-        // thus this is the guest's just-restored frozen instant, the
-        // same value for every frame reconstructed here.
-        let guest_ns = self.guest_clock.now_ns();
-        self.parked = frames
-            .into_iter()
-            .map(|(head, bytes)| {
-                let dest = ipv4_destination(&bytes).unwrap_or(([0, 0, 0, 0], 0, 0));
-                ParkedOp {
-                    id: ledger::uuid7(guest_ns),
-                    dest,
-                    frames: vec![(head, bytes)],
+    fn restore_held(&mut self, frames: Vec<(u16, Vec<u8>)>, open: &[OpenOperation]) {
+        // The freeze suspended these operations; it did not resolve
+        // them. Each restored frame rejoins the id it parked under
+        // -- the chronicle, not a remint, is the index across a
+        // freeze (see docs/NETWORK-MODEL.md, "Egress parks for
+        // decisions"). Frames of one destination are grouped here
+        // exactly as park() groups them live, so a multi-frame
+        // operation (a SYN and its retransmits) becomes one
+        // ParkedOp again, not one per frame.
+        let mut rebuilt: Vec<ParkedOp> = Vec::new();
+        for (head, bytes) in frames {
+            let dest = ipv4_destination(&bytes).unwrap_or(([0, 0, 0, 0], 0, 0));
+            if let Some(existing) = rebuilt.iter_mut().find(|op| op.dest == dest) {
+                existing.frames.push((head, bytes));
+                continue;
+            }
+            let id = match open.iter().find(|o| o.dest == dest) {
+                Some(op) => id_array(&op.id),
+                None => {
+                    // A frame with no open ledger entry for its
+                    // destination: a gap in the book, not a normal
+                    // case. Mint fresh, and say so both on the
+                    // console and in the chronicle, so the gap is
+                    // visible rather than silently absorbed.
+                    let guest_ns = self.guest_clock.now_ns();
+                    let fresh = ledger::uuid7(guest_ns);
+                    let (ip, port, ip_proto) = dest;
+                    eprintln!(
+                        "cella: ledger gap at thaw -- no open operation for \
+                         {}.{}.{}.{}:{port} proto {ip_proto}, minted {}",
+                        ip[0],
+                        ip[1],
+                        ip[2],
+                        ip[3],
+                        ledger::hex(&fresh)
+                    );
+                    self.pending_ledger.push(proto::Event {
+                        event: Some(proto::event::Event::Parked(proto::Operation {
+                            id: fresh.to_vec(),
+                            destination: Some(dest_message(dest)),
+                            guest_ns,
+                            host_ns: ledger::host_ns_now(),
+                        })),
+                    });
+                    fresh
                 }
-            })
-            .collect();
-    }
-
-    fn take_held(&mut self) -> Vec<(u16, Vec<u8>)> {
-        std::mem::take(&mut self.parked)
-            .into_iter()
-            .flat_map(|op| op.frames)
-            .collect()
+            };
+            rebuilt.push(ParkedOp {
+                id,
+                dest,
+                frames: vec![(head, bytes)],
+            });
+        }
+        self.parked = rebuilt;
     }
 
     fn write_egress(&mut self, frame: &[u8]) {
@@ -322,5 +363,55 @@ impl VirtioDevice for Net {
 
     fn drain_ledger_events(&mut self) -> Vec<proto::Event> {
         std::mem::take(&mut self.pending_ledger)
+    }
+
+    fn resolve_decisions(
+        &mut self,
+        decisions: &HashMap<Vec<u8>, proto::Decision>,
+    ) -> Vec<(u16, Vec<u8>)> {
+        // Oldest-parked first, and strictly in that order: an
+        // operation resolves only once every operation parked
+        // before it has itself resolved (see docs/NETWORK-MODEL.md
+        // -- the ratchet is deterministic in the guest's frame). A
+        // decision for an operation not at the front waits;
+        // reapplying an already-resolved decision finds nothing at
+        // the front to match and is harmless.
+        let mut released_frames = Vec::new();
+        while let Some(front) = self.parked.first() {
+            let Some(decision) = decisions.get(front.id.as_slice()) else {
+                break;
+            };
+            let op = self.parked.remove(0);
+            match &decision.decision {
+                Some(proto::decision::Decision::Release(r)) => {
+                    if r.allow_flow {
+                        let (ip, port, _) = op.dest;
+                        if !self.allowed.contains(&(ip, port)) {
+                            self.allowed.push((ip, port));
+                        }
+                    }
+                    let bytes_out: u64 = op.frames.iter().map(|(_, f)| f.len() as u64).sum();
+                    self.pending_ledger.push(proto::Event {
+                        event: Some(proto::event::Event::Released(proto::Released {
+                            id: op.id.to_vec(),
+                            first_response_ns: 0,
+                            bytes_in: 0,
+                            bytes_out,
+                        })),
+                    });
+                    released_frames.extend(op.frames);
+                }
+                Some(proto::decision::Decision::Refusal(refusal)) => {
+                    self.pending_ledger.push(proto::Event {
+                        event: Some(proto::event::Event::Lapsed(proto::Lapsed {
+                            id: op.id.to_vec(),
+                            why: refusal.why.clone(),
+                        })),
+                    });
+                }
+                None => {}
+            }
+        }
+        released_frames
     }
 }

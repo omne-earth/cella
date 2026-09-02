@@ -273,7 +273,7 @@ smoke-clean: ## Kill any stray cella process left running by an interrupted smok
 	# SIGKILL, not SIGTERM: the VMM runs as pid 1 of its namespace
 	# (--as-pid-1), and a namespace init ignores a signal without a
 	# handler.
-	pkill -9 -x cella && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
+	{ pkill -9 -x cella; pkill -9 -x cella-vmm; } && echo "cella: killed stray process(es)" || echo "cella: nothing to clean up"
 
 # --- Setup --------------------------------------------------------------
 

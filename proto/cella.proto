@@ -29,6 +29,10 @@ message Destination {
   string host = 1;
   bytes ip = 2;
   uint32 port = 3;
+  // The IP protocol number (6 = TCP, 17 = UDP). Two operations can
+  // share an ip and a port on different protocols; the chronicle
+  // must tell them apart at a thaw rebind.
+  uint32 proto = 4;
 }
 
 // One held egress flow. The identifier is a UUIDv7, minted in the

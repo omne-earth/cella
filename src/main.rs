@@ -476,8 +476,30 @@ fn main() {
         dump_ledger(&PathBuf::from(path));
     }
 
+    // Append one Decision to a verdict file, by id (hex). A
+    // temporary tool: bash cannot write protobuf, and the
+    // cella-gateway CLI of phase 1.3 replaces this flag with the
+    // real release verb.
+    if std::env::args().nth(1).as_deref() == Some("--write-decision") {
+        let path = std::env::args()
+            .nth(2)
+            .unwrap_or_else(|| usage_error("--write-decision needs a verdict file path"));
+        let id_hex = std::env::args()
+            .nth(3)
+            .unwrap_or_else(|| usage_error("--write-decision needs an id (hex)"));
+        let verb = std::env::args()
+            .nth(4)
+            .unwrap_or_else(|| usage_error("--write-decision needs allow or refuse"));
+        write_decision(&PathBuf::from(path), &id_hex, &verb);
+    }
+
     let args = parse_args();
     let frozen = freeze::is_frozen(&args.state_dir);
+    // The chronicle of held operations (see docs/NETWORK-MODEL.md,
+    // "The control plane"). Read at thaw, to rebind restored frames
+    // to the ids the ledger still holds open; appended to on every
+    // run-loop pass thereafter.
+    let ledger_path = args.state_dir.join("network").join("ledger");
     // Set at the thaw, and read immediately before the first KVM_RUN.
     let mut thaw_clock_written: Option<std::time::Instant> = None;
 
@@ -676,15 +698,24 @@ fn main() {
                 mmio_devices.len()
             ));
         }
+        // The still-open operations of the machine's own ledger,
+        // read once before the per-transport restore: the index a
+        // restored frame rejoins by destination, so its id survives
+        // the freeze instead of a remint (see docs/NETWORK-MODEL.md,
+        // "Egress parks for decisions"). The clock is already the
+        // restored frozen instant, thus a genuine ledger gap (none
+        // expected in normal operation) mints in the guest's frame.
+        let open_ops = ledger::open_operations(&ledger_path)
+            .unwrap_or_else(|e| fatal(&format!("reading the ledger at thaw: {e}")));
         for (st, (_, _, transport)) in frozen_state.devices.iter().zip(mmio_devices.iter_mut()) {
-            transport.restore_state(st);
+            transport.restore_state(st, &open_ops);
         }
-        // Deliver and complete the held egress frames: write each to
-        // the TAP, oldest first, mark its buffer used, and raise the
-        // interrupt (see docs/DEVICE-STATE.md, "Order in the thaw").
-        for (_, _, transport) in mmio_devices.iter_mut() {
-            transport.deliver_held(&mem);
-        }
+        // No unconditional delivery: the freeze verdict means the
+        // world grows and the hold resumes. The decisions that
+        // arrived while the machine slept apply now, in park order
+        // -- a released operation delivers, an undecided one stays
+        // held (see docs/NETWORK-MODEL.md, "Release names an id").
+        apply_verdicts(&args.state_dir, &mut mmio_devices, &mem);
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
         // PVCLOCK_GUEST_STOPPED in the pvclock page, and the flag tells
         // the guest that it was stopped. The freeze must not exist for
@@ -758,6 +789,7 @@ fn main() {
         console_listener,
         console_client,
         &args.state_dir,
+        &ledger_path,
         mem_size_bytes,
     );
 }
@@ -773,13 +805,9 @@ fn run_loop(
     console_listener: Option<std::os::unix::net::UnixListener>,
     console_client: devices::serial::ConsoleClient,
     state_dir: &std::path::Path,
+    ledger_path: &std::path::Path,
     mem_size_bytes: u64,
 ) {
-    // The chronicle of held operations (see docs/NETWORK-MODEL.md,
-    // "The control plane"). A control-plane observability file only:
-    // nothing yet reads it back, and nothing here changes hold or
-    // release behavior.
-    let ledger_path = state_dir.join("network").join("ledger");
     loop {
         if HOLD_REQUESTED.swap(false, Ordering::SeqCst) {
             // The egress hold, before the freeze: hold-then-freeze,
@@ -858,7 +886,7 @@ fn run_loop(
         if let Some(listener) = &console_listener {
             poll_console(listener, &console_client, serial);
         }
-        flush_ledger(mmio_devices, &ledger_path);
+        flush_ledger(mmio_devices, ledger_path);
     }
 }
 
@@ -972,39 +1000,35 @@ fn poll_net_rx(
     }
 }
 
-/// The release verdict, from outside: read the verdict file, install
-/// each allow entry, and release every parked frame -- delivered to
-/// the TAP and completed, the same path as the thaw delivery. The
-/// engine writes the file and sends SIGWINCH (see
-/// docs/DEVICE-STATE.md). Reapplying a stale file is harmless: allow
-/// entries deduplicate, and an empty park delivers nothing.
+/// The decisions, from outside: read the verdict file's framed
+/// Decision messages, and let every device resolve whatever they
+/// let resolve right now, oldest-parked first (see
+/// docs/NETWORK-MODEL.md, "Release names an id"). Release-all does
+/// not exist: a decision names one operation, and an operation
+/// behind an undecided predecessor waits its turn. The engine
+/// appends to the file and sends SIGWINCH. Reapplying an
+/// already-seen decision is harmless: it names an id no longer at
+/// the front of any device's queue, and nothing happens for it.
 fn apply_verdicts(
     state_dir: &std::path::Path,
     mmio_devices: &mut [(u64, u64, MmioTransport)],
     mem: &vm_memory::GuestMemoryMmap,
 ) {
-    if let Ok(text) = std::fs::read_to_string(state_dir.join("verdict")) {
-        for line in text.lines() {
-            let Some(rest) = line.strip_prefix("allow ") else {
-                continue;
-            };
-            let Some((ip_s, port_s)) = rest.rsplit_once(':') else {
-                continue;
-            };
-            let octets: Vec<u8> = ip_s.split('.').filter_map(|o| o.parse().ok()).collect();
-            let (Ok(port), [a, b, c, d]) = (port_s.parse::<u16>(), octets.as_slice()) else {
-                continue;
-            };
-            for (_, _, t) in mmio_devices.iter_mut() {
-                t.allow([*a, *b, *c, *d], port);
-            }
-            eprintln!("cella: allow {ip_s}:{port}");
+    let messages = ledger::read_all(&state_dir.join("verdict")).unwrap_or_default();
+    let mut decisions: std::collections::HashMap<Vec<u8>, proto::Decision> =
+        std::collections::HashMap::new();
+    for msg in &messages {
+        if let Some(proto::message::Body::Decision(d)) = &msg.body {
+            decisions.insert(d.id.clone(), d.clone());
         }
     }
+    eprintln!(
+        "cella: applying {} decision(s) from the verdict file",
+        decisions.len()
+    );
     for (_, _, t) in mmio_devices.iter_mut() {
-        t.deliver_held(mem);
+        t.apply_decisions(&decisions, mem);
     }
-    eprintln!("cella: egress release");
 }
 
 fn do_freeze(
@@ -1338,10 +1362,6 @@ fn dump_state(dir: &PathBuf) -> ! {
     std::process::exit(0);
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// Print every framed Message of a ledger file, one line per event.
 fn dump_ledger(path: &PathBuf) -> ! {
     let messages =
@@ -1360,7 +1380,7 @@ fn dump_ledger(path: &PathBuf) -> ! {
                 let port = d.map(|d| d.port).unwrap_or(0);
                 println!(
                     "parked id={} ip={} port={port} guest_ns={} host_ns={}",
-                    hex(&op.id),
+                    ledger::hex(&op.id),
                     ip.join("."),
                     op.guest_ns,
                     op.host_ns
@@ -1368,17 +1388,48 @@ fn dump_ledger(path: &PathBuf) -> ! {
             }
             Some(proto::event::Event::Released(r)) => println!(
                 "released id={} first_response_ns={} bytes_in={} bytes_out={}",
-                hex(&r.id),
+                ledger::hex(&r.id),
                 r.first_response_ns,
                 r.bytes_in,
                 r.bytes_out
             ),
             Some(proto::event::Event::Lapsed(l)) => {
-                println!("lapsed id={} why={:?}", hex(&l.id), l.why)
+                println!("lapsed id={} why={:?}", ledger::hex(&l.id), l.why)
             }
             None => println!("(empty event)"),
         }
     }
+    std::process::exit(0);
+}
+
+/// Append one Decision to a verdict file, by id (hex): a temporary
+/// tool for the gates, until the cella-gateway CLI of phase 1.3
+/// replaces it with the real release verb.
+fn write_decision(path: &std::path::Path, id_hex: &str, verb: &str) -> ! {
+    if !id_hex.len().is_multiple_of(2) {
+        usage_error("--write-decision id must be an even number of hex digits");
+    }
+    let id: Vec<u8> = (0..id_hex.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&id_hex[i..i + 2], 16)
+                .unwrap_or_else(|_| usage_error("--write-decision id must be hex"))
+        })
+        .collect();
+    let decision = match verb {
+        "allow" => proto::decision::Decision::Release(proto::Release { allow_flow: true }),
+        "refuse" => proto::decision::Decision::Refusal(proto::Refusal {
+            why: "refused by the test's stand-in engine".to_string(),
+        }),
+        _ => usage_error("--write-decision verb must be allow or refuse"),
+    };
+    let msg = proto::Message {
+        body: Some(proto::message::Body::Decision(proto::Decision {
+            id,
+            decision: Some(decision),
+        })),
+    };
+    ledger::append(path, &msg).unwrap_or_else(|e| fatal(&format!("writing the decision: {e}")));
     std::process::exit(0);
 }
 

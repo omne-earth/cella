@@ -75,8 +75,8 @@ full speed: the verdict cost is amortized per destination, not paid
 per frame -- one park and one verdict for each destination without a
 pass entry, and an inline table match for every frame after it.
 The other verdict is a freeze: the world grows first, the thaw
-delivers the same frame, and the decision time never enters the
-clock of the guest. The VMM offers park, report, release, and allow;
+restores the hold, the queued decisions apply in park order, and
+the decision time never enters the clock of the guest. The VMM offers park, report, release, and allow;
 every policy lives outside it. The concrete surface: SIGUSR2 turns
 the hold on, each park writes a report line with its destination,
 and SIGWINCH applies the verdict file in the state directory --
@@ -119,14 +119,18 @@ of the guest stays valid, and the guest cannot tell.
 1. Prefill and warm the stage-2 mappings (unchanged).
 2. Restore the vCPU, the clock, the irqchip and PIT, the serial
    registers (unchanged).
-3. Restore each transport from its sidecar block, and write the held
-   egress frames to the TAP, oldest first. A held frame is then
-   completed like any transmitted frame: its buffer is marked used,
-   and the device raises the interrupt -- at the trap instant the
-   guest still owned no completion, and without this step its driver
-   would leak the descriptor. Beyond the held frames no interrupt is
-   raised: a virtio device signals when it uses a buffer, and no
-   other buffer was used across the freeze.
+3. Restore each transport from its sidecar block, and rebind each
+   held frame to its operation through the ledger (the chronicle
+   holds the open ids; a restored frame rejoins by destination).
+   Nothing delivers on its own: the queued decisions of the verdict
+   file apply in park order, and a released operation's frames then
+   go to the TAP oldest first, each buffer marked used and the
+   interrupt raised -- at the trap instant the guest owned no
+   completion, and without the completion its driver would leak the
+   descriptor. An undecided operation stays held. Beyond the
+   released frames no interrupt is raised: a virtio device signals
+   when it uses a buffer, and no other buffer was used across the
+   freeze.
 4. First KVM_RUN. The guest continues; its next request lands in a
    ring the device now reads at the right position.
 
@@ -140,8 +144,8 @@ target (`make device-state-ac1` .. `device-state-ac4`), and
 |---|---|
 | **AC1 -- the disk survives the thaw** | The sidecar (v7) carries the transport state, the thaw restores it before the first KVM_RUN, and `make demo` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. |
 | **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, the transport restore covers virtio-net, and the gate pings the guest before the freeze and after the thaw. A missing tap fails at start; `setup net` recreates the pool by convention. |
-| **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, a signal turns the hold on, the sidecar carries the parked frames with their descriptor head indices, and the thaw delivers and completes them. The gate fetches a real www page: the fetch parks, the machine freezes, and the same request completes after the thaw. |
-| **AC4 -- the verdict is external** | Every egress frame parks under hold, the park reports its destination, and the verdicts come from outside: release with allow installs a pass entry and the flow runs at full speed, or freeze, grow the world, thaw, deliver. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. |
+| **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, a signal turns the hold on, the sidecar carries the parked frames with their descriptor head indices, and the operations survive the thaw as held -- ids rebound through the ledger. A decision by id releases each one, in park order. The gate fetches a real www page: the fetch parks, the machine freezes, the engine decides while it sleeps, and the same request completes after the thaw. |
+| **AC4 -- the verdict is external** | Every egress frame parks under hold into an operation with an id, the park reports its destination, and the decisions come from outside, by id, applied in park order: release with allow installs a pass entry and the flow runs at full speed, or freeze, grow the world, decide, thaw. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. |
 
 The clock gates must not move: the transport restore adds host-time
 work outside the clock window, and the probes verify that nothing
@@ -159,8 +163,10 @@ paging applied to the world:
    the outbound frame in the sidecar.
 3. The world engine materializes the endpoint (the test stands in a
    listener that starts only after the freeze).
-4. The host thaws the machine. The VMM writes the held frame to the
-   TAP; the same request lands on the endpoint that now exists.
+4. The engine decides the operation by id, and the host thaws the
+   machine. The thaw applies the decision, the VMM writes the held
+   frames to the TAP, and the same request lands on the endpoint
+   that now exists.
 5. The guest receives the answer. No retransmission, no error, and
    no guest-visible delay: the clock of the guest did not advance
    across the materialization.

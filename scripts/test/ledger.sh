@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
-# 1.2's gate: hold, one fetch parks, the ledger holds one operation
-# with an id and both clocks. See docs/NETWORK-MODEL.md, "The
-# control plane", and TASKS.md phase 1.
+# The ledger backend's gate. See docs/NETWORK-MODEL.md, "The control
+# plane", and TASKS.md phase 1.
+#
+# Part A: hold, one fetch parks, the ledger holds one operation with
+# an id and both clocks; freeze and thaw leave it still held, not
+# delivered; a release by id (--write-decision, a temporary tool
+# until the cella-gateway CLI of 1.3) completes the fetch, and the
+# ledger shows the same id parked and released -- never a phantom.
+#
+# Part B: two operations park in order; a decision for the second
+# one first delivers nothing (its predecessor is undecided); a
+# decision for the first then delivers both, in park order, and the
+# ledger's Released order matches the Parked order.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -14,7 +24,7 @@ if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
     echo "SKIP: $TAP is not configured with $HOST_IP -- run: cella doctor fix"
     exit 0
 fi
-command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoint)"; exit 0; }
+command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoints)"; exit 0; }
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 export CELLA_HOME=$(mktemp -d /tmp/cella-ledger.XXXXXX)
@@ -24,12 +34,13 @@ cp "$REAL_HOME/rootfs/cella/rootfs.ext4" "$CELLA_HOME/rootfs/cella/"
 
 VM=ledgertest
 WWW=$(mktemp -d); echo world > "$WWW/index.html"
-SRV=""
+SRV1=""; SRV2=""; SRV3=""
 # A stand-in endpoint leaked by an interrupted run squats its port.
-pkill -f "http.server 8080 --bind $HOST_IP" 2>/dev/null || true
+pkill -f "http.server (8080|8081|8082) --bind $HOST_IP" 2>/dev/null || true
 teardown() {
-    kill $SRV 2>/dev/null || true
+    kill $SRV1 $SRV2 $SRV3 2>/dev/null || true
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
+    [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
     rm -rf "$CELLA_HOME" "$WWW"
 }
 trap teardown EXIT
@@ -44,7 +55,14 @@ wait_for() {
     done
     return 1
 }
+not_yet() { # marker -- true if the marker has NOT appeared
+    ! grep -aq "$1" "$CON"
+}
 LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
+VERDICT="$CELLA_HOME/machines/$VM/verdict"
+id_of() { # dump destination-substring -- the last matching parked id
+    echo "$1" | grep "^parked .*$2" | tail -1 | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p'
+}
 
 say "step 1: create and start a machine on $TAP"
 "$BIN" create "$VM" --net "$TAP" >/dev/null
@@ -57,11 +75,11 @@ kill -USR2 "$VMM_PID"
 sleep 1
 
 say "step 3: one fetch parks (its SYN retransmits join the same operation)"
-python3 -m http.server 8080 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV=$!
+python3 -m http.server 8080 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV1=$!
 sleep 1
 type_in "H=http://$HOST_IP"
-type_in 'wget -q -O /dev/null $H:8080 & echo park-triggere"d"'
-wait_for "park-triggered" || { echo "FAIL: could not trigger the fetch"; exit 1; }
+type_in 'wget -q -O /dev/null $H:8080 && echo fetch-a-don"e" &'
+sleep 1
 deadline=$((SECONDS + 15))
 while [ ! -s "$LEDGER" ] && [ $SECONDS -lt $deadline ]; do sleep 1; done
 [ -s "$LEDGER" ] || { echo "FAIL: no ledger file at $LEDGER"; exit 1; }
@@ -75,7 +93,81 @@ echo "$DUMP" | grep -qE "^parked id=[0-9a-f]{32} " || { echo "FAIL: no well-form
 echo "$DUMP" | grep -q "ip=$HOST_IP port=8080" || { echo "FAIL: the operation does not name the fetched destination"; exit 1; }
 echo "$DUMP" | grep -q "guest_ns=[1-9]" || { echo "FAIL: no guest_ns on the operation"; exit 1; }
 echo "$DUMP" | grep -q "host_ns=[1-9]" || { echo "FAIL: no host_ns on the operation"; exit 1; }
+ID_A=$(id_of "$DUMP" "port=8080")
+[ -n "$ID_A" ] || { echo "FAIL: could not read the operation's id"; exit 1; }
+
+say "step 5: freeze and thaw -- the operation stays held, not delivered"
+"$BIN" freeze "$VM" >/dev/null
+"$BIN" thaw "$VM" >/dev/null
+sleep 2
+not_yet "fetch-a-done" || { echo "FAIL: the fetch completed without a decision"; exit 1; }
+DUMP=$("$BIN" --dump-ledger "$LEDGER")
+echo "$DUMP" | grep -q "^released " && { echo "FAIL: something released without a decision"; exit 1; }
+echo "  the ledger still shows only the parked operation; thaw delivered nothing"
+
+say "step 6: release by id -- the fetch completes, the ledger closes the book"
+VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
+# The valve does not survive the thaw in this backend: re-arm it.
+# The one-shot layer replaces this with valve persistence.
+kill -USR2 "$VMM_PID"
+sleep 1
+"$BIN" --write-decision "$VERDICT" "$ID_A" allow
+kill -WINCH "$VMM_PID"
+wait_for "fetch-a-done" || { echo "FAIL: the released fetch did not complete"; exit 1; }
+DUMP=$("$BIN" --dump-ledger "$LEDGER")
+echo "$DUMP" | sed "s/^/  /"
+echo "$DUMP" | grep -q "^released id=$ID_A " || { echo "FAIL: the ledger did not release $ID_A"; exit 1; }
+RELEASED_IDS=$(echo "$DUMP" | grep "^released " | sed -n 's/^released id=\([0-9a-f]*\).*/\1/p')
+PARKED_IDS=$(echo "$DUMP" | grep "^parked " | sed -n 's/^parked id=\([0-9a-f]*\).*/\1/p')
+for rid in $RELEASED_IDS; do
+    echo "$PARKED_IDS" | grep -q "^$rid$" || { echo "FAIL: released id $rid never appears as parked -- a phantom"; exit 1; }
+done
+echo "  released id matches the parked id; no phantom"
+
+say "step 7: two more operations park, in order (8081, then 8082)"
+python3 -m http.server 8081 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV2=$!
+python3 -m http.server 8082 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV3=$!
+sleep 1
+type_in 'wget -q -O /dev/null $H:8081 && echo fetch-c-don"e" &'
+ledger_has() { "$BIN" --dump-ledger "$LEDGER" 2>/dev/null | grep -q "$1"; }
+deadline=$((SECONDS + 15))
+until ledger_has "port=8081"; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: operation C never parked"; exit 1; }
+    sleep 1
+done
+type_in 'wget -q -O /dev/null $H:8082 && echo fetch-d-don"e" &'
+deadline=$((SECONDS + 15))
+until ledger_has "port=8082"; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: operation D never parked"; exit 1; }
+    sleep 1
+done
+DUMP=$("$BIN" --dump-ledger "$LEDGER")
+ID_C=$(id_of "$DUMP" "port=8081")
+ID_D=$(id_of "$DUMP" "port=8082")
+[ -n "$ID_C" ] && [ -n "$ID_D" ] || { echo "FAIL: could not read both operation ids"; exit 1; }
+echo "  C=$ID_C D=$ID_D"
+
+say "step 8: decide D first -- nothing delivers, D's predecessor C is undecided"
+"$BIN" --write-decision "$VERDICT" "$ID_D" allow
+kill -WINCH "$VMM_PID"
+sleep 2
+not_yet "fetch-d-done" || { echo "FAIL: D delivered before its predecessor C resolved"; exit 1; }
+DUMP=$("$BIN" --dump-ledger "$LEDGER")
+echo "$DUMP" | grep -q "^released id=$ID_D " && { echo "FAIL: the ledger released D before C resolved"; exit 1; }
+echo "  neither C nor D delivered; D's decision waits"
+
+say "step 9: decide C -- both deliver, in park order"
+"$BIN" --write-decision "$VERDICT" "$ID_C" allow
+kill -WINCH "$VMM_PID"
+wait_for "fetch-c-done" || { echo "FAIL: C did not deliver once decided"; exit 1; }
+wait_for "fetch-d-done" || { echo "FAIL: D did not deliver once its predecessor C resolved"; exit 1; }
+DUMP=$("$BIN" --dump-ledger "$LEDGER")
+C_LINE=$(echo "$DUMP" | grep -n "^released id=$ID_C " | head -1 | cut -d: -f1)
+D_LINE=$(echo "$DUMP" | grep -n "^released id=$ID_D " | head -1 | cut -d: -f1)
+[ -n "$C_LINE" ] && [ -n "$D_LINE" ] || { echo "FAIL: the ledger did not release both"; exit 1; }
+[ "$C_LINE" -lt "$D_LINE" ] || { echo "FAIL: the Released order does not match the Parked order (C then D)"; exit 1; }
+echo "  both delivered; released C before released D, matching park order"
 
 echo
-echo "PASS: the ledger holds one operation, with an id and both clocks"
+echo "PASS: the ledger names, holds, and releases by id, in park order"
 "$BIN" stop "$VM" >/dev/null; "$BIN" destroy "$VM" >/dev/null

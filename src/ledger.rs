@@ -84,6 +84,62 @@ pub fn event_message(event: Event) -> Message {
     }
 }
 
+/// An id as lowercase hex, for a report line or a gate to read.
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// An operation the ledger has recorded as parked, with no matching
+/// Released or Lapsed anywhere in the file: still open. Read at
+/// thaw (see docs/NETWORK-MODEL.md, "Egress parks for decisions")
+/// so a restored frame rejoins the id it parked under, instead of
+/// a freeze minting a phantom the book never named.
+pub struct OpenOperation {
+    pub id: Vec<u8>,
+    pub dest: ([u8; 4], u16, u8),
+    pub guest_ns: u64,
+}
+
+/// The still-open operations of one ledger: every Parked whose id
+/// never appears in a Released or Lapsed, in park order. A ledger
+/// that does not exist yet has no open operations -- the machine
+/// has never parked anything -- which is not an error.
+pub fn open_operations(path: &Path) -> std::io::Result<Vec<OpenOperation>> {
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let messages = read_all(path)?;
+    let mut resolved: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+    let mut parked: Vec<OpenOperation> = Vec::new();
+    for msg in &messages {
+        let Some(proto::message::Body::Event(ev)) = &msg.body else {
+            continue;
+        };
+        match &ev.event {
+            Some(proto::event::Event::Released(r)) => {
+                resolved.insert(r.id.clone());
+            }
+            Some(proto::event::Event::Lapsed(l)) => {
+                resolved.insert(l.id.clone());
+            }
+            Some(proto::event::Event::Parked(op)) => {
+                let d = op.destination.clone().unwrap_or_default();
+                let mut ip = [0u8; 4];
+                let n = d.ip.len().min(4);
+                ip[..n].copy_from_slice(&d.ip[..n]);
+                parked.push(OpenOperation {
+                    id: op.id.clone(),
+                    dest: (ip, d.port as u16, d.proto as u8),
+                    guest_ns: op.guest_ns,
+                });
+            }
+            None => {}
+        }
+    }
+    parked.retain(|op| !resolved.contains(&op.id));
+    Ok(parked)
+}
+
 /// Append one framed Message to the ledger file (create it, and
 /// its parent directory, on first use).
 pub fn append(path: &Path, msg: &Message) -> std::io::Result<()> {
@@ -154,6 +210,7 @@ mod tests {
                 host: String::new(),
                 ip: vec![192, 168, 200, 1],
                 port: 8080,
+                proto: 6,
             }),
             guest_ns: 111,
             host_ns: 222,
@@ -172,6 +229,70 @@ mod tests {
             },
             other => panic!("expected Event, got {other:?}"),
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn parked_event(id: &[u8], ip: [u8; 4], port: u32, proto: u32, guest_ns: u64) -> Message {
+        event_message(Event {
+            event: Some(super::proto::event::Event::Parked(
+                crate::proto::Operation {
+                    id: id.to_vec(),
+                    destination: Some(crate::proto::Destination {
+                        host: String::new(),
+                        ip: ip.to_vec(),
+                        port,
+                        proto,
+                    }),
+                    guest_ns,
+                    host_ns: 0,
+                },
+            )),
+        })
+    }
+
+    fn released_event(id: &[u8]) -> Message {
+        event_message(Event {
+            event: Some(super::proto::event::Event::Released(
+                crate::proto::Released {
+                    id: id.to_vec(),
+                    first_response_ns: 0,
+                    bytes_in: 0,
+                    bytes_out: 0,
+                },
+            )),
+        })
+    }
+
+    /// A ledger with no file yet has no open operations -- absence
+    /// is not an error at the first-ever thaw of a machine that
+    /// never parked anything.
+    #[test]
+    fn no_ledger_file_is_no_open_operations() {
+        let path =
+            std::env::temp_dir().join(format!("cella-ledger-missing-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        assert!(open_operations(&path).unwrap().is_empty());
+    }
+
+    /// A Parked with no matching Released or Lapsed is open; one
+    /// that is resolved drops out, in park order.
+    #[test]
+    fn open_operations_excludes_the_resolved() {
+        let dir = std::env::temp_dir().join(format!("cella-ledger-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("ledger");
+        let id_a = [1u8; 16];
+        let id_b = [2u8; 16];
+        append(&path, &parked_event(&id_a, [10, 0, 0, 1], 80, 6, 100)).unwrap();
+        append(&path, &parked_event(&id_b, [10, 0, 0, 2], 443, 6, 200)).unwrap();
+        append(&path, &released_event(&id_a)).unwrap();
+
+        let open = open_operations(&path).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id, id_b.to_vec());
+        assert_eq!(open[0].dest, ([10, 0, 0, 2], 443, 6));
+        assert_eq!(open[0].guest_ns, 200);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
