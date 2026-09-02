@@ -37,11 +37,23 @@ if grep -q cella_nested_mode=www /proc/cmdline; then
         --mem-mb 64 --net tap1 || echo "cella-nested: FAIL: create failed"
     echo "cella-nested: starting the inner machine (jailed)"
     cella start inner || echo "cella-nested: FAIL: start failed"
+    # Born closed: this init is the inner machine's engine. Open the
+    # valve, ping (the inner reply parks and the inner machine
+    # freezes itself), release every held operation, thaw, and ping
+    # again -- one decision at a time, one level down.
+    cella gateway inner open
     n=0
     while [ $n -lt 60 ]; do
         if ping -c 1 -W 1 192.168.201.2 >/dev/null 2>&1; then
             echo "cella-nested: inner answered ICMP"
             break
+        fi
+        if [ -f /tmp/cella/machines/inner/state ]; then
+            echo "cella-nested: the inner machine froze on its reply -- deciding"
+            for id in $(cella gateway inner show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+                cella gateway inner release "$id"
+            done
+            cella thaw inner
         fi
         n=$((n+1)); sleep 1
     done

@@ -66,6 +66,10 @@ pub struct Manifest {
     /// A path to a disk attached read-only as a second virtio-blk
     /// (the rock of the inspect verb), or "none".
     pub attach: String,
+    /// The valve posture: "closed" (the coconut, the birth state)
+    /// or "open" (the membrane). The verbs flip it; create never
+    /// takes it as a flag.
+    pub valve: String,
 }
 
 /// Read one field of a flat JSON object: a quoted string or a bare
@@ -101,6 +105,7 @@ pub fn defaults() -> Manifest {
         root: "rw".into(),
         diag: "off".into(),
         attach: "none".into(),
+        valve: "closed".into(),
     };
     let path = home().join("config.json");
     let Ok(s) = fs::read_to_string(&path) else {
@@ -140,8 +145,8 @@ pub fn defaults() -> Manifest {
 impl Manifest {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\n  \"name\": \"{}\",\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\",\n  \"diag\": \"{}\",\n  \"attach\": \"{}\"\n}}\n",
-            self.name, self.kernel, self.rootfs, self.mem_mb, self.net, self.root, self.diag, self.attach
+            "{{\n  \"name\": \"{}\",\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\",\n  \"diag\": \"{}\",\n  \"attach\": \"{}\",\n  \"valve\": \"{}\"\n}}\n",
+            self.name, self.kernel, self.rootfs, self.mem_mb, self.net, self.root, self.diag, self.attach, self.valve
         )
     }
 
@@ -166,6 +171,7 @@ impl Manifest {
             // Absent in older manifests: default off.
             diag: json_field(s, "diag").unwrap_or("off").to_string(),
             attach: json_field(s, "attach").unwrap_or("none").to_string(),
+            valve: json_field(s, "valve").unwrap_or("closed").to_string(),
         })
     }
 }
@@ -186,6 +192,29 @@ fn write_atomic(path: &Path, content: &[u8]) -> io::Result<()> {
         libc::fsync(std::os::fd::AsRawFd::as_raw_fd(&d));
     }
     Ok(())
+}
+
+/// Update one field of a manifest in place, preserving every field
+/// this struct does not carry (the universe digests, the latch).
+pub fn set_manifest_field(name: &str, key: &str, value: &str) -> Result<(), String> {
+    let p = machine_dir(name).join("manifest.json");
+    let s = fs::read_to_string(&p).map_err(|e| format!("reading {}: {e}", p.display()))?;
+    let pat = format!("\"{key}\": \"");
+    let out = if let Some(i) = s.find(&pat) {
+        let vstart = i + pat.len();
+        let vend = vstart
+            + s[vstart..]
+                .find('"')
+                .ok_or_else(|| "malformed manifest".to_string())?;
+        format!("{}{}{}", &s[..vstart], value, &s[vend..])
+    } else {
+        let brace = s
+            .rfind('}')
+            .ok_or_else(|| "malformed manifest".to_string())?;
+        let head = s[..brace].trim_end().trim_end_matches(',').to_string();
+        format!("{head},\n  \"{key}\": \"{value}\"\n}}\n")
+    };
+    write_atomic(&p, out.as_bytes()).map_err(|e| format!("writing the manifest: {e}"))
 }
 
 pub fn read_manifest(name: &str) -> Result<Manifest, String> {
@@ -1084,6 +1113,9 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     if m.attach != "none" {
         cmd.args(["--attach-ro", &m.attach]);
     }
+    if m.net != "none" {
+        cmd.args(["--valve", &m.valve]);
+    }
     cmd.args(["--mem-mb", &m.mem_mb.to_string()]);
     cmd.args(["--console", dir.join("console.sock").to_str().unwrap()]);
     cmd.args(["--cmdline", &cmdline_for(&m)]);
@@ -1666,6 +1698,7 @@ mod tests {
             root: "rw".into(),
             diag: "off".into(),
             attach: "none".into(),
+            valve: "closed".into(),
         }
     }
 

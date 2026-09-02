@@ -69,6 +69,10 @@ struct Args {
     attach_ro: Option<PathBuf>,
     /// The taps, in order: eth0 is the first. --tap repeats.
     taps: Vec<String>,
+    /// The valve posture: closed (the coconut) or open (the
+    /// membrane). The raw flag interface defaults open -- managed,
+    /// like everything; the verbs pass the manifest's posture.
+    valve: devices::virtio::ValveState,
     mac: [u8; 6],
     kernel: Option<PathBuf>,
     cmdline: String,
@@ -82,6 +86,7 @@ fn parse_args() -> Args {
     let mut disk_ro = false;
     let mut attach_ro = None;
     let mut taps: Vec<String> = Vec::new();
+    let mut valve = devices::virtio::ValveState::Open;
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
     let mut console = None;
@@ -101,6 +106,13 @@ fn parse_args() -> Args {
             "--disk-ro" => disk_ro = true,
             "--attach-ro" => attach_ro = Some(PathBuf::from(next())),
             "--tap" => taps.push(next()),
+            "--valve" => {
+                valve = match next().as_str() {
+                    "closed" => devices::virtio::ValveState::Closed,
+                    "open" => devices::virtio::ValveState::Open,
+                    other => usage_error(&format!("unknown valve posture {other:?}")),
+                }
+            }
             "--mac" => mac = parse_mac(&next()),
             "--kernel" => kernel = Some(PathBuf::from(next())),
             "--console" => console = Some(PathBuf::from(next())),
@@ -123,6 +135,7 @@ fn parse_args() -> Args {
         disk_ro,
         attach_ro,
         taps,
+        valve,
         mac,
         kernel,
         cmdline,
@@ -611,6 +624,8 @@ fn main() {
             MMIO_LEN,
             MmioTransport::new(Box::new(net), irq_raiser.clone(), NET_IRQ + 2 * i as u32),
         ));
+        let last = mmio_devices.len() - 1;
+        mmio_devices[last].2.set_valve(args.valve);
         net_poll.push((mmio_devices.len() - 1, net_fd));
     }
 
@@ -723,16 +738,6 @@ fn main() {
         for (st, (_, _, transport)) in frozen_state.devices.iter().zip(mmio_devices.iter_mut()) {
             transport.restore_state(st, &open_ops);
         }
-        // Once closed, the valve stays closed: a chronicle exists,
-        // thus this machine parks -- across every thaw, with no
-        // re-arm. The valve ratchets one way, like everything else
-        // here (see docs/NETWORK-MODEL.md, "The membrane").
-        if ledger_path.is_file() {
-            for (_, _, transport) in mmio_devices.iter_mut() {
-                transport.set_hold(true);
-            }
-            eprintln!("cella: the chronicle exists -- the valve stays closed");
-        }
         // No unconditional delivery: the freeze verdict means the
         // world grows and the hold resumes. The decisions that
         // arrived while the machine slept apply now, in park order
@@ -833,13 +838,12 @@ fn run_loop(
 ) {
     loop {
         if HOLD_REQUESTED.swap(false, Ordering::SeqCst) {
-            // The egress hold, before the freeze: hold-then-freeze,
-            // in that order (see docs/DEVICE-STATE.md). Every
-            // transport gets the call; only virtio-net acts on it.
+            // The legacy signal: the membrane posture. The verbs
+            // set the valve through Valve messages instead.
             for (_, _, t) in mmio_devices.iter_mut() {
-                t.set_hold(true);
+                t.set_valve(devices::virtio::ValveState::Open);
             }
-            eprintln!("cella: egress hold on");
+            eprintln!("cella: valve open (the membrane)");
         }
         if RELEASE_REQUESTED.swap(false, Ordering::SeqCst) {
             apply_verdicts(state_dir, mmio_devices, mem);
@@ -1060,8 +1064,24 @@ fn apply_verdicts(
     let mut decisions: std::collections::HashMap<Vec<u8>, proto::Decision> =
         std::collections::HashMap::new();
     for msg in &messages {
-        if let Some(proto::message::Body::Decision(d)) = &msg.body {
-            decisions.insert(d.id.clone(), d.clone());
+        match &msg.body {
+            Some(proto::message::Body::Decision(d)) => {
+                decisions.insert(d.id.clone(), d.clone());
+            }
+            // The valve verbs write postures into the same file; the
+            // last one stands.
+            Some(proto::message::Body::Valve(v)) => {
+                let state = if v.v == proto::valve::V::Open as i32 {
+                    devices::virtio::ValveState::Open
+                } else {
+                    devices::virtio::ValveState::Closed
+                };
+                for (_, _, t) in mmio_devices.iter_mut() {
+                    t.set_valve(state);
+                }
+                eprintln!("cella: valve {:?}", state);
+            }
+            _ => {}
         }
     }
     eprintln!(

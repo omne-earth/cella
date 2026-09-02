@@ -70,8 +70,8 @@ say "step 1: create and start a machine on $TAP"
 sleep 6
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 
-say "step 2: the valve closes, through the verb"
-"$BIN" gateway "$VM" close >/dev/null
+say "step 2: the valve opens, through the verb -- the membrane arms"
+"$BIN" gateway "$VM" open >/dev/null
 sleep 1
 
 say "step 3: one fetch parks -- and the park is the freeze (one-shot)"

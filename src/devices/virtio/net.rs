@@ -15,7 +15,7 @@ use virtio_queue::{Queue, QueueOwnedT, QueueT};
 use vm_memory::{Bytes, GuestMemoryMmap};
 
 use super::tap::Tap;
-use super::{VirtioDevice, VIRTIO_F_VERSION_1};
+use super::{ValveState, VirtioDevice, VIRTIO_F_VERSION_1};
 use crate::ledger::{self, GuestClock, OpenOperation};
 use crate::proto;
 
@@ -41,7 +41,7 @@ struct ParkedOp {
 pub struct Net {
     tap: Tap,
     mac: [u8; 6],
-    hold: bool,
+    valve: ValveState,
     /// Egress frames read from the TX ring and not yet written to the
     /// TAP: grouped into operations by destination. The guest
     /// considers these sent, and their completion is owed (see
@@ -113,7 +113,7 @@ impl Net {
         Ok(Net {
             tap: Tap::open(tap_name)?,
             mac,
-            hold: false,
+            valve: ValveState::Closed,
             parked: Vec::new(),
             allowed: Vec::new(),
             guest_clock,
@@ -132,6 +132,13 @@ impl Net {
     fn drain_rx(&mut self, mem: &GuestMemoryMmap, queue: &mut Queue) -> bool {
         let mut used_any = false;
         let mut buf = vec![0u8; MAX_FRAME];
+        // The coconut: nothing goes in. The TAP drains (the host must
+        // not see backpressure from a dark machine) and every frame
+        // discards; the guest's posted buffers stay posted.
+        if self.valve == ValveState::Closed {
+            while matches!(self.tap.read_frame(&mut buf), Ok(_)) {}
+            return false;
+        }
         loop {
             let Some(mut chain) = queue.pop_descriptor_chain(mem) else {
                 break;
@@ -189,21 +196,34 @@ impl Net {
                 }
                 len += take;
             }
-            if self.hold {
-                let dest = ipv4_destination(&buf[..len]);
-                let pass = match dest {
-                    // ARP and other non-IPv4 housekeeping never parks.
-                    None => true,
-                    Some((ip, port, _)) => self.allowed.contains(&(ip, port)),
-                };
-                if !pass {
-                    // The park point: after the read from the TX ring,
-                    // and before the write to the TAP. No completion
-                    // here -- a decision releases the operation, or
-                    // the thaw delivers and completes it.
-                    let dest = dest.expect("the None case takes the pass branch above");
-                    self.park(dest, head_index, buf[..len].to_vec());
+            match self.valve {
+                // The coconut: nothing goes out. The frame drops and
+                // completes (the guest owns its buffer back); no
+                // park, no ledger, no freeze.
+                ValveState::Closed => {
+                    let _ = queue.add_used(mem, head_index, 0);
+                    used_any = true;
                     continue;
+                }
+                // The membrane: ARP passes (without L2 resolution
+                // nothing could deliver), a pass entry passes, and
+                // every other frame -- initiations and replies alike
+                // -- parks for a decision.
+                ValveState::Open => {
+                    let dest = ipv4_destination(&buf[..len]);
+                    let pass = match dest {
+                        None => true,
+                        Some((ip, port, _)) => self.allowed.contains(&(ip, port)),
+                    };
+                    if !pass {
+                        // The park point: after the read from the TX
+                        // ring, and before the write to the TAP. No
+                        // completion here -- a decision releases the
+                        // operation, or the thaw delivers it.
+                        let dest = dest.expect("the None case takes the pass branch above");
+                        self.park(dest, head_index, buf[..len].to_vec());
+                        continue;
+                    }
                 }
             }
             let _ = self.tap.write_frame(&buf[..len]);
@@ -280,8 +300,8 @@ impl VirtioDevice for Net {
         }
     }
 
-    fn set_hold(&mut self, on: bool) {
-        self.hold = on;
+    fn set_valve(&mut self, v: ValveState) {
+        self.valve = v;
     }
 
     fn held_frames(&self) -> Vec<(u16, Vec<u8>)> {
@@ -397,6 +417,7 @@ impl VirtioDevice for Net {
                             first_response_ns: 0,
                             bytes_in: 0,
                             bytes_out,
+                            allow_flow: r.allow_flow,
                         })),
                     });
                     released_frames.extend(op.frames);

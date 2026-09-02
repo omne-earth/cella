@@ -61,6 +61,10 @@ message Released {
   uint64 first_response_ns = 2;
   uint64 bytes_in = 3;
   uint64 bytes_out = 4;
+  // The release carried an allow. The record is audit alone:
+  // nothing rebuilds from it -- a pass entry lives only in the
+  // running epoch, and rules evaluate atomically, every time.
+  bool allow_flow = 5;
 }
 
 message Lapsed {
@@ -89,9 +93,9 @@ message Refusal {
   string why = 1;
 }
 
-// The posture of the appliance. Open forwards (a standing
-// release); closed parks everything. Either way the frames pass
-// through the appliance.
+// The posture of the valve. Closed is the coconut: nothing goes
+// in or out. Open is the membrane: egress parks for decisions.
+// No posture forwards freely.
 message Valve {
   enum V {
     CLOSED = 0;

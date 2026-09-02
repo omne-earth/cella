@@ -259,6 +259,7 @@ mod tests {
                     first_response_ns: 0,
                     bytes_in: 0,
                     bytes_out: 0,
+                    allow_flow: false,
                 },
             )),
         })

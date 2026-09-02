@@ -24,7 +24,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 .PHONY: help build install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested setup-tap \
-        boot enter freeze thaw remove demo doctor smoke smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
+        boot enter freeze thaw remove demo doctor smoke smoke-boot smoke-thaw smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-ping smoke-multinet smoke-universe smoke-ledger smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
         clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -43,7 +43,7 @@ help: ## Show this help
 	grep -hE '^(boot|enter|freeze|thaw|remove|demo):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-net|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean|smoke-gateway|smoke-multinet|smoke-universe|smoke-ledger|smoke-device-state|device-state-ac1|device-state-ac2|device-state-ac3|device-state-ac4):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(smoke|smoke-boot|smoke-thaw|smoke-ping|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean|smoke-gateway|smoke-multinet|smoke-universe|smoke-ledger|smoke-device-state|device-state-ac1|device-state-ac2|device-state-ac3|device-state-ac4):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
 	grep -hE '^(init|golden|golden-nested|setup-tap|doctor|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -222,6 +222,10 @@ smoke-universe: build golden ## The universe family end to end: branch (frozen t
 	$(LOG)
 	$(SCRIPTS)/test/universe.sh
 
+smoke-ping: build golden ## The valve end to end: born closed fails a ping, open parks the reply and freezes, release answers, close darkens again (docs/NETWORK-MODEL.md)
+	$(LOG)
+	$(SCRIPTS)/test/ping.sh
+
 smoke-gateway-cli: build golden ## 1.3: close shuts the valve, show lists the hold, release/refuse decide by id prefix, open refuses (docs/NETWORK-MODEL.md)
 	$(LOG)
 	$(SCRIPTS)/test/gateway-cli.sh
@@ -235,11 +239,7 @@ doctor: $(CELLA_DEV) ## Judge the host and the goldens: cella doctor check + ver
 	$(CELLA_DEV) doctor check
 	$(CELLA_DEV) doctor verify
 
-smoke-net: build golden ## Guest answers ICMP over the TAP after boot (scripts/test/net.sh, best-effort)
-	$(LOG)
-	$(SCRIPTS)/test/net.sh
-
-smoke: smoke-boot smoke-thaw smoke-net smoke-nested-boot smoke-machine smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger probe-inception ## All smoke-* targets + the deep clock probe (skips gracefully without KVM)
+smoke: smoke-boot smoke-thaw smoke-ping smoke-nested-boot smoke-machine smoke-gateway smoke-gateway-cli smoke-ping smoke-multinet smoke-universe smoke-ledger probe-inception ## All smoke-* targets + the deep clock probe (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="

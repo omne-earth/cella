@@ -44,7 +44,20 @@ wait_for "nics-listed" || { echo "FAIL: the guest did not answer"; exit 1; }
 grep -a "eth0" "$CON" | grep -aq "eth1" || { echo "FAIL: eth1 is absent in the guest"; exit 1; }
 echo "  eth0 and eth1 present"
 
-say "step 3: the host pings eth0 (ip= configured it; eth1 belongs to the image init)"
+say "step 3: open, prime the reply, then the host pings eth0"
+"$BIN" gateway mn open >/dev/null
+sleep 1
+ping -c 1 -W 3 192.168.201.2 >/dev/null 2>&1 || true
+deadline=$((SECONDS + 20))
+until [ -f "$CELLA_HOME/machines/mn/state" ]; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the reply did not park and freeze"; exit 1; }
+    sleep 1
+done
+ID_P=$("$BIN" gateway mn show | grep "192.168.201.1" | awk "{print \$1}")
+[ -n "$ID_P" ] || { echo "FAIL: show lists no parked reply"; exit 1; }
+"$BIN" gateway mn release "$ID_P" >/dev/null
+"$BIN" thaw mn >/dev/null
+sleep 2
 ping -c 3 -W 2 192.168.201.2 >/dev/null || { echo "FAIL: no ICMP reply on the first tap"; exit 1; }
 echo "  192.168.201.2 answers over tap1"
 
@@ -54,6 +67,17 @@ echo "  tap2 refused: the list claims each tap"
 
 say "step 5: freeze and thaw with two transports in the sidecar"
 "$BIN" freeze mn >/dev/null
+"$BIN" thaw mn >/dev/null
+sleep 2
+# No allow survives an epoch: prime the reply path again.
+ping -c 1 -W 3 192.168.201.2 >/dev/null 2>&1 || true
+deadline=$((SECONDS + 20))
+until [ -f "$CELLA_HOME/machines/mn/state" ]; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the post-thaw reply did not park"; exit 1; }
+    sleep 1
+done
+ID_P2=$("$BIN" gateway mn show | grep "192.168.201.1" | awk "{print \$1}" | tail -1)
+"$BIN" gateway mn release "$ID_P2" >/dev/null
 "$BIN" thaw mn >/dev/null
 sleep 2
 ping -c 3 -W 2 192.168.201.2 >/dev/null || { echo "FAIL: no ICMP reply after the thaw"; exit 1; }

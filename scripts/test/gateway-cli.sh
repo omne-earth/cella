@@ -54,12 +54,14 @@ wait_frozen() {
     done
 }
 
-say "step 1: create, start, and close the valve through the verb"
+say "step 1: create (born closed), start, open the valve through the verb"
 "$BIN" create "$VM" --net "$TAP" >/dev/null
+grep -q '"valve": "closed"' "$CELLA_HOME/machines/$VM/manifest.json" || { echo "FAIL: not born closed"; exit 1; }
 "$BIN" start "$VM" >/dev/null
 sleep 5
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
-"$BIN" gateway "$VM" close | grep -q "the park is the freeze" || { echo "FAIL: close did not close the valve"; exit 1; }
+"$BIN" gateway "$VM" open >/dev/null || { echo "FAIL: open failed"; exit 1; }
+sleep 1
 
 say "step 2: a fetch parks and self-freezes; show lists the held operation"
 python3 -m http.server 8080 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV1=$!
@@ -94,9 +96,24 @@ grep -aq "fetch-b-done" "$CON" && { echo "FAIL: a refused operation delivered"; 
 "$BIN" gateway "$VM" show --all | grep -q "lapsed (not part of this world)" || { echo "FAIL: the book does not record the lapse and its why"; exit 1; }
 echo "  refused; nothing delivered; the book records the lapse"
 
-say "step 5: open refuses -- the valve ratchets one way"
-"$BIN" gateway "$VM" open >/dev/null 2>&1 && { echo "FAIL: open reopened a chronicled machine"; exit 1; }
-echo "  open refused, as the model demands"
+say "step 5: close -- the coconut kills even the allowed flow"
+"$BIN" gateway "$VM" close >/dev/null
+sleep 1
+type_in 'wget -q -T 4 -O /dev/null $H:8080 && echo fetch-c-don"e" &'
+sleep 6
+grep -aq "fetch-c-done" "$CON" && { echo "FAIL: a closed machine reached an allowed destination"; exit 1; }
+[ -f "$STATE" ] && { echo "FAIL: a closed machine froze on egress"; exit 1; }
+"$BIN" gateway "$VM" open >/dev/null
+sleep 1
+# No allow survives an epoch: the reopened fetch parks again, and
+# the engine decides again -- atomically, every time.
+type_in 'wget -q -O /dev/null $H:8080 && echo fetch-d-don"e" &'
+wait_frozen || { echo "FAIL: the reopened fetch did not park and freeze"; exit 1; }
+ID_D=$("$BIN" gateway "$VM" show | grep "$HOST_IP:8080" | awk "{print \$1}")
+"$BIN" gateway "$VM" release "$ID_D" >/dev/null
+"$BIN" thaw "$VM" >/dev/null
+wait_for "fetch-d-done" || { echo "FAIL: the re-decided fetch did not complete"; exit 1; }
+echo "  closed: dark even to the once-allowed; reopened: parked and decided afresh"
 
 echo
 echo "PASS: the gateway verbs drive the membrane"

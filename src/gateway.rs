@@ -209,26 +209,38 @@ pub fn refuse(vm: &str, prefix: &str, why: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn close(vm: &str) -> Result<(), String> {
-    if ledger_path(vm).is_file() {
-        println!("cella: the valve of {vm:?} is already closed (its chronicle exists)");
-        return Ok(());
+/// Set the valve posture: the manifest carries it (thus it survives
+/// stop, thaw, and restart), a Valve message rides the verdict file,
+/// and a running machine is kicked so the posture applies now.
+fn set_posture(vm: &str, v: proto::valve::V, word: &str) -> Result<(), String> {
+    if !machine::machine_dir(vm).exists() {
+        return Err(format!("no machine named {vm:?}"));
     }
-    let Some(pid) = running_pid(vm) else {
-        return Err(format!(
-            "machine {vm:?} is not running -- the valve closes on a running machine, \
-             and stays closed once its chronicle exists"
-        ));
+    machine::set_manifest_field(vm, "valve", word)?;
+    let msg = proto::Message {
+        body: Some(proto::message::Body::Valve(proto::Valve { v: v as i32 })),
     };
-    // SAFETY: the pid comes from the machine's own pid file.
-    unsafe { libc::kill(pid, libc::SIGUSR2) };
-    println!("cella: the valve of {vm:?} is closed -- egress parks, and the park is the freeze");
+    ledger::append(&verdict_path(vm), &msg).map_err(|e| format!("writing the posture: {e}"))?;
+    match running_pid(vm) {
+        Some(pid) => {
+            // SAFETY: the pid comes from the machine's own pid file.
+            unsafe { libc::kill(pid, libc::SIGWINCH) };
+            println!("cella: the valve of {vm:?} is {word}, now");
+        }
+        None => println!("cella: the valve of {vm:?} is {word} -- it applies at the next run"),
+    }
     Ok(())
 }
 
+/// close: the coconut. Nothing goes in or out -- no parking, no
+/// ledger, no freeze; the machine runs dark.
+pub fn close(vm: &str) -> Result<(), String> {
+    set_posture(vm, proto::valve::V::Closed, "closed")
+}
+
+/// open: the membrane, never a free flow. Egress reaches the hold
+/// trigger: initiations and replies alike park, and the park is the
+/// freeze; only decisions let anything through.
 pub fn open(vm: &str) -> Result<(), String> {
-    Err(format!(
-        "the valve ratchets one way: {vm:?} cannot reopen. A held operation wants a \
-         decision (release or refuse, by id); an attended posture does not exist"
-    ))
+    set_posture(vm, proto::valve::V::Open, "open")
 }

@@ -63,6 +63,7 @@ mod tests {
                     first_response_ns: 42,
                     bytes_in: 4096,
                     bytes_out: 512,
+                    allow_flow: true,
                 })),
             }),
             message::Body::Event(Event {

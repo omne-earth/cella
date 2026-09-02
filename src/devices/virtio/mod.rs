@@ -6,6 +6,19 @@ pub mod tap;
 use virtio_queue::Queue;
 use vm_memory::GuestMemoryMmap;
 
+/// The posture of a machine's network (see docs/NETWORK-MODEL.md,
+/// "The valve"). Closed is a coconut: nothing goes in or out, no
+/// parking, no ledger, no freeze -- the machine runs dark. Open is
+/// the membrane: ARP passes (without L2 resolution nothing could
+/// deliver), pass entries pass, and every other egress frame --
+/// initiations and replies alike -- parks for a decision. No
+/// unmanaged posture exists, on any interface.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ValveState {
+    Closed,
+    Open,
+}
+
 pub const VIRTIO_ID_NET: u32 = 1;
 pub const VIRTIO_ID_BLOCK: u32 = 2;
 
@@ -40,11 +53,9 @@ pub trait VirtioDevice: Send {
     /// descriptor was completed).
     fn process_queue(&mut self, idx: u16, mem: &GuestMemoryMmap, queue: &mut Queue) -> bool;
 
-    /// Egress hold, for the freeze at the egress moment (see
-    /// docs/DEVICE-STATE.md). With hold on, an outbound frame parks
-    /// at a defined point instead of leaving the machine. Only
-    /// virtio-net implements these; the defaults are inert.
-    fn set_hold(&mut self, _on: bool) {}
+    /// The valve posture (see ValveState). Only virtio-net
+    /// implements these; the defaults are inert.
+    fn set_valve(&mut self, _v: ValveState) {}
     /// The parked frames, without draining them (the freeze reads
     /// them into the sidecar and then exits).
     fn held_frames(&self) -> Vec<(u16, Vec<u8>)> {
@@ -68,7 +79,9 @@ pub trait VirtioDevice: Send {
         0
     }
     /// Install a pass entry: frames to this destination flow at full
-    /// speed under hold (the allow verdict).
+    /// speed under the open valve, for the life of this run alone:
+    /// nothing survives an epoch; rules evaluate atomically, every
+    /// time.
     fn allow(&mut self, _ip: [u8; 4], _port: u16) {}
     /// Ledger events accumulated since the last drain -- one per new
     /// operation parked, for the chronicle (see

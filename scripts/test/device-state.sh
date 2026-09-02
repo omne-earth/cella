@@ -91,8 +91,25 @@ ac2)
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 
-	say "step 2: the host pings the guest"
-	ping -c 3 -W 2 "$GUEST_IP" >/dev/null || { echo "FAIL: no ICMP reply before the freeze"; exit 1; }
+	say "step 2: open, prime the reply path, then the host pings the guest"
+
+	# Born closed: open the valve, then prime the reply path -- the
+	# first ping parks the guest's reply and freezes the machine;
+	# the release makes the pass entry, and pings answer after.
+	"$BIN" gateway "$VM" open >/dev/null
+	sleep 1
+	ping -c 1 -W 3 $GUEST_IP >/dev/null 2>&1 || true
+	deadline=$((SECONDS + 20))
+	until [ -f "$CELLA_HOME/machines/$VM/state" ]; do
+		[ $SECONDS -lt $deadline ] || { echo "FAIL: the reply did not park and freeze"; exit 1; }
+		sleep 1
+	done
+	ID_P=$("$BIN" gateway "$VM" show | grep "$HOST_IP" | awk "{print \$1}")
+	[ -n "$ID_P" ] || { echo "FAIL: show lists no parked reply"; exit 1; }
+	"$BIN" gateway "$VM" release "$ID_P" >/dev/null
+	"$BIN" thaw "$VM" >/dev/null
+	sleep 2
+	ping -c 3 -W 2 "$GUEST_IP" >/dev/null || { echo "FAIL: no ICMP reply after the release"; exit 1; }
 	echo "  $GUEST_IP answers over $TAP"
 
 	say "step 3: freeze, then thaw (the tap claim rides the manifest)"
@@ -102,6 +119,18 @@ ac2)
 	sleep 2
 
 	say "step 4: the host pings the guest again, through the thawed transport"
+	# No allow survives an epoch: the post-thaw ping parks again,
+	# and the engine decides again -- atomically, every time.
+	ping -c 1 -W 3 "$GUEST_IP" >/dev/null 2>&1 || true
+	deadline=$((SECONDS + 20))
+	until [ -f "$CELLA_HOME/machines/$VM/state" ]; do
+		[ $SECONDS -lt $deadline ] || { echo "FAIL: the post-thaw reply did not park"; exit 1; }
+		sleep 1
+	done
+	ID_P2=$("$BIN" gateway "$VM" show | grep "$HOST_IP" | awk "{print \$1}" | tail -1)
+	"$BIN" gateway "$VM" release "$ID_P2" >/dev/null
+	"$BIN" thaw "$VM" >/dev/null
+	sleep 2
 	ping -c 3 -W 2 "$GUEST_IP" >/dev/null || { echo "FAIL: no ICMP reply after the thaw (see docs/DEVICE-STATE.md)"; exit 1; }
 	echo "  $GUEST_IP answers over $TAP"
 
@@ -125,19 +154,19 @@ ac3)
 	sleep 6
 	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 
+	# The host answers for reachability: a guest probe cannot run
+	# under a born-closed valve.
+	curl -s --max-time 8 -o /dev/null http://huggingface.co || {
+		echo "SKIP: this host has no route to the www"; exit 0; }
+
 	# The serial RX FIFO holds 64 bytes; every typed line stays short.
-	say "step 2: prove real egress -- the guest fetches the hugging face page"
+	say "step 2: the valve opens -- the membrane, never a free flow"
+	"$BIN" gateway "$VM" open >/dev/null
+	sleep 1
 	type_in 'mkdir -p /etc; echo nameserver 1.1.1.1 >/etc/resolv.conf'
 	type_in 'U=http://huggingface.co'
-	type_in 'wget -q -O /dev/null $U && echo www-o"k"'
-	if ! wait_for "www-ok"; then
-		echo "SKIP: the guest has no route to the www (host forwarding/NAT -- see install.sh)"
-		exit 0
-	fi
 
-	say "step 3: the valve closes, then the same fetch -- the park is the freeze"
-	"$BIN" gateway "$VM" close >/dev/null
-	sleep 1
+	say "step 3: the fetch -- the park is the freeze"
 	type_in 'wget -q -O /dev/null $U && echo held-o"k" &'
 	STATE="$CELLA_HOME/machines/$VM/state"
 	deadline=$((SECONDS + 20))

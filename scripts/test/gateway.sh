@@ -46,18 +46,39 @@ say "step 2: the gateway appliance, world side tap1, agent side pair0g"
 wait_con gw "forwarding on" || { echo "FAIL: the gateway did not bring its agent side up"; exit 1; }
 echo "  gateway up: 10.77.0.1 on the agent side, forwarding on"
 
-say "step 3: the agent, behind the gateway only"
+say "step 3: the agent, behind the gateway only -- both machines open, the pump decides"
 "$BIN" create ag --net pair0a >/dev/null
 "$BIN" start ag >/dev/null
 sleep 4
-type_in ag 'ping -c 1 -W 5 10.77.0.1 >/dev/null && echo pair-o"k"'
-wait_con ag "pair-ok" || { echo "FAIL: the agent cannot reach the gateway over the pair"; exit 1; }
-echo "  agent -> gateway over the L2 pair"
+"$BIN" gateway gw open >/dev/null
+"$BIN" gateway ag open >/dev/null
+sleep 1
+# The decision pump: the stand-in engine. While the marker is
+# absent, release every held operation of any frozen machine of the
+# pair, and thaw it.
+pump() { # marker cycles
+    local marker="$1" budget="$2" cycles=0
+    until grep -aq "$marker" "$CELLA_HOME/machines/ag/console.log"; do
+        cycles=$((cycles + 1))
+        [ $cycles -le "$budget" ] || return 1
+        for m in ag gw; do
+            [ -f "$CELLA_HOME/machines/$m/state" ] || continue
+            for id in $("$BIN" gateway $m show | sed -n "s/^\([0-9a-f]\{32\}\) .*held\$/\1/p"); do
+                "$BIN" gateway $m release "$id" >/dev/null
+            done
+            "$BIN" thaw $m >/dev/null
+        done
+        sleep 2
+    done
+}
+type_in ag 'ping -c 1 -W 20 10.77.0.1 >/dev/null && echo pair-o"k"'
+pump "pair-ok" 8 || { echo "FAIL: the agent cannot reach the gateway over the pair"; exit 1; }
+echo "  agent -> gateway over the L2 pair, one decision at a time"
 
 say "step 4: the agent reaches the host, through the gateway"
-type_in ag 'ping -c 1 -W 5 192.168.201.1 >/dev/null && echo world-o"k"'
-wait_con ag "world-ok" || { echo "FAIL: the gateway does not forward to the world"; exit 1; }
-echo "  agent -> gateway -> host: the appliance forwards"
+type_in ag 'ping -c 1 -W 30 192.168.201.1 >/dev/null && echo world-o"k"'
+pump "world-ok" 8 || { echo "FAIL: the gateway does not forward to the world"; exit 1; }
+echo "  agent -> gateway -> host: the appliance forwards, every hop decided"
 
 say "step 5: the pair freezes together (agent first), thaws together (gateway first)"
 "$BIN" freeze ag >/dev/null

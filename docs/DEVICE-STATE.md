@@ -98,9 +98,10 @@ operations did -- parked, released, lapsed, when and to where --
 written as history, never read back as truth.
 The concrete surface, in order:
 
-1. The valve closes once (`cella gateway <vm> close`; born closed
-   with the appliance later), and it never reopens: a machine
-   whose chronicle exists parks across every thaw, with no re-arm.
+1. A machine is born closed -- the coconut: nothing in or out, no
+   parking, no freeze. `cella gateway <vm> open` arms the
+   membrane; `close` returns the dark. The posture rides the
+   manifest and survives every thaw.
 2. A park mints the operation id (v7-shaped, the guest frame in
    the timestamp bits), appends Parked to the chronicle at
    machines/<name>/network/ledger, and writes a report line.
@@ -114,7 +115,9 @@ The concrete surface, in order:
    (allow_flow); a refusal lapses the operation; an operation
    behind an undecided predecessor stays held. Against a running
    machine the verb kicks the VMM and the decisions apply at once
-   (the signals underneath are the wire, never the surface).
+   (the signals underneath are the wire, never the surface). A
+   pass entry lives only in the running epoch: a thaw evaluates
+   everything afresh, and a once-allowed destination parks again.
 
 Therefore the save is a copy of registers, indices, and the held
 egress frames; no drain step exists beyond them.

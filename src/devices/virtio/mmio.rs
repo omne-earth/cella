@@ -312,9 +312,9 @@ impl MmioTransport {
         self.device.restore_held(st.held_frames.clone(), open_ops);
     }
 
-    /// Turn the egress hold on or off (see docs/DEVICE-STATE.md).
-    pub fn set_hold(&mut self, on: bool) {
-        self.device.set_hold(on);
+    /// Set the valve posture (see docs/NETWORK-MODEL.md).
+    pub fn set_valve(&mut self, v: super::ValveState) {
+        self.device.set_valve(v);
     }
 
     /// Install a pass entry (the allow verdict).
