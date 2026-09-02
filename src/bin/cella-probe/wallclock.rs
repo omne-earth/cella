@@ -83,13 +83,20 @@ fn repo_root() -> PathBuf {
 /// The cella binary: CELLA_BIN, else the sibling of this probe, else
 /// target/release/cella under the repo root.
 fn sibling_cella(root: &std::path::Path) -> PathBuf {
+    // The probe is a lab instrument: it reads consoles, thus it must
+    // drive its own flavor. The -debug sibling wins (the installed
+    // lab), then the plain sibling (the repo's target/smoke, where
+    // both carry bare names), then the lab build under the root --
+    // never the field binary, whose machines are dark.
     if let Ok(me) = std::env::current_exe() {
-        let p = me.parent().unwrap().join("cella");
-        if p.is_file() {
-            return p;
+        for name in ["cella-debug", "cella"] {
+            let p = me.parent().unwrap().join(name);
+            if p.is_file() {
+                return p;
+            }
         }
     }
-    root.join("target/release/cella")
+    root.join("target/smoke/cella")
 }
 
 fn golden(axis: &str, flavor: &str, file: &str) -> PathBuf {
