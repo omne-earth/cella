@@ -317,11 +317,6 @@ impl MmioTransport {
         self.device.set_valve(v);
     }
 
-    /// Install a pass entry (the allow verdict).
-    pub fn allow(&mut self, ip: [u8; 4], port: u16) {
-        self.device.allow(ip, port);
-    }
-
     /// Drain the device's pending ledger events, for the chronicle.
     pub fn drain_ledger_events(&mut self) -> Vec<crate::proto::Event> {
         self.device.drain_ledger_events()

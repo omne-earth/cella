@@ -260,7 +260,7 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
         },
         "selftest" => machine::selftest(),
         "gateway" => {
-            let usage = "usage: cella gateway <vm> <show [--all] | release <id> [--no-allow] | refuse <id> [--why TEXT] | open | close>";
+            let usage = "usage: cella gateway <vm> <show [--all] | release <id> | refuse <id> [--why TEXT] | open | close>";
             let (Some(vm), Some(verb)) = (args.first(), args.get(1)) else {
                 usage_error(usage)
             };
@@ -268,8 +268,7 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
             match verb.as_str() {
                 "show" => gateway::show(vm, rest.first().map(|s| s.as_str()) == Some("--all")),
                 "release" => match rest {
-                    [id] => gateway::release(vm, id, true),
-                    [id, flag] if flag == "--no-allow" => gateway::release(vm, id, false),
+                    [id] => gateway::release(vm, id),
                     _ => usage_error(usage),
                 },
                 "refuse" => match rest {

@@ -24,7 +24,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 .PHONY: help build install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested setup-tap \
-        boot enter freeze thaw remove doctor smoke smoke-shell smoke-boot smoke-thaw smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-ping smoke-udp smoke-multinet smoke-universe smoke-ledger smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine \
+        boot enter freeze thaw remove doctor smoke smoke-shell smoke-boot smoke-thaw smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-ping smoke-udp smoke-multinet smoke-universe smoke-ledger smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 test-jail test-seccomp test-machine test-one-door \
         clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -37,7 +37,7 @@ help: ## Show this help
 	grep -hE '^(build|install|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
-	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine|test-one-door):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Run: a real jailed guest, interactively:"
 	grep -hE '^(boot|enter|freeze|thaw|remove):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -127,7 +127,20 @@ test-machine: build ## The machine registry verbs against a sandboxed CELLA_HOME
 	$(LOG)
 	$(SCRIPTS)/test/machine.sh
 
-test: check lint unit-test integration-test test-jail test-seccomp test-machine ## Everything above: build hygiene + all no-KVM tests
+test-one-door: ## Static gate: exactly one TX call site writes the TAP (the decision-delivery door)
+	$(LOG)
+	# With the pass table gone, the TAP is reachable from the decision
+	# delivery alone. A second door is a leak path, and it fails the
+	# battery here, not a review.
+	doors=$$(grep -c 'tap.write_frame' src/devices/virtio/net.rs)
+	if [ "$$doors" -ne 1 ]; then
+		echo "FAIL: $$doors TX call sites write the TAP (exactly 1 allowed: write_egress)"
+		grep -n 'tap.write_frame' src/devices/virtio/net.rs
+		exit 1
+	fi
+	echo "OK: one door -- a single TX call site writes the TAP"
+
+test: check lint unit-test integration-test test-jail test-seccomp test-machine test-one-door ## Everything above: build hygiene + all no-KVM tests
 	$(LOG)
 	echo ""
 	echo "=== make test: all no-KVM checks passed ==="

@@ -82,7 +82,6 @@ pub trait VirtioDevice: Send {
     /// speed under the open valve, for the life of this run alone:
     /// nothing survives an epoch; rules evaluate atomically, every
     /// time.
-    fn allow(&mut self, _ip: [u8; 4], _port: u16) {}
     /// Ledger events accumulated since the last drain -- one per new
     /// operation parked, for the chronicle (see
     /// docs/NETWORK-MODEL.md, "The control plane"). Only virtio-net

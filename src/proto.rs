@@ -7,6 +7,10 @@ include!(concat!(env!("OUT_DIR"), "/cella.rs"));
 
 use prost::Message as _;
 
+/// The Accord version this binary speaks. Version 2: releases
+/// carry no allow (proto/cella.proto, the Accord comment).
+pub const ACCORD_VERSION: u32 = 2;
+
 /// Frame one Message for the wire: a varint length, then the bytes
 /// (the standard length-delimited protobuf form).
 pub fn frame(msg: &Message) -> Vec<u8> {
@@ -55,7 +59,9 @@ mod tests {
     #[test]
     fn every_body_round_trips() {
         let bodies = vec![
-            message::Body::Accord(Accord { version: 1 }),
+            message::Body::Accord(Accord {
+                version: ACCORD_VERSION,
+            }),
             message::Body::Event(Event {
                 event: Some(event::Event::Parked(sample_operation())),
             }),
@@ -65,7 +71,6 @@ mod tests {
                     first_response_ns: 42,
                     bytes_in: 4096,
                     bytes_out: 512,
-                    allow_flow: true,
                 })),
             }),
             message::Body::Event(Event {
@@ -76,7 +81,7 @@ mod tests {
             }),
             message::Body::Decision(Decision {
                 id: vec![7u8; 16],
-                decision: Some(decision::Decision::Release(Release { allow_flow: true })),
+                decision: Some(decision::Decision::Release(Release {})),
             }),
             message::Body::Decision(Decision {
                 id: vec![7u8; 16],
@@ -123,7 +128,9 @@ mod tests {
     #[test]
     fn frames_stream_back_to_back() {
         let a = Message {
-            body: Some(message::Body::Accord(Accord { version: 1 })),
+            body: Some(message::Body::Accord(Accord {
+                version: ACCORD_VERSION,
+            })),
         };
         let b = Message {
             body: Some(message::Body::Valve(Valve {

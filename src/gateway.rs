@@ -186,15 +186,15 @@ pub fn show(vm: &str, all: bool) -> Result<(), String> {
     Ok(())
 }
 
-pub fn release(vm: &str, prefix: &str, allow: bool) -> Result<(), String> {
+pub fn release(vm: &str, prefix: &str) -> Result<(), String> {
     let book = read_book(vm)?;
     let id = resolve_id(&book, prefix)?;
     append_decision(
         vm,
         id.clone(),
-        proto::decision::Decision::Release(proto::Release { allow_flow: allow }),
+        proto::decision::Decision::Release(proto::Release {}),
     )?;
-    println!("cella: release {} (allow_flow: {allow})", ledger::hex(&id));
+    println!("cella: release {}", ledger::hex(&id));
     kick_or_wait(vm);
     Ok(())
 }

@@ -17,7 +17,10 @@ message Message {
 }
 
 // The version handshake: two ends agree on the language before
-// anything else crosses.
+// anything else crosses. Version 2: releases carry no allow --
+// field 1 of Release and field 5 of Released are retired, and a
+// release delivers one named operation, once. Two ends can never
+// disagree about whether releases carry allows.
 message Accord {
   uint32 version = 1;
 }
@@ -69,10 +72,9 @@ message Released {
   uint64 first_response_ns = 2;
   uint64 bytes_in = 3;
   uint64 bytes_out = 4;
-  // The release carried an allow. The record is audit alone:
-  // nothing rebuilds from it -- a pass entry lives only in the
-  // running epoch, and rules evaluate atomically, every time.
-  bool allow_flow = 5;
+  // Field 5 (allow_flow) is retired: no pass entries exist, thus
+  // no release carries an allow. Never reuse the number.
+  reserved 5;
 }
 
 message Lapsed {
@@ -80,11 +82,11 @@ message Lapsed {
   string why = 2;
 }
 
-// The external word on one operation. A release delivers it and,
-// with allow_flow, installs the pass entry for its destination. A
-// refusal answers the machine cleanly, in-frame, instead of by
-// timeout. Freezing is absent on purpose: the freeze is a machine
-// verb, and the membrane only keeps holding.
+// The external word on one operation. A release delivers one
+// named operation, once -- the only allow that exists. A refusal
+// answers the machine cleanly, in-frame, instead of by timeout.
+// Freezing is absent on purpose: the freeze is a machine verb,
+// and the membrane only keeps holding.
 message Decision {
   bytes id = 1;
   oneof decision {
@@ -94,7 +96,10 @@ message Decision {
 }
 
 message Release {
-  bool allow_flow = 1;
+  // Field 1 (allow_flow) is retired: a release names one
+  // operation and delivers it, nothing more. Never reuse the
+  // number.
+  reserved 1;
 }
 
 message Refusal {

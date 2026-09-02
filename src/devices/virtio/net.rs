@@ -47,12 +47,6 @@ pub struct Net {
     /// considers these sent, and their completion is owed (see
     /// docs/DEVICE-STATE.md).
     parked: Vec<ParkedOp>,
-    /// Pass entries, installed by an allow verdict: a destination
-    /// IPv4 address and port whose frames flow at full speed under
-    /// hold. The verdict cost is amortized per destination: one park
-    /// for a destination without a pass entry, and an inline match
-    /// for every frame after it.
-    allowed: Vec<([u8; 4], u16)>,
     /// What tells an operation its guest-frame timestamp at the
     /// instant it parks (see docs/NETWORK-MODEL.md, the Operation
     /// message).
@@ -137,7 +131,6 @@ impl Net {
             mac,
             valve: ValveState::Closed,
             parked: Vec::new(),
-            allowed: Vec::new(),
             guest_clock,
             pending_ledger: Vec::new(),
         })
@@ -230,26 +223,17 @@ impl Net {
                 // The membrane: every egress frame parks under
                 // its most primitive name -- ARP, IPv6, kernel
                 // chatter, initiations and replies alike. No
-                // exemptions. A pass entry alone passes.
+                // exemptions, no pass entries: every park is a
+                // fresh decision. The park point sits after the
+                // read from the TX ring, and before any write to
+                // the TAP. No completion here -- a decision
+                // releases the operation, or the thaw delivers
+                // it. The one door to the TAP is write_egress,
+                // on the decision-delivery path alone.
                 ValveState::Open => {
-                    let dest = frame_name(&buf[..len]);
-                    let pass = match dest {
-                        Dest::Ipv4 { ip, port, .. } => self.allowed.contains(&(ip, port)),
-                        Dest::L2 { .. } => false,
-                    };
-                    if !pass {
-                        // The park point: after the read from the TX
-                        // ring, and before the write to the TAP. No
-                        // completion here -- a decision releases the
-                        // operation, or the thaw delivers it.
-                        self.park(dest, head_index, buf[..len].to_vec());
-                        continue;
-                    }
+                    self.park(frame_name(&buf[..len]), head_index, buf[..len].to_vec());
                 }
             }
-            let _ = self.tap.write_frame(&buf[..len]);
-            let _ = queue.add_used(mem, head_index, 0);
-            used_any = true;
         }
         used_any
     }
@@ -390,12 +374,6 @@ impl VirtioDevice for Net {
         QUEUE_TX
     }
 
-    fn allow(&mut self, ip: [u8; 4], port: u16) {
-        if !self.allowed.contains(&(ip, port)) {
-            self.allowed.push((ip, port));
-        }
-    }
-
     fn drain_ledger_events(&mut self) -> Vec<proto::Event> {
         std::mem::take(&mut self.pending_ledger)
     }
@@ -418,17 +396,7 @@ impl VirtioDevice for Net {
             };
             let op = self.parked.remove(0);
             match &decision.decision {
-                Some(proto::decision::Decision::Release(r)) => {
-                    if r.allow_flow {
-                        // A pass entry exists only for a refined
-                        // IPv4 key; an L2 operation has no flow to
-                        // allow. (The table itself dies at 1.6.2.)
-                        if let Dest::Ipv4 { ip, port, .. } = op.dest {
-                            if !self.allowed.contains(&(ip, port)) {
-                                self.allowed.push((ip, port));
-                            }
-                        }
-                    }
+                Some(proto::decision::Decision::Release(_)) => {
                     let bytes_out: u64 = op.frames.iter().map(|(_, f)| f.len() as u64).sum();
                     self.pending_ledger.push(proto::Event {
                         event: Some(proto::event::Event::Released(proto::Released {
@@ -436,7 +404,6 @@ impl VirtioDevice for Net {
                             first_response_ns: 0,
                             bytes_in: 0,
                             bytes_out,
-                            allow_flow: r.allow_flow,
                         })),
                     });
                     released_frames.extend(op.frames);
