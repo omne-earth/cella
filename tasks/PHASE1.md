@@ -200,7 +200,7 @@ requires a decision, nothing stands, and the mouth closes.
       frozen | the render, and an Inspected event in the
       chronicle; running | inspect | running | refused. The look
       changes no state in either automaton.
-- [ ] 1.6.11 The witnessed border (ruled 2026-09-02, sharpened
+- [x] 1.6.11 The witnessed border (ruled 2026-09-02, sharpened
       2026-09-02): every verb is an event, no exception -- show
       and inspect included; every human action is as auditable as
       the machine's. The chronicle stays the operations ledger

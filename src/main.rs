@@ -11,7 +11,7 @@
 //! freeze.rs / seccomp.rs together.
 
 use cella::{
-    boot, config, devices, doctor, freeze, gateway, ledger, machine, memory, proto, seccomp,
+    audit, boot, config, devices, doctor, freeze, gateway, ledger, machine, memory, proto, seccomp,
     universe, vcpu, warm,
 };
 
@@ -154,6 +154,16 @@ fn usage_error(msg: &str) -> ! {
 /// The lifecycle verbs (see docs/LIFECYCLE.md). The first argument
 /// selects a verb; anything else falls through to the legacy flag
 /// interface, which the probes and the test scripts use.
+/// The machine a verb names, for the audit book routing: the first
+/// argument of every machine-scoped verb is the machine.
+fn verb_machine<'a>(verb: &str, args: &'a [String]) -> Option<&'a str> {
+    match verb {
+        "create" | "start" | "stop" | "enter" | "freeze" | "thaw" | "destroy" | "info"
+        | "gateway" | "branch" | "archive" | "inspect" => args.first().map(|s| s.as_str()),
+        _ => None,
+    }
+}
+
 fn run_verb(verb: &str, args: &[String]) -> ! {
     // A verb is a CLI citizen: `cella list | head` must not panic.
     // Rust ignores SIGPIPE by default, and println then panics on a
@@ -161,6 +171,12 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
     // SAFETY: setting a signal disposition before any other work.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+    // The witnessed border: every verb is an event, before it runs.
+    // One door for every verb of this binary (the static gate of
+    // make test counts the doors).
+    if let Err(e) = audit::witness(verb_machine(verb, args), verb, args) {
+        fatal(&e);
     }
     let ok = match verb {
         "build" => match args {
@@ -308,13 +324,20 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
                 Some("check") | None => doctor::check(),
                 Some("fix") => doctor::fix(),
                 Some("gate") => doctor::gate(&args[1..]),
+                Some("harvest") => match &args[1..] {
+                    [] => doctor::harvest(None),
+                    [vm] => doctor::harvest(Some(vm)),
+                    _ => usage_error("usage: cella doctor harvest [<vm>]"),
+                },
                 Some("verify") => match &args[1..] {
                     [] => doctor::verify(None),
                     [vm] => doctor::verify_machine(vm),
                     [axis, flavor] => doctor::verify(Some((axis, flavor))),
                     _ => usage_error("usage: cella doctor verify [<vm> | kernel|rootfs <flavor>]"),
                 },
-                _ => usage_error("usage: cella doctor [check|fix|verify|gate <needs...>]"),
+                _ => usage_error(
+                    "usage: cella doctor [check|fix|verify|harvest [<vm>]|gate <needs...>]",
+                ),
             };
             if failed > 0 {
                 std::process::exit(1);
@@ -1549,6 +1572,13 @@ fn dump_ledger(path: &PathBuf) -> ! {
     let messages =
         ledger::read_all(path).unwrap_or_else(|e| fatal(&format!("reading {path:?}: {e}")));
     for msg in &messages {
+        if let Some(proto::message::Body::Audit(a)) = &msg.body {
+            println!(
+                "audit verb={} args={:?} uid={} gid={} persona={} host_ns={}",
+                a.verb, a.args, a.uid, a.gid, a.persona, a.host_ns
+            );
+            continue;
+        }
         let Some(proto::message::Body::Event(ev)) = &msg.body else {
             println!("(not an event)");
             continue;

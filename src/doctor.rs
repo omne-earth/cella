@@ -438,3 +438,89 @@ pub fn verify(target: Option<(&str, &str)>) -> u32 {
     }
     failed
 }
+
+/// The AVC harvest: denials are correlated, never captured. The
+/// audit book's host clocks are the ausearch join key -- this verb
+/// reads the book's time window, asks ausearch for the matching AVC
+/// denials, and files the result beside the book as `avc`. It is
+/// privileged and optional: the debugger exists before the lane
+/// that generates the denials (the shakedown's SELinux work). A
+/// permissive or clean host files an empty set and says so.
+pub fn harvest(vm: Option<&str>) -> u32 {
+    let book = match vm {
+        Some(vm) => crate::machine::machine_dir(vm).join("audit"),
+        None => crate::machine::home().join("audit"),
+    };
+    if !book.is_file() {
+        println!(
+            "cella doctor: no audit book at {} -- nothing to correlate",
+            book.display()
+        );
+        return 1;
+    }
+    let messages = match crate::ledger::read_all(&book) {
+        Ok(m) => m,
+        Err(e) => {
+            println!("cella doctor: reading the audit book: {e}");
+            return 1;
+        }
+    };
+    let clocks: Vec<u64> = messages
+        .iter()
+        .filter_map(|m| match &m.body {
+            Some(crate::proto::message::Body::Audit(a)) => Some(a.host_ns),
+            _ => None,
+        })
+        .collect();
+    let (Some(&first), Some(&last)) = (clocks.iter().min(), clocks.iter().max()) else {
+        println!("cella doctor: the audit book holds no entries -- nothing to correlate");
+        return 1;
+    };
+    let fmt = |ns: u64, round_up: bool| -> Option<String> {
+        let secs = ns / 1_000_000_000 + if round_up { 1 } else { 0 };
+        let out = std::process::Command::new("date")
+            .args(["-d", &format!("@{secs}"), "+%m/%d/%Y %H:%M:%S"])
+            .output()
+            .ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let (Some(start), Some(end)) = (fmt(first, false), fmt(last, true)) else {
+        println!("cella doctor: date failed -- cannot shape the window");
+        return 1;
+    };
+    let out = match std::process::Command::new("ausearch")
+        .args(["-m", "avc", "-ts"])
+        .args(start.split(' '))
+        .arg("-te")
+        .args(end.split(' '))
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => {
+            println!("cella doctor: ausearch not found -- install audit, or run where it exists");
+            return 1;
+        }
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() && !err.contains("no matches") && !text.trim().is_empty() {
+        println!("cella doctor: ausearch refused ({}) -- the harvest is privileged: sudo cella doctor harvest", err.trim());
+        return 1;
+    }
+    let avc = book.with_file_name("avc");
+    let denials = text.lines().filter(|l| l.contains("avc:")).count();
+    let content = if text.trim().is_empty() || err.contains("no matches") {
+        format!("no matching denials in the window {start} .. {end} (permissive, or clean)\n")
+    } else {
+        text.to_string()
+    };
+    if let Err(e) = std::fs::write(&avc, content) {
+        println!("cella doctor: writing {}: {e}", avc.display());
+        return 1;
+    }
+    println!(
+        "cella doctor: harvested {denials} denial(s) into {} (window {start} .. {end})",
+        avc.display()
+    );
+    0
+}

@@ -3,6 +3,7 @@
 //! exercise the virtio/device/freeze logic directly, without a real
 //! `/dev/kvm`, as ordinary `cargo test` integration tests.
 
+pub mod audit;
 pub mod boot;
 pub mod build;
 pub mod config;

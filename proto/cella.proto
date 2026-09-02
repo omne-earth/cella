@@ -13,7 +13,28 @@ message Message {
     Event event = 2;
     Decision decision = 3;
     Valve valve = 4;
+    Audit audit = 5;
   }
+}
+
+// The witnessed border: every verb is an event, show and inspect
+// included. The chronicle stays the operations ledger; the verbs
+// get their own audit stream in this same language. The operator
+// acts in host time -- a CLI has no guest clock -- thus the audit
+// stream carries the host clock alone. Machine-scoped verbs append
+// to machines/<vm>/audit; the placeless verbs to the audit file at
+// the CELLA_HOME root.
+message Audit {
+  string verb = 1;
+  repeated string args = 2;
+  uint32 uid = 3;
+  // The gid rides for SELinux debugging.
+  uint32 gid = 4;
+  string persona = 5;
+  uint64 host_ns = 6;
+  // Field 15 is the predecessor hash of the tamper-evident chain:
+  // shape only now, implemented with the shakedown's SELinux work.
+  reserved 15;
 }
 
 // The version handshake: two ends agree on the language before
@@ -75,6 +96,9 @@ message Event {
     Lapsed lapsed = 3;
     Inspected inspected = 4;
   }
+  // Field 15 is the predecessor hash of the tamper-evident chain:
+  // shape only now, implemented with the shakedown's SELinux work.
+  reserved 15;
 }
 
 // The look is itself recorded: the operator read a held

@@ -12,6 +12,15 @@ use cella::machine;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The witnessed border: setup and pair are placeless verbs, and
+    // the wiring binary witnesses them like every other verb (the
+    // static gate of make test counts this door).
+    if let Some(verb) = args.first() {
+        if let Err(e) = cella::audit::witness(None, verb, &args[1..]) {
+            eprintln!("cella-network: {e}");
+            std::process::exit(1);
+        }
+    }
     let mut taps = 4u32;
     let mut from = 0u32;
     let mut it = args.iter();

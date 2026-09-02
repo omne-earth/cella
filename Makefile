@@ -30,10 +30,10 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-nested-boot-hybrid smoke-nested-boot-www \
         smoke-machine smoke-clean smoke-gateway smoke-gateway-cli \
         smoke-ping smoke-udp smoke-collide smoke-inspection \
-        smoke-multinet smoke-universe smoke-ledger \
+        smoke-witness smoke-multinet smoke-universe smoke-ledger \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
-        test-jail test-seccomp test-machine test-one-door \
+        test-jail test-seccomp test-machine test-one-door test-witness \
         clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -46,7 +46,7 @@ help: ## Show this help
 	grep -hE '^(build|build-smoke|install-release|install-debug|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
-	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine|test-one-door):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine|test-one-door|test-witness):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Run: a real jailed guest, interactively:"
 	grep -hE '^(boot|enter|freeze|thaw|remove):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -67,7 +67,7 @@ help: ## Show this help
 # The smoke roster, one list: the help section renders it, and the
 # alternation below is generated -- a new gate is added here once.
 SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
-        smoke-udp smoke-collide smoke-inspection smoke-nested-boot \
+        smoke-udp smoke-collide smoke-inspection smoke-witness smoke-nested-boot \
         smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
         smoke-nested-boot-www smoke-machine smoke-clean \
         smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger \
@@ -176,7 +176,29 @@ test-one-door: ## Static gate: exactly one TX call site writes the TAP (the deci
 	fi
 	echo "OK: one door -- a single TX call site writes the TAP"
 
-test: check lint unit-test integration-test test-jail test-seccomp test-machine test-one-door ## Everything above: build hygiene + all no-KVM tests
+test-witness: ## Static gate: every verb door calls the witness (the one-door pattern applied to the audit)
+	$(LOG)
+	# Every verb of the multi-call binary flows through run_verb, and
+	# cella-network is its own door: exactly two witness call sites.
+	# A verb path that bypasses the witness fails the battery here,
+	# not a review.
+	doors=$$(grep -rn 'audit::witness(' src/main.rs src/bin/cella-network.rs | wc -l)
+	if [ "$$doors" -ne 2 ]; then
+		echo "FAIL: $$doors witness call sites (exactly 2: run_verb, cella-network)"
+		grep -rn 'audit::witness(' src/ | grep -v 'audit.rs'
+		exit 1
+	fi
+	# The witness precedes the dispatch: the call sits above the verb
+	# match in run_verb.
+	w=$$(grep -n 'audit::witness(' src/main.rs | head -1 | cut -d: -f1)
+	m=$$(grep -n 'let ok = match verb' src/main.rs | head -1 | cut -d: -f1)
+	if [ "$$w" -ge "$$m" ]; then
+		echo "FAIL: the witness does not precede the verb dispatch"
+		exit 1
+	fi
+	echo "OK: two witness doors, and the witness precedes the dispatch"
+
+test: check lint unit-test integration-test test-jail test-seccomp test-machine test-one-door test-witness ## Everything above: build hygiene + all no-KVM tests
 	$(LOG)
 	echo ""
 	echo "=== make test: all no-KVM checks passed ==="
@@ -275,6 +297,10 @@ smoke-udp: build-smoke golden ## No datagram leaves undecided, proven from withi
 	$(LOG)
 	$(SCRIPTS)/test/udp.sh
 
+smoke-witness: build-smoke golden ## Every verb is an event: machine-scoped verbs in machines/<vm>/audit, placeless in the root book, uid+gid+persona on each; show twice makes two entries; the harvest files and says so (scripts/test/witness.sh)
+	$(LOG)
+	$(SCRIPTS)/test/witness.sh
+
 smoke-inspection: build-smoke golden ## Judgment requires sight, sight requires stillness: inspect renders a frozen hold's plaintext, seals the sealed, witnesses the look in the chronicle, refuses a running machine (scripts/test/inspection.sh)
 	$(LOG)
 	$(SCRIPTS)/test/inspection.sh
@@ -301,7 +327,7 @@ doctor: $(CELLA_DEV) ## Judge the host and the goldens: cella doctor check + ver
 	$(CELLA_DEV) doctor verify
 
 smoke: test smoke-shell smoke-boot smoke-thaw smoke-ping smoke-udp \
-        smoke-collide smoke-inspection smoke-nested-boot \
+        smoke-collide smoke-inspection smoke-witness smoke-nested-boot \
         smoke-machine smoke-gateway smoke-gateway-cli \
         smoke-multinet smoke-universe smoke-ledger \
         smoke-device-state probe-inception ## The no-KVM checks first (fail fast), then all smoke-* targets + the deep clock probe (skips gracefully without KVM)
