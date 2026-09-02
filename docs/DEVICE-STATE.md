@@ -61,28 +61,60 @@ device in the rings.
 One exception exists: a held egress frame. The mechanism is
 hold-then-freeze, in that order. The VMM parks an outbound frame at
 a defined point -- read from the TX ring, not yet written to the
-TAP, not yet completed -- and returns to the run loop. The ordinary
-freeze then fires from outside, and the sidecar captures a clean
-parked state. Nothing ever freezes mid-operation, and the resumption
-is deliver-and-complete, not excavation.
+TAP, not yet completed -- finishes the run-loop pass, flushes the
+ledger, and then freezes: the park is the freeze (the one-shot rule
+of docs/NETWORK-MODEL.md). The sidecar captures a clean parked
+state. Nothing ever freezes mid-operation, and the resumption is
+decide-then-deliver, not excavation.
 
-The polarity is default-hold: the manager cannot know in advance
-which destination needs the world to grow, thus every egress frame
-parks, and the verdict comes from outside. A release forwards the
-frame and completes it; a release can carry an allow, which installs
-a pass entry for the destination, and the rest of the flow runs at
-full speed: the verdict cost is amortized per destination, not paid
-per frame -- one park and one verdict for each destination without a
-pass entry, and an inline table match for every frame after it.
-The other verdict is a freeze: the world grows first, the thaw
-restores the hold, the queued decisions apply in park order, and
-the decision time never enters the clock of the guest. The VMM offers park, report, release, and allow;
-every policy lives outside it. The concrete surface: SIGUSR2 turns
-the hold on, each park writes a report line with its destination,
-and SIGWINCH applies the verdict file in the state directory --
-`allow <ip>:<port>` lines install pass entries, and every parked
-frame is then released, delivered, and completed. The freeze verdict
-is the ordinary freeze signal.
+The polarity is default-hold, and the park is the freeze: the
+manager cannot know in advance which destination needs the world to
+grow, thus every egress frame to an undecided destination parks --
+and the first park stops the machine. The decision cost is
+amortized per destination: one park and one decision for each
+destination without a pass entry, an inline table match for every
+frame after it. Every policy lives outside the VMM.
+
+```mermaid
+sequenceDiagram
+    participant G as guest
+    participant M as VMM (the membrane's seat today)
+    participant L as ledger
+    participant E as engine (the gates stand in)
+    G->>M: TX frame to an undecided destination
+    M->>M: park (the operation gets its id, in the guest frame)
+    M->>L: Parked (id, destination, both clocks)
+    M->>M: freeze -- one-shot: the batch drains, the ledger
+    Note over M: flushes, the machine stops
+    E->>L: read the open operations
+    E->>M: Decision by id, into the verdict file
+    E->>M: thaw
+    M->>M: decisions apply in park order
+    M->>G: released frames deliver and complete;<br/>a refusal lapses; undecided stays held
+```
+
+The chronicle is the machine's append-only record of what its
+operations did -- parked, released, lapsed, when and to where --
+written as history, never read back as truth.
+The concrete surface, in order:
+
+1. The valve closes once (SIGUSR2 today; born closed with the
+   appliance later), and it never reopens: a machine whose
+   chronicle exists parks across every thaw, with no re-arm.
+2. A park mints the operation id (v7-shaped, the guest frame in
+   the timestamp bits), appends Parked to the chronicle at
+   machines/<name>/network/ledger, and writes a report line.
+3. The pass completes, the ledger flushes, and the machine
+   freezes itself -- park is freeze. Held frames ride the sidecar;
+   the operation records ride the chronicle.
+4. Decisions are framed proto messages in the verdict file, one
+   per operation id (--write-decision until the cella-gateway
+   CLI). The thaw applies them strictly in park order: a release
+   delivers and completes, and may install a pass entry
+   (allow_flow); a refusal lapses the operation; an operation
+   behind an undecided predecessor stays held. SIGWINCH applies
+   the same file against a running machine (the transient case,
+   and the tests).
 
 Therefore the save is a copy of registers, indices, and the held
 egress frames; no drain step exists beyond them.
@@ -121,7 +153,10 @@ of the guest stays valid, and the guest cannot tell.
    registers (unchanged).
 3. Restore each transport from its sidecar block, and rebind each
    held frame to its operation through the ledger (the chronicle
-   holds the open ids; a restored frame rejoins by destination).
+   holds the open ids; a restored frame rejoins by destination --
+   a temporary-backend expedient: the VMM has no memory across a
+   freeze, and the membrane of the appliance holds its operations
+   in its own guest RAM instead, retiring this read-back).
    Nothing delivers on its own: the queued decisions of the verdict
    file apply in park order, and a released operation's frames then
    go to the TAP oldest first, each buffer marked used and the
@@ -159,8 +194,9 @@ part, and the world never moves backward. The sequence is demand
 paging applied to the world:
 
 1. The guest sends a request toward an endpoint that does not exist.
-2. The host freezes the machine at the egress moment; the VMM holds
-   the outbound frame in the sidecar.
+2. The machine freezes itself at the egress moment -- the park is
+   the freeze -- with the outbound frames in the sidecar and the
+   operation in the chronicle.
 3. The world engine materializes the endpoint (the test stands in a
    listener that starts only after the freeze).
 4. The engine decides the operation by id, and the host thaws the
@@ -174,10 +210,11 @@ paging applied to the world:
 The park point sits in the net notify handler, between the read of
 the available ring and the write to the TAP: the one place where the
 VMM holds the request and the guest already considers it sent. The
-hold precedes the freeze, thus the freeze itself stays ordinary.
-Which destination merits which verdict lives outside the VMM and
-outside this document; the gate here proves the mechanism with a
-park, a freeze, a materialization, and a thaw driven by the test as
+park precedes the freeze it triggers, thus the freeze itself stays
+ordinary. Which destination merits which decision lives outside the
+VMM and outside this document; the gate here proves the mechanism
+with a park, its self-freeze, a materialization, a decision by id,
+and a thaw driven by the test as
 the stand-in engine.
 
 ## Not in scope

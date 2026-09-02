@@ -135,29 +135,55 @@ ac3)
 		exit 0
 	fi
 
-	say "step 3: egress hold on, then the same fetch -- its frames park"
+	say "step 3: egress hold on, then the same fetch -- the park is the freeze"
 	kill -USR2 "$VMM_PID"
 	sleep 1
 	type_in 'wget -q -O /dev/null $U && echo held-o"k" &'
-	sleep 1
+	STATE="$CELLA_HOME/machines/$VM/state"
+	deadline=$((SECONDS + 20))
+	until [ -f "$STATE" ]; do
+		[ $SECONDS -lt $deadline ] || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
+		sleep 1
+	done
 	grep -aq "held-ok" "$CON" && { echo "FAIL: the request left the machine while held"; exit 1; }
-	echo "  the request is in flight, and parked"
-
-	say "step 4: freeze -- the parked frames ride the sidecar"
-	"$BIN" freeze "$VM" >/dev/null
 	grep -aq "held egress frame" "$CELLA_HOME/machines/$VM/vmm.log" \
 		|| { echo "FAIL: the freeze holds no egress frame"; exit 1; }
-	grep -a "held egress frame" "$CELLA_HOME/machines/$VM/vmm.log" | tail -1 | sed "s/^/  /"
+	echo "  parked, and frozen by its own hand, frames in the sidecar"
 
-	say "step 5: the engine decides while the machine sleeps; the thaw applies"
+	say "step 4: the engine loop -- decide while it sleeps, thaw, repeat"
+	# The fetch resolves a name first: the DNS operation parks and
+	# freezes one cycle, its release lets the TCP operation park and
+	# freeze the next. The loop is the stand-in engine.
 	LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
 	VERDICT="$CELLA_HOME/machines/$VM/verdict"
-	for id in $("$BIN" --dump-ledger "$LEDGER" | sed -n "s/^parked id=\([0-9a-f]*\) .*/\1/p"); do
-		"$BIN" --write-decision "$VERDICT" "$id" allow
+	open_ids() {
+		local dump; dump=$("$BIN" --dump-ledger "$LEDGER" 2>/dev/null) || return 0
+		comm -23 \
+			<(echo "$dump" | sed -n "s/^parked id=\([0-9a-f]*\) .*/\1/p" | sort) \
+			<(echo "$dump" | sed -n "s/^\(released\|lapsed\) id=\([0-9a-f]*\).*/\2/p" | sort)
+	}
+	cycles=0
+	until grep -aq "held-ok" "$CON"; do
+		cycles=$((cycles + 1))
+		[ $cycles -le 12 ] || {
+			echo "FAIL: the request did not complete within 12 engine cycles"
+			echo "-- ledger:"; "$BIN" --dump-ledger "$LEDGER" | sed "s/^/   /"
+			echo "-- console:"; tail -4 "$CON" | sed "s/^/   /"
+			exit 1
+		}
+		deadline=$((SECONDS + 20))
+		until [ -f "$STATE" ] || grep -aq "held-ok" "$CON"; do
+			[ $SECONDS -lt $deadline ] || { echo "FAIL: neither a freeze nor a completion arrived (cycle $cycles)"; exit 1; }
+			sleep 1
+		done
+		grep -aq "held-ok" "$CON" && break
+		for id in $(open_ids); do
+			"$BIN" --write-decision "$VERDICT" "$id" allow
+		done
+		"$BIN" thaw "$VM" >/dev/null
+		sleep 2
 	done
-	"$BIN" thaw "$VM" >/dev/null
-	wait_for "held-ok" || { echo "FAIL: the released request did not complete after the thaw"; exit 1; }
-	echo "  the decisions applied in park order, and the same request landed"
+	echo "  the ratchet cycled $cycles time(s): park, freeze, decide, thaw -- and the request landed"
 
 	echo
 	echo "PASS: AC3 -- the in-flight layer is exact"
@@ -203,25 +229,27 @@ ac4)
 
 	curl -s -o /dev/null "http://$HOST_IP:8080/" || { echo "FAIL: the stand-in endpoint died after the pre-check"; exit 1; }
 
-	say "step 3: egress hold on; the same request parks, and reports"
+	say "step 3: egress hold on; the same request parks, reports, and freezes"
 	kill -USR2 "$VMM_PID"
 	sleep 1
 	type_in 'wget -q -O /dev/null $H:8080 && echo rel-o"k" &'
-	deadline=$((SECONDS + 15))
-	until grep -aq "parked egress to $HOST_IP:8080" "$VMM"; do
-		[ $SECONDS -lt $deadline ] || { echo "FAIL: no park report for :8080"; exit 1; }
+	STATE="$CELLA_HOME/machines/$VM/state"
+	deadline=$((SECONDS + 20))
+	until [ -f "$STATE" ]; do
+		[ $SECONDS -lt $deadline ] || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
 		sleep 1
 	done
+	grep -aq "parked egress to $HOST_IP:8080" "$VMM" || { echo "FAIL: no park report for :8080"; exit 1; }
 	grep -aq "rel-ok" "$CON" && { echo "FAIL: the request passed without a verdict"; exit 1; }
-	echo "  parked, and reported"
+	echo "  parked, reported, and frozen by its own hand"
 
-	say "step 4: the engine renders release with allow, by id -- the flow completes"
+	say "step 4: the engine renders release with allow, by id; the thaw applies"
 	LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
 	VERDICT="$CELLA_HOME/machines/$VM/verdict"
 	ID_REL=$("$BIN" --dump-ledger "$LEDGER" | sed -n "s/^parked id=\([0-9a-f]*\) .*port=8080.*/\1/p" | tail -1)
 	[ -n "$ID_REL" ] || { echo "FAIL: no parked operation in the ledger for :8080"; exit 1; }
 	"$BIN" --write-decision "$VERDICT" "$ID_REL" allow
-	kill -WINCH "$VMM_PID"
+	"$BIN" thaw "$VM" >/dev/null
 	wait_for "rel-ok" || {
 		echo "FAIL: the released request did not complete"
 		echo "-- vmm.log:"; tail -6 "$VMM" | sed "s/^/   /"
@@ -245,8 +273,12 @@ ac4)
 	done
 	echo "  parked, and reported"
 
-	say "step 6: the engine freezes the machine, and grows the world"
-	"$BIN" freeze "$VM" >/dev/null
+	say "step 6: the machine froze itself on the park; the world grows"
+	deadline=$((SECONDS + 20))
+	until [ -f "$STATE" ]; do
+		[ $SECONDS -lt $deadline ] || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
+		sleep 1
+	done
 	grep -aq "held egress frame" "$VMM" || { echo "FAIL: the freeze holds no egress frame"; exit 1; }
 	python3 -m http.server 9090 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV2=$!
 	sleep 1

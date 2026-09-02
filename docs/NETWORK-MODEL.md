@@ -42,6 +42,9 @@ cost (two VMMs per machine, at every depth) is accepted and paid.
 
 ## The membrane
 
+The chronicle is the machine's append-only record of what its
+operations did -- parked, released, lapsed, when and to where --
+written as history, never read back as truth.
 The membrane is a holder process inside the appliance guest --
 pure dataplane, no control agent. Its held state (parked
 operations, warm connections, buffered bytes) lives in the guest's
@@ -49,6 +52,22 @@ own memory, thus the appliance's ram.img is the vessel: a freeze
 preserves the holds, and a thaw resumes them, the cryogenic
 principle doing the persistence. The sidecar carries no payload
 blocks; the ledger (below) is a chronicle, never the store.
+
+A closed valve does not hold-and-run: the first parked operation
+stops the machine. The VMM completes the TX batch in hand (every
+destination of the batch parks; the batch bounds the holds per
+instant, the ring size its ceiling), flushes the ledger, and
+freezes before the guest runs again -- park is freeze. Twins park
+and freeze identically, thus the ratchet is deterministic in the
+guest's frame; the adversarial spray cannot happen, because the
+sprayer is frozen after its first batch -- no operation cap
+exists, and none is needed. The valve itself ratchets one way:
+once a machine's chronicle exists, the valve is closed at every
+thaw, with no re-arm (the existence check is temporary-backend
+scaffolding; born-closed at create replaces it). The flow: park -> freeze -> the engine
+decides by id -> thaw applies the decisions in park order -> the
+answers land. An attended posture (park-and-run) is a possible
+future valve value, deliberately not built now.
 
 The membrane holds in both directions, for two different reasons:
 

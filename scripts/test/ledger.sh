@@ -74,15 +74,22 @@ say "step 2: egress hold on"
 kill -USR2 "$VMM_PID"
 sleep 1
 
-say "step 3: one fetch parks (its SYN retransmits join the same operation)"
+say "step 3: one fetch parks -- and the park is the freeze (one-shot)"
 python3 -m http.server 8080 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV1=$!
 sleep 1
 type_in "H=http://$HOST_IP"
 type_in 'wget -q -O /dev/null $H:8080 && echo fetch-a-don"e" &'
-sleep 1
-deadline=$((SECONDS + 15))
-while [ ! -s "$LEDGER" ] && [ $SECONDS -lt $deadline ]; do sleep 1; done
+STATE="$CELLA_HOME/machines/$VM/state"
+wait_frozen() {
+    local deadline=$((SECONDS + 20))
+    until [ -f "$STATE" ]; do
+        [ $SECONDS -lt $deadline ] || return 1
+        sleep 1
+    done
+}
+wait_frozen || { echo "FAIL: the machine did not freeze itself on the park"; exit 1; }
 [ -s "$LEDGER" ] || { echo "FAIL: no ledger file at $LEDGER"; exit 1; }
+echo "  parked, and frozen by its own hand"
 
 say "step 4: the ledger holds one operation, with an id and both clocks"
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
@@ -96,8 +103,7 @@ echo "$DUMP" | grep -q "host_ns=[1-9]" || { echo "FAIL: no host_ns on the operat
 ID_A=$(id_of "$DUMP" "port=8080")
 [ -n "$ID_A" ] || { echo "FAIL: could not read the operation's id"; exit 1; }
 
-say "step 5: freeze and thaw -- the operation stays held, not delivered"
-"$BIN" freeze "$VM" >/dev/null
+say "step 5: thaw with no decision -- the operation stays held, not delivered"
 "$BIN" thaw "$VM" >/dev/null
 sleep 2
 not_yet "fetch-a-done" || { echo "FAIL: the fetch completed without a decision"; exit 1; }
@@ -107,10 +113,6 @@ echo "  the ledger still shows only the parked operation; thaw delivered nothing
 
 say "step 6: release by id -- the fetch completes, the ledger closes the book"
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
-# The valve does not survive the thaw in this backend: re-arm it.
-# The one-shot layer replaces this with valve persistence.
-kill -USR2 "$VMM_PID"
-sleep 1
 "$BIN" --write-decision "$VERDICT" "$ID_A" allow
 kill -WINCH "$VMM_PID"
 wait_for "fetch-a-done" || { echo "FAIL: the released fetch did not complete"; exit 1; }
@@ -124,23 +126,22 @@ for rid in $RELEASED_IDS; do
 done
 echo "  released id matches the parked id; no phantom"
 
-say "step 7: two more operations park, in order (8081, then 8082)"
+say "step 7: the valve persisted -- C parks and freezes; thaw; D parks and freezes"
 python3 -m http.server 8081 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV2=$!
 python3 -m http.server 8082 --bind "$HOST_IP" --directory "$WWW" >/dev/null 2>&1 & SRV3=$!
 sleep 1
+# No signal anywhere below: the chronicle exists, thus the valve is
+# closed across every thaw, and each new destination is one park,
+# one self-freeze, one cycle of the ratchet.
 type_in 'wget -q -O /dev/null $H:8081 && echo fetch-c-don"e" &'
-ledger_has() { "$BIN" --dump-ledger "$LEDGER" 2>/dev/null | grep -q "$1"; }
-deadline=$((SECONDS + 15))
-until ledger_has "port=8081"; do
-    [ $SECONDS -lt $deadline ] || { echo "FAIL: operation C never parked"; exit 1; }
-    sleep 1
-done
+wait_frozen || { echo "FAIL: C did not park-and-freeze (valve persistence)"; exit 1; }
+"$BIN" thaw "$VM" >/dev/null
+sleep 2
 type_in 'wget -q -O /dev/null $H:8082 && echo fetch-d-don"e" &'
-deadline=$((SECONDS + 15))
-until ledger_has "port=8082"; do
-    [ $SECONDS -lt $deadline ] || { echo "FAIL: operation D never parked"; exit 1; }
-    sleep 1
-done
+wait_frozen || { echo "FAIL: D did not park-and-freeze"; exit 1; }
+"$BIN" thaw "$VM" >/dev/null
+sleep 2
+VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
 ID_C=$(id_of "$DUMP" "port=8081")
 ID_D=$(id_of "$DUMP" "port=8082")

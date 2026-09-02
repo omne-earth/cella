@@ -710,6 +710,16 @@ fn main() {
         for (st, (_, _, transport)) in frozen_state.devices.iter().zip(mmio_devices.iter_mut()) {
             transport.restore_state(st, &open_ops);
         }
+        // Once closed, the valve stays closed: a chronicle exists,
+        // thus this machine parks -- across every thaw, with no
+        // re-arm. The valve ratchets one way, like everything else
+        // here (see docs/NETWORK-MODEL.md, "The membrane").
+        if ledger_path.is_file() {
+            for (_, _, transport) in mmio_devices.iter_mut() {
+                transport.set_hold(true);
+            }
+            eprintln!("cella: the chronicle exists -- the valve stays closed");
+        }
         // No unconditional delivery: the freeze verdict means the
         // world grows and the hold resumes. The decisions that
         // arrived while the machine slept apply now, in park order
@@ -886,24 +896,43 @@ fn run_loop(
         if let Some(listener) = &console_listener {
             poll_console(listener, &console_client, serial);
         }
-        flush_ledger(mmio_devices, ledger_path);
+        // One-shot: the park is the freeze. The pass completes (the
+        // whole TX batch drained above, thus every destination of
+        // the batch parked), the ledger flushes, and the machine
+        // stops before the guest runs again. No accumulation exists:
+        // latency is spent frozen, never waiting awake, and the
+        // engine always works against a frozen machine.
+        if flush_ledger(mmio_devices, ledger_path) {
+            eprintln!("cella: parked -- the machine freezes (one-shot)");
+            FREEZE_REQUESTED.store(true, Ordering::SeqCst);
+        }
     }
 }
 
 /// Drain every device's pending ledger events and append them to the
-/// chronicle. Additive: nothing yet reads this file back, and the
-/// hold/release path above is untouched by its presence or absence.
-fn flush_ledger(mmio_devices: &mut [(u64, u64, MmioTransport)], ledger_path: &std::path::Path) {
+/// chronicle. Returns true when a new operation parked this pass:
+/// the one-shot trigger reads it. The flush precedes any freeze,
+/// thus the Parked events are on disk before the sidecar exists --
+/// the rebinding at thaw depends on this order.
+fn flush_ledger(
+    mmio_devices: &mut [(u64, u64, MmioTransport)],
+    ledger_path: &std::path::Path,
+) -> bool {
     let mut events = Vec::new();
     for (_, _, t) in mmio_devices.iter_mut() {
         events.extend(t.drain_ledger_events());
     }
+    let mut parked_any = false;
     for event in events {
+        if matches!(event.event, Some(proto::event::Event::Parked(_))) {
+            parked_any = true;
+        }
         let msg = ledger::event_message(event);
         if let Err(e) = ledger::append(ledger_path, &msg) {
             eprintln!("cella: ledger append failed: {e}");
         }
     }
+    parked_any
 }
 
 /// Read pending host stdin bytes into the serial device. Non-blocking:

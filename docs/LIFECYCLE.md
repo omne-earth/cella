@@ -100,7 +100,7 @@ stateDiagram-v2
 | create  | Stages a named machine from the golden artifacts. No process starts | Rust only |
 | start   | Runs the machine. Detaches, writes the pid, signals readiness | Rust only |
 | stop    | Ends the machine as fast as possible, and clears the transients: ram.img, the pid file, the console socket, and any stale sidecar. An emergency maneuver: in-flight state is disposable, and the next start boots fresh from the disk | Rust only |
-| freeze  | Stops the machine and preserves the in-flight state: RAM, vCPU, clocks, devices. The next thaw resumes the same instant | Rust only |
+| freeze  | Stops the machine and preserves the in-flight state: RAM, vCPU, clocks, devices, held operations. A machine with a closed valve also freezes itself on a park (docs/NETWORK-MODEL.md, one-shot). The next thaw resumes the same instant | Rust only |
 | thaw    | Resumes a frozen machine | Rust only |
 | enter   | Attaches the terminal to the serial console. An exit of the guest shell detaches | Rust only |
 | destroy | Deletes the machine and its artifacts, once and for all | Rust only |
@@ -179,8 +179,15 @@ $HOME/.cella/
     console.sock                 the serial console, present only while running
     console.log                  the console transcript, append-only
     vmm.log                      the stderr of the VMM (operator instrumentation)
+    verdict                      framed Decision messages, appended by the engine
+    network/ledger               the chronicle: Parked, Released, Lapsed, framed
+                                 (append-only; it survives stop, as a chronicle
+                                 must, and its existence keeps the valve closed)
 ```
 
+The chronicle is the machine's append-only record of what its
+operations did -- parked, released, lapsed, when and to where --
+written as history, never read back as truth.
 A directory is a machine. The manifest is per machine, thus every
 verb's transaction is one directory: write to a temporary file, then
 rename. No global state exists, no lock spans machines, and destroy
