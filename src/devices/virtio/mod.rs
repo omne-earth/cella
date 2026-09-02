@@ -96,6 +96,11 @@ pub trait VirtioDevice: Send {
     fn take_parked_flag(&mut self) -> bool {
         false
     }
+    /// The ids of the operations this device holds, for the
+    /// bookkeeping lapse at the thaw edge (see main::apply_verdicts).
+    fn held_op_ids(&self) -> Vec<Vec<u8>> {
+        Vec::new()
+    }
     /// Resolve every operation that a decision map lets resolve
     /// right now, oldest-parked first, and return the frames a
     /// release delivers (see docs/NETWORK-MODEL.md, "Release names

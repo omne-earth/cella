@@ -391,6 +391,10 @@ impl VirtioDevice for Net {
         std::mem::take(&mut self.parked_flag)
     }
 
+    fn held_op_ids(&self) -> Vec<Vec<u8>> {
+        self.parked.iter().map(|op| op.id.to_vec()).collect()
+    }
+
     fn resolve_decisions(
         &mut self,
         decisions: &HashMap<Vec<u8>, proto::Decision>,

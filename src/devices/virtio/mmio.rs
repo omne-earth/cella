@@ -328,6 +328,11 @@ impl MmioTransport {
         self.device.take_parked_flag()
     }
 
+    /// The ids of the operations the device holds.
+    pub fn held_op_ids(&self) -> Vec<Vec<u8>> {
+        self.device.held_op_ids()
+    }
+
     /// Apply a decision map to the device's held operations, oldest-
     /// parked first (see docs/NETWORK-MODEL.md, "Release names an
     /// id"): every operation the map lets resolve right now

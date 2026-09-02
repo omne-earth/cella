@@ -77,11 +77,32 @@ pump_while "$P3"
 wait "$P3" || { echo "FAIL: no reply landed on the first tap while the engine decided"; exit 1; }
 echo "  192.168.201.2 answers over tap1, every frame decided"
 
-say "step 4: the tap claims are exclusive per tap"
+say "step 4: one valve spans all transports -- egress on eth1 parks too"
+# The second nic belongs to the image init in the gateway flavor;
+# here the gate configures it by hand. A park on any nic freezes
+# the machine: the valve is the machine's, never a nic's.
+if [ -f "$M/state" ]; then "$BIN" thaw mn >/dev/null; sleep 1; fi
+type_in 'ip addr add 192.168.202.3/24 dev eth1'
+type_in 'ip link set eth1 up'
+type_in 'ping -c1 -W2 -I eth1 192.168.202.1 &'
+deadline=$((SECONDS + 20))
+until [ -f "$M/state" ]; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: egress on eth1 did not park and freeze"; exit 1; }
+    sleep 1
+done
+"$BIN" gateway mn show | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show lists nothing held for the eth1 egress"; exit 1; }
+echo "  the eth1 egress parked, and the one valve froze the machine"
+for id in $("$BIN" gateway mn show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+    "$BIN" gateway mn release "$id" >/dev/null
+done
+"$BIN" thaw mn >/dev/null
+sleep 2
+
+say "step 5: the tap claims are exclusive per tap"
 "$BIN" create mn2 --net tap2 >/dev/null 2>&1 && { echo "FAIL: a claimed tap was granted again"; exit 1; }
 echo "  tap2 refused: the list claims each tap"
 
-say "step 5: freeze and thaw with two transports in the sidecar"
+say "step 6: freeze and thaw with two transports in the sidecar"
 if [ -f "$M/state" ]; then "$BIN" thaw mn >/dev/null; sleep 1; fi
 "$BIN" freeze mn >/dev/null
 "$BIN" thaw mn >/dev/null

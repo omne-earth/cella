@@ -77,12 +77,40 @@ sleep 4
 VMM_PID=$(cat "$M/pid")
 ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a closed machine answered a ping"; exit 1; }
 [ -f "$STATE" ] && { echo "FAIL: a closed machine froze on inbound traffic"; exit 1; }
+[ -f "$M/network/ledger" ] && { echo "FAIL: a closed machine wrote a chronicle"; exit 1; }
 echo "  no reply, no freeze, no ledger: dark"
+
+say "step 1b: the never-opened machine stays dark across freeze and thaw (negative)"
+# The closed self-loop holds on every edge of the machine
+# automaton, not only at birth: create, freeze, thaw -- and the
+# machine still answers nothing, parks nothing, freezes on
+# nothing.
+"$BIN" freeze "$VM" >/dev/null
+"$BIN" thaw "$VM" >/dev/null
+sleep 2
+ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a thawed never-opened machine answered a ping"; exit 1; }
+[ -f "$STATE" ] && { echo "FAIL: a thawed never-opened machine froze on traffic"; exit 1; }
+[ -f "$M/network/ledger" ] && { echo "FAIL: a thawed never-opened machine wrote a chronicle"; exit 1; }
+echo "  dark through the whole life: nothing answered, nothing parked, nothing froze"
+
+say "step 1c: a valve verb works against a frozen machine (positive)"
+# The two automata are independent: the gateway verb acts on a
+# sleeping machine, the posture holds, and the first post-thaw
+# egress parks.
+"$BIN" freeze "$VM" >/dev/null
+"$BIN" gateway "$VM" open | grep -q "holds across freeze and thaw" || { echo "FAIL: open against a frozen machine did not state its persistence"; exit 1; }
+[ "$(cat "$M/valve")" = "open" ] || { echo "FAIL: the valve record did not open against a frozen machine"; exit 1; }
+"$BIN" gateway "$VM" close >/dev/null
+"$BIN" thaw "$VM" >/dev/null
+sleep 2
 
 say "step 2: open -- every egress parks, and the park is the freeze"
 "$BIN" gateway "$VM" open >/dev/null
 sleep 1
-ping -c 1 -W 3 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
+# Three requests, not one: the live kick applies on the next
+# run-loop pass, and a request that races it meets the closed
+# drain and parks nothing.
+ping -c 3 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
 wait_frozen || { echo "FAIL: the parked egress did not freeze the machine"; exit 1; }
 SHOW=$("$BIN" gateway "$VM" show)
 echo "$SHOW" | sed "s/^/  /"

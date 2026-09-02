@@ -42,7 +42,7 @@ mod tests {
         Operation {
             id: vec![7u8; 16],
             destination: Some(Destination {
-                host: "huggingface.co".into(),
+                host: "example.com".into(),
                 ip: vec![1, 2, 3, 4],
                 port: 443,
                 proto: 6,

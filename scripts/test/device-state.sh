@@ -9,9 +9,9 @@ BIN=target/smoke/cella
 ac="${1:-}"
 
 case "$ac" in
-ac1 | ac2 | ac3 | ac4) ;;
+ac1 | ac2 | ac3 | ac4 | ac5) ;;
 *)
-	echo "usage: $0 ac1|ac2|ac3|ac4" >&2
+	echo "usage: $0 ac1|ac2|ac3|ac4|ac5" >&2
 	exit 2
 	;;
 esac
@@ -310,6 +310,79 @@ ac4)
 
 	echo
 	echo "PASS: AC4 -- the verdict is external"
+	"$BIN" stop "$VM" >/dev/null 2>&1 || true
+	"$BIN" destroy "$VM" >/dev/null
+	;;
+ac5)
+	echo "AC5: the true world. AC3 proves exactness against the stand-in;"
+	echo "this leg walks a real internet fetch through the total membrane,"
+	echo "one decision per frame. It skips when the host is offline, and it"
+	echo "rides the peer-patience bound: the far end must retransmit into"
+	echo "the aperture."
+	TAP="${CELLA_TEST_TAP:-tap0}"
+	HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
+	if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
+		echo "SKIP: $TAP is not configured with $HOST_IP -- run: cella doctor fix"
+		exit 0
+	fi
+	# A real internet endpoint that answers small, over plain HTTP:
+	# a TLS burst spans many segments, and a segment that lands on
+	# a frozen tap is lost -- the peer-patience bound. The claim
+	# here is the true world, not the biggest possible page.
+	AC5_URL="${CELLA_AC5_URL:-http://example.com}"
+	curl -s --max-time 8 -o /dev/null "$AC5_URL" || {
+		echo "SKIP: this host has no route to the www"; exit 0; }
+
+	say "step 1: create and start a machine on $TAP"
+	"$BIN" create "$VM" --net "$TAP" >/dev/null
+	"$BIN" start "$VM" >/dev/null
+	sleep 6
+	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
+
+	# The serial RX FIFO holds 64 bytes; every typed line stays short.
+	say "step 2: the valve opens, and the fetch begins"
+	"$BIN" gateway "$VM" open >/dev/null
+	sleep 1
+	type_in 'mkdir -p /etc; echo nameserver 1.1.1.1 >/etc/resolv.conf'
+	type_in "U=$AC5_URL"
+	type_in 'wget -q -O /dev/null $U && echo world-rea"l" &'
+
+	say "step 3: the engine loop, against the true world"
+	LEDGER="$CELLA_HOME/machines/$VM/network/ledger"
+	open_ids() {
+		local dump; dump=$("$BIN" --dump-ledger "$LEDGER" 2>/dev/null) || return 0
+		comm -23 \
+			<(echo "$dump" | sed -n "s/^parked id=\([0-9a-f]*\) .*/\1/p" | sort) \
+			<(echo "$dump" | sed -n "s/^\(released\|lapsed\) id=\([0-9a-f]*\).*/\2/p" | sort)
+	}
+	STATE="$CELLA_HOME/machines/$VM/state"
+	cycles=0
+	until grep -aq "world-real" "$CON"; do
+		cycles=$((cycles + 1))
+		[ $cycles -le 150 ] || {
+			echo "FAIL: the real fetch did not land within 150 engine cycles"
+			echo "-- ledger tail:"; "$BIN" --dump-ledger "$LEDGER" | tail -6 | sed "s/^/   /"
+			echo "-- console:"; tail -4 "$CON" | sed "s/^/   /"
+			exit 1
+		}
+		deadline=$((SECONDS + 25))
+		until [ -f "$STATE" ] || grep -aq "world-real" "$CON"; do
+			[ $SECONDS -lt $deadline ] || { echo "FAIL: neither a freeze nor a completion arrived (cycle $cycles)"; exit 1; }
+			sleep 1
+		done
+		grep -aq "world-real" "$CON" && break
+		vp=$(cat "$CELLA_HOME/machines/$VM/pid" 2>/dev/null || true)
+		while [ -n "$vp" ] && kill -0 "$vp" 2>/dev/null; do sleep 0.2; done
+		for id in $(open_ids); do
+			"$BIN" gateway "$VM" release "$id" >/dev/null
+		done
+		"$BIN" thaw "$VM" >/dev/null
+		sleep 1
+	done
+	echo "  the ratchet cycled $cycles time(s), and the true world answered"
+
+	echo
+	echo "PASS: AC5 -- a real internet fetch crossed the total membrane"
 	"$BIN" stop "$VM" >/dev/null 2>&1 || true
 	"$BIN" destroy "$VM" >/dev/null
 	;;

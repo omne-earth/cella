@@ -188,15 +188,16 @@ of the guest stays valid, and the guest cannot tell.
 ## Acceptance criteria
 
 Each criterion stands alone, in dependency order. Each has a gate
-target (`make device-state-ac1` .. `device-state-ac4`), and
-`make smoke-device-state` runs all four.
+target (`make device-state-ac1` .. `device-state-ac5`), and
+`make smoke-device-state` runs all five.
 
 | Criterion | State |
 |---|---|
 | **AC1 -- the disk survives the thaw** | The sidecar (v8) carries the transport state, the thaw restores it before the first KVM_RUN, and `make smoke-shell` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. |
 | **AC2 -- the network survives the thaw** | The tap claim persists through the manifest, and the transport restore covers virtio-net. The gate opens the valve, decides the guest's parked echo reply, pings, freezes, thaws, decides the reply of the new epoch, and pings again. A missing tap fails at start; `setup net` recreates the pool by convention. |
-| **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, the open verb arms the membrane, the sidecar carries the parked frames with their descriptor head indices, and the operations survive the thaw as held -- ids rebound through the ledger. A decision by id releases each one, in park order. The gate fetches a real www page: the fetch parks, the machine freezes, the engine decides while it sleeps, and the same request completes after the thaw. |
-| **AC4 -- the verdict is external** | Every egress frame parks under the open valve into an operation with an id, the park reports its destination, and the decisions come from outside, by id, applied in park order: a release with allow installs a pass entry for that epoch and the flow runs at full speed, or freeze, grow the world, decide, thaw. The guest never knows. The world-ratchet gate proves it end to end against real endpoints. |
+| **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, the open verb arms the membrane, the sidecar carries the parked frames with their descriptor head indices, and the operations survive the thaw as held -- ids rebound through the ledger. A decision by id releases each one, in park order. The gate walks a fetch against the host's stand-in endpoint, one decision per frame, deterministically: a freeze loses in-flight sender segments, thus the exactness leg stays local and the true-world leg is AC5. |
+| **AC4 -- the verdict is external** | Every egress frame parks under the open valve into an operation with an id, the park reports its destination, and the decisions come from outside, by id, applied in park order. The world-ratchet gate proves it end to end: the request toward an endpoint that does not exist parks and freezes the machine, the world grows while it sleeps, and the release lands the same request. The guest never knows. |
+| **AC5 -- the true world** | A real internet fetch crosses the total membrane, one decision per frame (a small plain-HTTP endpoint; the gate skips when the host is offline). The leg rides the peer-patience bound: a segment that lands on a frozen tap is lost, and the far end must retransmit into the aperture -- thus AC3 keeps the deterministic stand-in, and this leg touches the world. |
 
 The clock gates must not move: the transport restore adds host-time
 work outside the clock window, and the probes verify that nothing

@@ -1107,6 +1107,41 @@ fn apply_verdicts(
     for (_, _, t) in mmio_devices.iter_mut() {
         t.apply_decisions(&decisions, mem);
     }
+    // The bookkeeping lapse: a refusal whose id is open in the
+    // chronicle but held by no device closes the book and touches
+    // no frame. The case exists after a collision melt (the
+    // never-guess rebind re-mints, and the stale ids stay open
+    // with nothing behind them); the engine refuses them, and the
+    // chronicle closes.
+    let held: std::collections::HashSet<Vec<u8>> = mmio_devices
+        .iter()
+        .flat_map(|(_, _, t)| t.held_op_ids())
+        .collect();
+    let ledger_path = state_dir.join("network").join("ledger");
+    let open: std::collections::HashSet<Vec<u8>> = ledger::open_operations(&ledger_path)
+        .map(|ops| ops.into_iter().map(|o| o.id).collect())
+        .unwrap_or_default();
+    for (id, decision) in &decisions {
+        let Some(proto::decision::Decision::Refusal(refusal)) = &decision.decision else {
+            continue;
+        };
+        if held.contains(id) || !open.contains(id) {
+            continue;
+        }
+        let msg = ledger::event_message(proto::Event {
+            event: Some(proto::event::Event::Lapsed(proto::Lapsed {
+                id: id.clone(),
+                why: refusal.why.clone(),
+            })),
+        });
+        if let Err(e) = ledger::append(&ledger_path, &msg) {
+            eprintln!("cella: ledger append failed: {e}");
+        }
+        eprintln!(
+            "cella: lapsed {} by the book -- refused, and held by nothing",
+            ledger::hex(id)
+        );
+    }
 }
 
 fn do_freeze(
