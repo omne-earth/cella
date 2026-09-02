@@ -136,6 +136,7 @@ stateDiagram-v2
         [*] --> R: start
         R --> F: cella freeze, or the park
         F --> R: cella thaw, applies what can apply
+        F --> F: cella gateway inspect -- the render,<br/>witnessed; nothing resolves
     }
     state "valve automaton (cella-gateway)" as V {
         C: closed
@@ -155,6 +156,8 @@ The transition tables, with the outputs:
 | frozen | decision(id) | frozen | staged in the verdict file; nothing moves |
 | frozen | thaw | running | the staged decisions that can apply, apply in park order -- deliver or lapse; the rest stay staged, and their operations stay held |
 | frozen | freeze | frozen | refused: the machine is already files |
+| frozen | inspect(id) | frozen | the render, and an Inspected event in the chronicle -- the look resolves nothing |
+| running | inspect(id) | running | refused: sight requires stillness |
 
 | Valve | Input | Next | Output |
 |---|---|---|---|

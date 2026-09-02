@@ -73,7 +73,16 @@ message Event {
     Operation parked = 1;
     Released released = 2;
     Lapsed lapsed = 3;
+    Inspected inspected = 4;
   }
+}
+
+// The look is itself recorded: the operator read a held
+// operation's frames (cella gateway inspect, frozen-only). An
+// Inspected event resolves nothing -- the operation stays held --
+// and it changes no state in either automaton.
+message Inspected {
+  bytes id = 1;
 }
 
 message Released {

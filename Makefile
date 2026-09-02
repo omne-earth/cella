@@ -24,7 +24,16 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 .PHONY: help build build-smoke install-release install-debug debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested setup-tap \
-        boot enter freeze thaw remove doctor smoke smoke-shell smoke-boot smoke-thaw smoke-nested-boot smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-ping smoke-udp smoke-collide smoke-multinet smoke-universe smoke-ledger smoke-device-state device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 device-state-ac5 test-jail test-seccomp test-machine test-one-door \
+        boot enter freeze thaw remove doctor \
+        smoke smoke-shell smoke-boot smoke-thaw \
+        smoke-nested-boot smoke-nested-boot-airgapped \
+        smoke-nested-boot-hybrid smoke-nested-boot-www \
+        smoke-machine smoke-clean smoke-gateway smoke-gateway-cli \
+        smoke-ping smoke-udp smoke-collide smoke-inspection \
+        smoke-multinet smoke-universe smoke-ledger \
+        smoke-device-state device-state-ac1 device-state-ac2 \
+        device-state-ac3 device-state-ac4 device-state-ac5 \
+        test-jail test-seccomp test-machine test-one-door \
         clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -43,7 +52,8 @@ help: ## Show this help
 	grep -hE '^(boot|enter|freeze|thaw|remove):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	grep -hE '^(smoke|smoke-shell|smoke-boot|smoke-thaw|smoke-ping|smoke-udp|smoke-collide|smoke-nested-boot|smoke-nested-boot-airgapped|smoke-nested-boot-hybrid|smoke-nested-boot-www|smoke-machine|smoke-clean|smoke-gateway|smoke-multinet|smoke-universe|smoke-ledger|smoke-device-state|device-state-ac1|device-state-ac2|device-state-ac3|device-state-ac4|device-state-ac5):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^($(SMOKE_ALTERNATION)):.*##' $(MAKEFILE_LIST) \
+	    | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Setup:"
 	grep -hE '^(init|golden|golden-nested|setup-tap|doctor|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -53,6 +63,19 @@ help: ## Show this help
 	echo ""
 	echo "Probes: diagnostics, run by hand (smoke-thaw runs the freeze/thaw one):"
 	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept|probe-thaw-gate|probe-inception):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+
+# The smoke roster, one list: the help section renders it, and the
+# alternation below is generated -- a new gate is added here once.
+SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
+        smoke-udp smoke-collide smoke-inspection smoke-nested-boot \
+        smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
+        smoke-nested-boot-www smoke-machine smoke-clean \
+        smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger \
+        smoke-device-state device-state-ac1 device-state-ac2 \
+        device-state-ac3 device-state-ac4 device-state-ac5
+empty :=
+space := $(empty) $(empty)
+SMOKE_ALTERNATION := $(subst $(space),|,$(strip $(SMOKE_TARGETS)))
 
 # --- Build ------------------------------------------------------------
 
@@ -252,6 +275,10 @@ smoke-udp: build-smoke golden ## No datagram leaves undecided, proven from withi
 	$(LOG)
 	$(SCRIPTS)/test/udp.sh
 
+smoke-inspection: build-smoke golden ## Judgment requires sight, sight requires stillness: inspect renders a frozen hold's plaintext, seals the sealed, witnesses the look in the chronicle, refuses a running machine (scripts/test/inspection.sh)
+	$(LOG)
+	$(SCRIPTS)/test/inspection.sh
+
 smoke-collide: build-smoke golden ## The matcher never guesses: a thaw over a colliding sidecar re-mints, holds every ambiguous frame, delivers none; refused stale ids lapse by the book (scripts/test/collide.sh)
 	$(LOG)
 	$(SCRIPTS)/test/collide.sh
@@ -273,7 +300,11 @@ doctor: $(CELLA_DEV) ## Judge the host and the goldens: cella doctor check + ver
 	$(CELLA_DEV) doctor check
 	$(CELLA_DEV) doctor verify
 
-smoke: test smoke-shell smoke-boot smoke-thaw smoke-ping smoke-udp smoke-collide smoke-nested-boot smoke-machine smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger smoke-device-state probe-inception ## The no-KVM checks first (fail fast), then all smoke-* targets + the deep clock probe (skips gracefully without KVM)
+smoke: test smoke-shell smoke-boot smoke-thaw smoke-ping smoke-udp \
+        smoke-collide smoke-inspection smoke-nested-boot \
+        smoke-machine smoke-gateway smoke-gateway-cli \
+        smoke-multinet smoke-universe smoke-ledger \
+        smoke-device-state probe-inception ## The no-KVM checks first (fail fast), then all smoke-* targets + the deep clock probe (skips gracefully without KVM)
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="

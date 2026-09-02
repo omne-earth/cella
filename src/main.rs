@@ -250,7 +250,7 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
         },
         "selftest" => machine::selftest(),
         "gateway" => {
-            let usage = "usage: cella gateway <vm> <show [incoming|outgoing] [--all] | release <id> | refuse <id> [--why TEXT] | open | close>";
+            let usage = "usage: cella gateway <vm> <show [incoming|outgoing] [--all] | release <id> | refuse <id> [--why TEXT] | inspect <id> | open | close>";
             let (Some(vm), Some(verb)) = (args.first(), args.get(1)) else {
                 usage_error(usage)
             };
@@ -271,6 +271,10 @@ fn run_verb(verb: &str, args: &[String]) -> ! {
                 "refuse" => match rest {
                     [id] => gateway::refuse(vm, id, "refused"),
                     [id, flag, why] if flag == "--why" => gateway::refuse(vm, id, why),
+                    _ => usage_error(usage),
+                },
+                "inspect" => match rest {
+                    [id] => gateway::inspect(vm, id),
                     _ => usage_error(usage),
                 },
                 "close" => gateway::close(vm),
@@ -760,6 +764,13 @@ fn main() {
         // -- a released operation delivers, an undecided one stays
         // held (see docs/NETWORK-MODEL.md, "Release names an id").
         apply_verdicts(&args.state_dir, &mut mmio_devices, &mem);
+        // The thaw edge flushes what it produced -- the rebind's
+        // re-mints and the apply's Released and Lapsed events --
+        // before the first KVM_RUN. The run loop's own flush waits
+        // on a vCPU exit, and an idle guest in HLT can hold one
+        // back for seconds; the chronicle must not lag the edge.
+        let ledger_path = args.state_dir.join("network").join("ledger");
+        let _ = flush_ledger(&mut mmio_devices, &ledger_path);
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
         // PVCLOCK_GUEST_STOPPED in the pvclock page, and the flag tells
         // the guest that it was stopped. The freeze must not exist for
@@ -1576,6 +1587,9 @@ fn dump_ledger(path: &PathBuf) -> ! {
             ),
             Some(proto::event::Event::Lapsed(l)) => {
                 println!("lapsed id={} why={:?}", ledger::hex(&l.id), l.why)
+            }
+            Some(proto::event::Event::Inspected(i)) => {
+                println!("inspected id={}", ledger::hex(&i.id))
             }
             None => println!("(empty event)"),
         }

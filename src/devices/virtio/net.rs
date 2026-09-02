@@ -101,37 +101,7 @@ const MAX_INBOUND_TOTAL_BYTES: usize = 1024 * 1024;
 /// unnamed, thus no frame goes unparked. The frame starts with
 /// the 12-byte vnet header.
 fn frame_name(frame: &[u8]) -> Dest {
-    let l2_name = || {
-        let mut mac = [0u8; 6];
-        if let Some(b) = frame.get(12..18) {
-            mac.copy_from_slice(b);
-        }
-        let ethertype = frame
-            .get(24..26)
-            .map(|b| u16::from_be_bytes([b[0], b[1]]))
-            .unwrap_or(0);
-        Dest::L2 { ethertype, mac }
-    };
-    let ipv4 = || -> Option<Dest> {
-        let eth = frame.get(12..)?;
-        if eth.get(12..14)? != [0x08, 0x00] {
-            return None;
-        }
-        let ip = eth.get(14..)?;
-        let ihl = ((*ip.first()? & 0x0f) as usize) * 4;
-        let proto = *ip.get(9)?;
-        let dst: [u8; 4] = ip.get(16..20)?.try_into().ok()?;
-        let port = match proto {
-            6 | 17 => u16::from_be_bytes(ip.get(ihl + 2..ihl + 4)?.try_into().ok()?),
-            _ => 0,
-        };
-        Some(Dest::Ipv4 {
-            ip: dst,
-            port,
-            proto,
-        })
-    };
-    ipv4().unwrap_or_else(l2_name)
+    ledger::frame_dest_name(frame)
 }
 
 /// The name of one inbound frame: the sender, at the most
@@ -139,37 +109,7 @@ fn frame_name(frame: &[u8]) -> Dest {
 /// port, proto); every other frame is named by its ethertype and
 /// source MAC. The frame starts with the 12-byte vnet header.
 fn frame_source_name(frame: &[u8]) -> Dest {
-    let l2_name = || {
-        let mut mac = [0u8; 6];
-        if let Some(b) = frame.get(18..24) {
-            mac.copy_from_slice(b);
-        }
-        let ethertype = frame
-            .get(24..26)
-            .map(|b| u16::from_be_bytes([b[0], b[1]]))
-            .unwrap_or(0);
-        Dest::L2 { ethertype, mac }
-    };
-    let ipv4 = || -> Option<Dest> {
-        let eth = frame.get(12..)?;
-        if eth.get(12..14)? != [0x08, 0x00] {
-            return None;
-        }
-        let ip = eth.get(14..)?;
-        let ihl = ((*ip.first()? & 0x0f) as usize) * 4;
-        let proto = *ip.get(9)?;
-        let src: [u8; 4] = ip.get(12..16)?.try_into().ok()?;
-        let port = match proto {
-            6 | 17 => u16::from_be_bytes(ip.get(ihl..ihl + 2)?.try_into().ok()?),
-            _ => 0,
-        };
-        Some(Dest::Ipv4 {
-            ip: src,
-            port,
-            proto,
-        })
-    };
-    ipv4().unwrap_or_else(l2_name)
+    ledger::frame_source_name(frame)
 }
 
 /// The one open operation for a key, or nothing. The matcher never

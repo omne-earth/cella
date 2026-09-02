@@ -52,6 +52,8 @@ fn read_book(vm: &str) -> Result<Book, String> {
                 format!("bytes_out={} bytes_in={}", r.bytes_out, r.bytes_in),
             )),
             Some(proto::event::Event::Lapsed(l)) => book.resolved.push((l.id, "lapsed", l.why)),
+            // A look resolves nothing: the operation stays held.
+            Some(proto::event::Event::Inspected(_)) => {}
             None => {}
         }
     }
@@ -301,4 +303,166 @@ pub fn close(vm: &str) -> Result<(), String> {
 /// freeze; only decisions let anything through.
 pub fn open(vm: &str) -> Result<(), String> {
     set_posture(vm, "open")
+}
+
+/// The Shannon entropy of a byte slice, in bits per byte. The
+/// sealed-envelope heuristic: an encrypted payload is
+/// indistinguishable from randomness, and rendering it as hex
+/// pretends a sight that does not exist.
+fn entropy_bits(bytes: &[u8]) -> f64 {
+    if bytes.is_empty() {
+        return 0.0;
+    }
+    let mut counts = [0u32; 256];
+    for b in bytes {
+        counts[*b as usize] += 1;
+    }
+    let n = bytes.len() as f64;
+    counts
+        .iter()
+        .filter(|c| **c > 0)
+        .map(|c| {
+            let p = *c as f64 / n;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+/// One frame as hex and ascii, sixteen bytes per line.
+fn render_frame(frame: &[u8]) {
+    for (i, chunk) in frame.chunks(16).enumerate() {
+        let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
+        let ascii: String = chunk
+            .iter()
+            .map(|b| {
+                if b.is_ascii_graphic() || *b == b' ' {
+                    *b as char
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+        println!("    {:04x}  {:<47}  {}", i * 16, hex.join(" "), ascii);
+    }
+}
+
+/// cella gateway <vm> inspect <id>: the operator reads a held
+/// operation's frames. Frozen-only (the ruling of 1.6.10): sight
+/// requires stillness -- a running lane mutates under the render,
+/// and evidence-grade means a consistent instant. The verb reads
+/// the sidecar alone (the vessel; the ledger is a chronicle, never
+/// the store), matches frames to the operation by its primitive
+/// key with the never-guess rule, renders an encrypted payload as
+/// the sealed envelope it is, and records the look: an Inspected
+/// event lands in the chronicle. The look resolves nothing and
+/// changes no state in either automaton.
+pub fn inspect(vm: &str, prefix: &str) -> Result<(), String> {
+    if !machine::machine_dir(vm).exists() {
+        return Err(format!("no machine named {vm:?}"));
+    }
+    let book = read_book(vm)?;
+    let id = resolve_id(&book, prefix)?;
+    let op = book
+        .parked
+        .iter()
+        .find(|op| op.id == id)
+        .expect("resolve_id returned a parked id");
+    let key = ledger::Dest::from_message(&op.destination.clone().unwrap_or_default());
+    let incoming = is_incoming(op);
+    // The never-guess rule, at the read: two open operations under
+    // one key make every frame ambiguous, and ambiguity is no
+    // sight.
+    let twins = book
+        .parked
+        .iter()
+        .filter(|o| {
+            is_open(&book, &o.id)
+                && is_incoming(o) == incoming
+                && ledger::Dest::from_message(&o.destination.clone().unwrap_or_default()) == key
+        })
+        .count();
+    if twins > 1 {
+        return Err(format!(
+            "{twins} held operations share this key -- the matcher never guesses: refuse the stale ones first"
+        ));
+    }
+    if machine::is_running(vm) {
+        return Err(
+            "sight requires stillness -- a running lane mutates under the render: \
+             freeze first (cella freeze <vm>), and the look is itself witnessed"
+                .to_string(),
+        );
+    }
+    let dir = machine::machine_dir(vm);
+    if !crate::freeze::is_frozen(&dir) {
+        return Err(
+            "the machine is stopped and holds nothing -- a held operation's frames \
+             live in a frozen machine's sidecar"
+                .to_string(),
+        );
+    }
+    let st = crate::freeze::read_state(&dir).map_err(|e| format!("reading the sidecar: {e:?}"))?;
+    let mut frames: Vec<&Vec<u8>> = Vec::new();
+    let mut heads: Vec<Vec<u8>> = Vec::new();
+    for t in &st.devices {
+        if incoming {
+            for f in &t.ingress_held {
+                if ledger::frame_source_name(f) == key {
+                    frames.push(f);
+                }
+            }
+        } else {
+            for (_, f) in &t.held_frames {
+                if ledger::frame_dest_name(f) == key {
+                    heads.push(f.clone());
+                }
+            }
+        }
+    }
+    let owned: Vec<&Vec<u8>> = if incoming {
+        frames
+    } else {
+        heads.iter().collect()
+    };
+    if owned.is_empty() {
+        return Err("the sidecar holds no frames under this operation's key".to_string());
+    }
+    let total: usize = owned.iter().map(|f| f.len()).sum();
+    println!(
+        "operation {}  {}  peer {}  {} frame(s)  {} byte(s)",
+        ledger::hex(&id),
+        if incoming { "incoming" } else { "outgoing" },
+        key,
+        owned.len(),
+        total
+    );
+    for (i, f) in owned.iter().enumerate() {
+        // The 12-byte vnet header is virtio plumbing, not the wire.
+        let wire = f.get(12..).unwrap_or(&[]);
+        let e = entropy_bits(wire);
+        if wire.len() >= 128 && e > 7.0 {
+            println!(
+                "  frame {}: {} bytes -- a sealed envelope ({e:.2} bits/byte); \
+                 the terminator opens these",
+                i + 1,
+                wire.len()
+            );
+            continue;
+        }
+        println!("  frame {}: {} bytes", i + 1, wire.len());
+        render_frame(wire);
+    }
+    // The look is itself recorded. The machine is frozen, thus no
+    // other writer holds the chronicle.
+    let msg = ledger::event_message(proto::Event {
+        event: Some(proto::event::Event::Inspected(proto::Inspected {
+            id: id.clone(),
+        })),
+    });
+    ledger::append(&ledger_path(vm), &msg).map_err(|e| format!("writing the look: {e}"))?;
+    println!(
+        "cella: inspected {} -- the look is in the chronicle",
+        ledger::hex(&id)
+    );
+    Ok(())
 }

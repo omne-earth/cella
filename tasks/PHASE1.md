@@ -174,7 +174,7 @@ requires a decision, nothing stands, and the mouth closes.
       operation stays held, and the queue never pops on failure
       -- in either direction, order advances only on an applied
       decision or an explicit refusal.
-- [ ] 1.6.10 cella gateway <vm> inspect <id>: the operator reads
+- [x] 1.6.10 cella gateway <vm> inspect <id>: the operator reads
       a held operation's frames, both directions, read-only and
       evidence-grade (the sidecar stays byte-identical). Judgment
       requires sight -- a decision on the address alone approves

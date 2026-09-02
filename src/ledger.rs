@@ -160,6 +160,60 @@ impl Dest {
     }
 }
 
+/// The name of one egress frame, at the most primitive level a
+/// frame has: an IPv4 frame refines to (destination ip, port,
+/// proto); every other frame is named by its ethertype and
+/// destination MAC. The frame starts with the 12-byte vnet header.
+pub fn frame_dest_name(frame: &[u8]) -> Dest {
+    frame_ipv4(frame, false).unwrap_or_else(|| frame_l2(frame, false))
+}
+
+/// The name of one inbound frame: the sender, at the most
+/// primitive level -- (source ip, source port, proto) for IPv4,
+/// else ethertype and source MAC.
+pub fn frame_source_name(frame: &[u8]) -> Dest {
+    frame_ipv4(frame, true).unwrap_or_else(|| frame_l2(frame, true))
+}
+
+fn frame_l2(frame: &[u8], source: bool) -> Dest {
+    let at = if source { 18..24 } else { 12..18 };
+    let mut mac = [0u8; 6];
+    if let Some(b) = frame.get(at) {
+        mac.copy_from_slice(b);
+    }
+    let ethertype = frame
+        .get(24..26)
+        .map(|b| u16::from_be_bytes([b[0], b[1]]))
+        .unwrap_or(0);
+    Dest::L2 { ethertype, mac }
+}
+
+fn frame_ipv4(frame: &[u8], source: bool) -> Option<Dest> {
+    let eth = frame.get(12..)?;
+    if eth.get(12..14)? != [0x08, 0x00] {
+        return None;
+    }
+    let ip = eth.get(14..)?;
+    let ihl = ((*ip.first()? & 0x0f) as usize) * 4;
+    let proto = *ip.get(9)?;
+    let addr_at = if source { 12..16 } else { 16..20 };
+    let addr: [u8; 4] = ip.get(addr_at)?.try_into().ok()?;
+    let port_at = if source {
+        ihl..ihl + 2
+    } else {
+        ihl + 2..ihl + 4
+    };
+    let port = match proto {
+        6 | 17 => u16::from_be_bytes(ip.get(port_at)?.try_into().ok()?),
+        _ => 0,
+    };
+    Some(Dest::Ipv4 {
+        ip: addr,
+        port,
+        proto,
+    })
+}
+
 /// Wrap one Event as the Message it becomes on the wire.
 pub fn event_message(event: Event) -> Message {
     Message {
@@ -209,6 +263,8 @@ pub fn open_operations(path: &Path) -> std::io::Result<Vec<OpenOperation>> {
             Some(proto::event::Event::Lapsed(l)) => {
                 resolved.insert(l.id.clone());
             }
+            // A look resolves nothing: the operation stays open.
+            Some(proto::event::Event::Inspected(_)) => {}
             Some(proto::event::Event::Parked(op)) => {
                 let d = op.destination.clone().unwrap_or_default();
                 parked.push(OpenOperation {
