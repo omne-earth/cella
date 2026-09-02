@@ -383,10 +383,21 @@ requires a decision, nothing stands, and the mouth closes.
             not dependency. Lane gate: a book with one edited
             entry fails verification loudly, and an intact book
             verifies end to end.
-      The join stays the parent's gate: the full battery green
-      under enforcement on both machines, and the known
-      cross-lane leak (a jail or SELinux mechanism needing a
-      syscall the seccomp lane removed) fails loudly there.
+      Convergence: every worktree branches from the same
+      post-split commit. The reviewer merges serially onto
+      feat/gateway in the order a, c, d, b -- identity first (the
+      foundation), SELinux second (it binds to a's sub-users),
+      the chain third (it rides c's schedule), and seccomp LAST:
+      the allowlist shrinks against the final syscall reality of
+      the jail and SELinux mechanisms, and the known cross-lane
+      leak dies by construction instead of by debugging. Each
+      merge is one reviewed, signed commit naming its lane; after
+      each merge: make test, the lane's own gate, and the touched
+      KVM gates -- serially, one pool, no concurrent batteries. A
+      conflict belongs to the reviewer, resolved with the lane's
+      agent before the merge commit, never inside it. The join
+      stays the parent's gate: the full battery green under
+      enforcement on both machines.
 
 - [ ] 1.6.7 The documents state the tightened law, and the
       retired phases make "Not in scope" the permanent scope
