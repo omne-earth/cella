@@ -4,10 +4,11 @@
 # Fedora: installs the system packages the build and the other
 # scripts/ depend on, then checks /dev/kvm access. Every step is
 # idempotent, so it's safe to re-run after e.g. a fresh install or a
-# new machine. The lab flavor is its own script (install-debug.sh),
-# with no shared code between them.
+# new machine. The lab flavor never installs (ruled 2026-09-02):
+# the lab is the checkout, target/smoke/* is its home, and this
+# field install is the only install.
 #
-# Usage: scripts/setup/install-release.sh
+# Usage: scripts/setup/install.sh
 set -euo pipefail
 
 if ! command -v dnf &>/dev/null; then
@@ -98,7 +99,7 @@ Next, from any directory (no make needed from here on):
 EOT
 
 # The binary. A release build lands in ~/.local/bin, and PATH gains
-# the directory when absent. make install-release calls this script.
+# the directory when absent. make install calls this script.
 cargo build --release
 # Every persona is its own binary since the split (1.6.13): the
 # shim routes, the personas own their verbs, and the shakedown

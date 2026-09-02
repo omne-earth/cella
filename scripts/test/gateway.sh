@@ -18,7 +18,7 @@ say() { echo; echo "==> $1"; }
 
 say "step 1: wire the pair (bridge, two taps, the route to the agent subnet)"
 if ! "$NET_BIN" pair --id 0 --via tap1; then
-    echo "SKIP: pair wiring failed (cap_net_admin -- run: make install-release)"; exit 0
+    echo "SKIP: pair wiring failed (cap_net_admin -- run: make install)"; exit 0
 fi
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"

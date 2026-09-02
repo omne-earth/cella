@@ -70,7 +70,7 @@ fn main() {
         Some("--help") | Some("-h") => {
             println!("cella-network -- the tap pool, without sudo");
             println!("usage: cella-network setup [--taps N] [--from N] | pair --id N --via tap<n>");
-            println!("needs cap_net_admin (make install-release grants it) or root");
+            println!("needs cap_net_admin (make install grants it) or root");
             std::process::exit(0);
         }
         Some(other) => {

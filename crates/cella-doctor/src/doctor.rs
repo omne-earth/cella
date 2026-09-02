@@ -54,7 +54,7 @@ pub fn gate(needs: &[String]) -> u32 {
             }
             "bwrap" => {
                 if run_out("bwrap", &["--version"]).is_none() {
-                    println!("SKIP: bwrap not found -- run: make install-release");
+                    println!("SKIP: bwrap not found -- run: make install");
                     return 3;
                 }
             }
@@ -125,7 +125,7 @@ pub fn check() -> u32 {
     if run_out("bwrap", &["--version"]).is_some() {
         r.ok("bwrap", "present");
     } else {
-        r.fail("bwrap", "not found -- run: make install-release");
+        r.fail("bwrap", "not found -- run: make install");
     }
 
     // The identity slice (1.6.14a): each machine runs as its own
@@ -147,7 +147,7 @@ pub fn check() -> u32 {
                 file,
                 &format!(
                     "no delegated range -- run: sudo usermod --add-subuids {r} \
-                     --add-subgids {r} $USER (install-release does this)",
+                     --add-subgids {r} $USER (make install does this)",
                     r = cella_libs::config::SUBID_RANGE_HINT
                 ),
             );
@@ -160,10 +160,7 @@ pub fn check() -> u32 {
         if present {
             r.ok(tool, "present");
         } else {
-            r.fail(
-                tool,
-                "not found -- run: make install-release (shadow-utils, acl)",
-            );
+            r.fail(tool, "not found -- run: make install (shadow-utils, acl)");
         }
     }
 
@@ -218,7 +215,7 @@ pub fn check() -> u32 {
         }
     }
     if taps == 0 {
-        r.fail("tap pool", "no taps -- run: cella doctor fix (a reboot clears the pool; make install-release enables cella-network.service to recreate it at boot)");
+        r.fail("tap pool", "no taps -- run: cella doctor fix (a reboot clears the pool; make install enables cella-network.service to recreate it at boot)");
     }
 
     // The boot unit: without it a reboot silently eats the pool.
@@ -226,7 +223,7 @@ pub fn check() -> u32 {
         Some(v) if v.trim() == "enabled" => r.ok("boot unit", "cella-network.service enabled"),
         _ => r.fail(
             "boot unit",
-            "cella-network.service not enabled -- run: make install-release (a reboot then keeps the pool)",
+            "cella-network.service not enabled -- run: make install (a reboot then keeps the pool)",
         ),
     }
 
@@ -316,9 +313,7 @@ pub fn fix() -> u32 {
         .map(|s| s.success())
         .unwrap_or(false);
     if !ran {
-        println!(
-            "cella doctor: {net_bin} failed -- run: make install-release (grants it cap_net_admin)"
-        );
+        println!("cella doctor: {net_bin} failed -- run: make install (grants it cap_net_admin)");
     }
     // The identity slice: a missing sub-id delegation is repairable
     // with one usermod -- the same root moment the install spends.

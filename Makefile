@@ -21,7 +21,7 @@ BUSYBOX_VERSION ?= 1.37.0
 GUEST_BASH_VERSION ?= 5.3
 export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 
-.PHONY: help build build-smoke install-release install-debug debug check lint fmt fmt-check \
+.PHONY: help build build-smoke install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested setup-tap \
         boot enter freeze thaw remove doctor \
@@ -43,7 +43,7 @@ help: ## Show this help
 	echo "cella -- build, lint, and test targets"
 	echo ""
 	echo "Build:"
-	grep -hE '^(build|build-smoke|install-release|install-debug|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(build|build-smoke|install|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine|test-one-door|test-witness):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -101,13 +101,10 @@ debug: ## Debug build (target/debug/cella), faster to compile
 	$(LOG)
 	$(CARGO) build
 
-install-release: ## The field flavor: host deps, capabilities, and the console-free binary to ~/.local/bin (scripts/setup/install-release.sh)
+install: ## The field flavor: host deps, capabilities, and the console-free binary to ~/.local/bin (scripts/setup/install.sh)
 	$(LOG)
-	$(SCRIPTS)/setup/install-release.sh
+	$(SCRIPTS)/setup/install.sh
 
-install-debug: ## The lab flavor: the smoke-profile binary as cella-debug and its -debug personas (scripts/setup/install-debug.sh)
-	$(LOG)
-	$(SCRIPTS)/setup/install-debug.sh
 
 check: ## cargo check, no codegen
 	$(LOG)
@@ -405,7 +402,7 @@ kernel-config-check: ## Resolve kernel-fragment.config against defconfig and rep
 	$(LOG)
 	$(SCRIPTS)/build/kernel-config-check.sh
 
-setup-tap: build ## Provision the tap pool + NAT via cella-network (no sudo; make install-release granted the capability)
+setup-tap: build ## Provision the tap pool + NAT via cella-network (no sudo; make install granted the capability)
 	$(LOG)
 	target/release/cella-network setup --taps $(TAPS)
 

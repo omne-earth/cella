@@ -104,8 +104,16 @@ requires a decision, nothing stands, and the mouth closes.
             and LIFECYCLE stop teaching it as the front door --
             an installed machine is dark and is observed through
             files, verbs, and the chronicle.
-      - [x] 1.6.5c Two install flavors, two scripts, no reuse:
-            make install-release (the field: console-free binary;
+      - [x] 1.6.5c Two install flavors, two scripts, no reuse
+            (superseded 2026-09-02: install-debug is deleted --
+            nothing ever invoked an installed -debug binary; the
+            lab is the checkout, target/smoke/* is its home, and
+            the field install is the only install. The
+            no-shadowing intent survives because only one flavor
+            installs at all; the lab-confines-like-the-field rule
+            moves to the join, which labels the checkout's smoke
+            paths):
+            make install (the field: console-free binary;
             what install.sh becomes, explicitly release) and make
             install-debug (the lab, deliberate and named). No
             shared script between them, thus no accidental
@@ -408,11 +416,24 @@ requires a decision, nothing stands, and the mouth closes.
             with it). Its own gates: the full network battery
             over the userspace wire, and a getcap sweep proving
             no file capability remains.
+            - [ ] The pool's reboot story (observed 2026-09-02):
+                  the tap pool evaporated across a host
+                  sleep/reboot despite cella-network.service
+                  standing enabled -- a whole battery SKIPped on
+                  the missing taps before anyone noticed. A
+                  doctor-level look lands with e: under the
+                  rootless network the pool becomes process-owned
+                  fds, "survives reboot" becomes "restarts with
+                  the first verb," and this class of environment
+                  rot dies entirely; the service retires with the
+                  host-netns pool. Until e lands, doctor check
+                  already names the missing taps -- the gap is
+                  that nothing re-runs it after a boot.
             LOAD-BEARING (ruled 2026-09-02): this task carries
             the one-root-moment claim -- after it, cella grants
             itself nothing (no capability, no setuid, no
             privileged daemon, no firewall hooks), and the only
-            sudo in the whole story is make install-release's
+            sudo in the whole story is make install's
             host-provisioning block (packages, the kvm group,
             the sub-id delegation where the distro has not
             already granted it). Fresh clone -> install -> make
@@ -456,9 +477,32 @@ requires a decision, nothing stands, and the mouth closes.
       each merge: make test, the lane's own gate, and the touched
       KVM gates -- serially, one pool, no concurrent batteries. A
       conflict belongs to the reviewer, resolved with the lane's
-      agent before the merge commit, never inside it. The join
-      stays the parent's gate: the full battery green under
-      enforcement on both machines.
+      agent before the merge commit, never inside it.
+      The join (re-sequenced 2026-09-02): the join runs AFTER e
+      and f -- the single measurement-and-enforcement pass
+      against the final architecture, so no wall is measured
+      twice. Its mechanism is make install (the one install):
+      semodule loads the ten CIL modules, semanage fcontext
+      rules label the installed binaries, the checkout's
+      target/smoke paths (the lab confines like the field), and
+      the ~/.cella tree; restorecon applies them; the profiles
+      copy to their installed home; the boot unit returns as a
+      system unit in cella_network_t (the init transition rule
+      lands with it). Its proof is the full battery green under
+      ENFORCING on both machines with every verb transitioned
+      into its domain. The deal-breakers close here, once,
+      against reality: start/thaw and probe confine-after-fork
+      (3), strace-derived lists for the tool-spawning verbs (4),
+      make golden under strace against build's list (5), the
+      labels (6), spawn's MCS labeling of machine dirs --
+      refusing to start when labeling fails under enforcement
+      (7), the boot unit's real domain (8) -- plus the
+      neverallow assertions and the per-persona checklist, one
+      line per persona, ticked as each proves out. Until the
+      join, b's merged lists are provisional and the domains are
+      inert: the smokes stay green and meaningful for the
+      membrane's mechanics, and the join adds the in-domain
+      battery as its own, separate certification.
 
 - [ ] 1.6.7 The documents state the tightened law, and the
       retired phases make "Not in scope" the permanent scope

@@ -355,7 +355,7 @@ pub fn own_tap(tap: &str, uid: u32) -> Result<(), String> {
     let root = unsafe { libc::geteuid() } == 0;
     if !root && !have_net_admin() {
         return Err(
-            "re-owning a tap needs CAP_NET_ADMIN -- run: cella-network own (make install-release \
+            "re-owning a tap needs CAP_NET_ADMIN -- run: cella-network own (make install \
              grants the capability), or run as root"
                 .into(),
         );
@@ -438,7 +438,7 @@ pub fn setup_pair(id: u32, via: &str) -> Result<(), String> {
     let root = unsafe { libc::geteuid() } == 0;
     if !root && !have_net_admin() {
         return Err(
-            "pair wiring needs CAP_NET_ADMIN -- run: cella-network pair (make install-release grants \
+            "pair wiring needs CAP_NET_ADMIN -- run: cella-network pair (make install grants \
              the capability), or run as root"
                 .into(),
         );
@@ -509,7 +509,7 @@ pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
     if !root && !have_net_admin() {
         return Err(
             "setup net creates TAP devices and needs CAP_NET_ADMIN -- run: cella-network setup \
-             (make install-release grants it the capability), or run this verb as root"
+             (make install grants it the capability), or run this verb as root"
                 .into(),
         );
     }
@@ -1253,7 +1253,7 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
             if !matches!(status, Ok(s) if s.success()) {
                 return Err(format!(
                     "re-owning tap {tap:?} to machine {name:?}'s sub-user failed ({status:?}) -- \
-                     is cella-network installed with its file capability (make install-release)?"
+                     is cella-network installed with its file capability (make install)?"
                 ));
             }
         }
