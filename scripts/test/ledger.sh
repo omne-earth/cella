@@ -182,7 +182,10 @@ for _ in 1 2 3 4; do
     "$BIN" freeze "$VM" >/dev/null 2>&1 || true
     sleep 1
     for id in $("$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
-        "$BIN" gateway "$VM" release "$id" >/dev/null
+        # Best-effort settling: an id can lapse between the show and
+        # the release (the tail is still moving), and that is not a
+        # failure of the settle.
+        "$BIN" gateway "$VM" release "$id" >/dev/null 2>&1 || true
     done
     "$BIN" thaw "$VM" >/dev/null 2>&1 || true
     pump_while_running 3

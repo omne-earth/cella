@@ -442,6 +442,35 @@ requires a decision, nothing stands, and the mouth closes.
             userspace wire, a getcap sweep proving no file
             capability remains, and the no-sudo claim (install's
             package block is the only sudo in the story).
+            The knock (ruled 2026-09-03, option a): a world nic
+            carries an optional port map in the manifest --
+            --net world:1709/tcp,1709/udp -- and the translator
+            listens on those host ports as the invoking user. An
+            arrival becomes a frame on the VMM's edge and parks
+            in the ingress lane like any knock: no freeze (the
+            world's knock is not the resident's deed), nothing
+            reaches the guest before a release, refuse drops it
+            unseen, a closed valve drops it before the park, and
+            the guest's answer parks on the way out. The port
+            map grants nothing; it names where the world may
+            knock, declared in the manifest and witnessed like
+            everything else. The six knocking gates (ping, udp,
+            multinet, collide, nested-boot, device-state AC2)
+            rewrite to mapped ports with their assertions
+            unchanged; the answering gates rewrite from tapN to
+            world/wire: with no choreography change.
+            The last rung also cleans what the pool left behind
+            (ruled 2026-09-03), on BOTH hosts -- the VM host and
+            the bare-metal host: the pre-existing taps and pair
+            taps, the brp bridges, the cella_nat nft table, the
+            firewalld zone bindings and DOCKER-USER rules, the
+            user boot unit and its linger, and every make target
+            and script that assumed a tap (setup-tap, the probe
+            targets' tap0 prerequisite, the gate SKIP lines that
+            name tap0). Nothing tap-shaped survives in the tree
+            or on a host: the getcap sweep gains a sibling that
+            asserts no tap, bridge, or nft table of cella's
+            exists after make install.
             - [ ] The pool's reboot story (observed 2026-09-02):
                   the tap pool evaporated across a host
                   sleep/reboot despite cella-network.service

@@ -21,22 +21,34 @@
 //! at the edge, by law; nothing buffers across the gap.
 
 use std::io;
-use std::path::{Path, PathBuf};
 
 use cella_libs::{machine, seq};
 
+use crate::world;
+
 const MAX_FRAME: usize = 65550;
 
-/// One wire nic: its index in the machine's nic order, its wire
-/// name, and the two live ends (None while detached).
-struct WireNic {
+/// What stands on the far side of one nic.
+enum Kind {
+    /// A wire to a peer machine's translator.
+    Wire {
+        name: String,
+        peer: Option<i32>,
+        /// The listener, when this side holds the smaller machine
+        /// name. None on the connecting side.
+        listener: Option<i32>,
+    },
+    /// The world: L4 translation over unprivileged sockets
+    /// (rung 3 -- see world.rs).
+    World(world::World),
+}
+
+/// One nic: its index in the machine's nic order, its far side,
+/// and the VMM connection (None while detached).
+struct Nic {
     nic_index: u8,
-    wire: String,
+    kind: Kind,
     vmm: Option<i32>,
-    peer: Option<i32>,
-    /// The listener for this wire, when this side holds the
-    /// smaller machine name. None on the connecting side.
-    wire_listener: Option<i32>,
     /// Frames discarded while no VMM connection stood.
     discarded: u64,
 }
@@ -115,23 +127,39 @@ fn wire_peer(my_name: &str, wire: &str) -> Option<String> {
 pub fn run(vm: &str) -> Result<(), String> {
     let dir = machine::machine_dir(vm);
     let m = machine::read_manifest(vm)?;
-    let mut nics: Vec<WireNic> = m
+    let mut nics: Vec<Nic> = m
         .net
         .split(',')
         .enumerate()
         .filter_map(|(i, n)| {
-            n.trim().strip_prefix("wire:").map(|w| WireNic {
+            let n = n.trim();
+            let kind = if let Some(w) = n.strip_prefix("wire:") {
+                Kind::Wire {
+                    name: w.to_string(),
+                    peer: None,
+                    listener: None,
+                }
+            } else if n == "world" {
+                // The guest MAC convention of main.rs: base MAC,
+                // last byte + nic index.
+                let mut mac: [u8; 6] = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
+                mac[5] = mac[5].wrapping_add(i as u8);
+                Kind::World(world::World::new(mac))
+            } else {
+                return None;
+            };
+            Some(Nic {
                 nic_index: i as u8,
-                wire: w.to_string(),
+                kind,
                 vmm: None,
-                peer: None,
-                wire_listener: None,
                 discarded: 0,
             })
         })
         .collect();
     if nics.is_empty() {
-        return Err(format!("machine {vm:?} has no wire nics -- no edge to run"));
+        return Err(format!(
+            "machine {vm:?} has no wire or world nics -- no edge to run"
+        ));
     }
 
     // The pid file: destroy reads it to kill this process; a stale
@@ -149,7 +177,7 @@ pub fn run(vm: &str) -> Result<(), String> {
     std::fs::create_dir_all(&wires_dir).map_err(|e| format!("creating {wires_dir:?}: {e}"))?;
 
     println!(
-        "cella-network: edge for {vm:?} up -- {} wire nic(s), listening on edge.sock",
+        "cella-network: edge for {vm:?} up -- {} nic(s), listening on edge.sock",
         nics.len()
     );
 
@@ -183,53 +211,72 @@ pub fn run(vm: &str) -> Result<(), String> {
         }
 
         // Wire ends: listen or connect per role, retried each pass
-        // until they stand.
+        // until they stand. World nics have no peer to raise.
         for nic in nics.iter_mut() {
-            if nic.peer.is_some() {
-                continue;
-            }
-            let Some(peer_name) = wire_peer(vm, &nic.wire) else {
+            let Kind::Wire {
+                name,
+                peer,
+                listener,
+            } = &mut nic.kind
+            else {
                 continue;
             };
-            let path = wires_dir.join(&nic.wire);
+            if peer.is_some() {
+                continue;
+            }
+            let Some(peer_name) = wire_peer(vm, name) else {
+                continue;
+            };
+            let path = wires_dir.join(&*name);
             if is_listener(vm, &peer_name) {
-                if nic.wire_listener.is_none() {
+                if listener.is_none() {
                     if let Ok(l) = seq::listen(&path) {
                         set_nonblocking(l);
-                        nic.wire_listener = Some(l);
+                        *listener = Some(l);
                     }
                 }
-                if let Some(l) = nic.wire_listener {
+                if let Some(l) = *listener {
                     if let Ok(conn) = seq::accept(l) {
                         set_nonblocking(conn);
-                        nic.peer = Some(conn);
-                        println!("cella-network: wire {:?} accepted", nic.wire);
+                        *peer = Some(conn);
+                        println!("cella-network: wire {name:?} accepted");
                     }
                 }
             } else if let Ok(conn) = seq::connect(&path) {
                 set_nonblocking(conn);
-                nic.peer = Some(conn);
-                println!("cella-network: wire {:?} connected", nic.wire);
+                *peer = Some(conn);
+                println!("cella-network: wire {name:?} connected");
             }
         }
 
-        // The pump. VMM -> wire, then wire -> VMM (or the drain).
+        // The pump. VMM -> far side, then far side -> VMM (or the
+        // drain, when no VMM stands).
         let mut moved = false;
         for nic in nics.iter_mut() {
+            // Guest -> far side.
             if let Some(vfd) = nic.vmm {
                 loop {
                     match read_frame(vfd, &mut buf) {
                         Ok(Some(n)) => {
                             moved = true;
-                            if let Some(pfd) = nic.peer {
-                                if write_frame(pfd, &buf[..n]).is_err() {
-                                    close_fd(pfd);
-                                    nic.peer = None;
+                            match &mut nic.kind {
+                                Kind::Wire { peer, .. } => {
+                                    if let Some(pfd) = *peer {
+                                        if write_frame(pfd, &buf[..n]).is_err() {
+                                            close_fd(pfd);
+                                            *peer = None;
+                                        }
+                                    }
+                                    // No peer: the wire is not up
+                                    // yet; lost at the edge, like a
+                                    // tap with no cable.
+                                }
+                                Kind::World(w) => {
+                                    for reply in w.from_guest(&buf[..n]) {
+                                        let _ = write_frame(vfd, &reply);
+                                    }
                                 }
                             }
-                            // No peer: the wire is not up yet; the
-                            // frame is lost at the edge, like a tap
-                            // with no cable.
                         }
                         Ok(None) => break,
                         Err(_) => {
@@ -241,41 +288,53 @@ pub fn run(vm: &str) -> Result<(), String> {
                     }
                 }
             }
-            if let Some(pfd) = nic.peer {
-                loop {
-                    match read_frame(pfd, &mut buf) {
-                        Ok(Some(n)) => {
-                            moved = true;
-                            match nic.vmm {
-                                Some(vfd) => {
-                                    if write_frame(vfd, &buf[..n]).is_err() {
-                                        close_fd(vfd);
-                                        nic.vmm = None;
-                                        nic.discarded += 1;
-                                        println!(
-                                            "cella-network: nic {} detached; frame discarded \
-                                             (total {})",
-                                            nic.nic_index, nic.discarded
-                                        );
-                                    }
-                                }
-                                None => {
-                                    nic.discarded += 1;
-                                    println!(
-                                        "cella-network: frame discarded at the edge, nic {} \
-                                         detached (total {})",
-                                        nic.nic_index, nic.discarded
-                                    );
+            // Far side -> guest (or the drain).
+            let mut inbound: Vec<Vec<u8>> = Vec::new();
+            let mut wire_dropped = false;
+            match &mut nic.kind {
+                Kind::Wire { peer, .. } => {
+                    if let Some(pfd) = *peer {
+                        loop {
+                            match read_frame(pfd, &mut buf) {
+                                Ok(Some(n)) => inbound.push(buf[..n].to_vec()),
+                                Ok(None) => break,
+                                Err(_) => {
+                                    close_fd(pfd);
+                                    *peer = None;
+                                    wire_dropped = true;
+                                    break;
                                 }
                             }
                         }
-                        Ok(None) => break,
-                        Err(_) => {
-                            close_fd(pfd);
-                            nic.peer = None;
-                            println!("cella-network: wire {:?} dropped", nic.wire);
-                            break;
+                    }
+                }
+                Kind::World(w) => inbound = w.poll(),
+            }
+            if wire_dropped {
+                if let Kind::Wire { name, .. } = &nic.kind {
+                    println!("cella-network: wire {name:?} dropped");
+                }
+            }
+            for frame in inbound {
+                moved = true;
+                match nic.vmm {
+                    Some(vfd) => {
+                        if write_frame(vfd, &frame).is_err() {
+                            close_fd(vfd);
+                            nic.vmm = None;
+                            nic.discarded += 1;
+                            println!(
+                                "cella-network: nic {} detached; frame discarded (total {})",
+                                nic.nic_index, nic.discarded
+                            );
                         }
+                    }
+                    None => {
+                        nic.discarded += 1;
+                        println!(
+                            "cella-network: frame discarded at the edge, nic {} detached                              (total {})",
+                            nic.nic_index, nic.discarded
+                        );
                     }
                 }
             }

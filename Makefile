@@ -28,7 +28,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke smoke-shell smoke-boot smoke-thaw \
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
-        smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire \
+        smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire smoke-world \
         smoke-ping smoke-udp smoke-collide smoke-inspection \
         smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
@@ -74,7 +74,7 @@ SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
         smoke-udp smoke-collide smoke-inspection smoke-witness smoke-nested-boot \
         smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
         smoke-nested-boot-www smoke-machine smoke-clean \
-        smoke-gateway smoke-gateway-cli smoke-wire smoke-multinet smoke-universe smoke-ledger smoke-chain \
+        smoke-gateway smoke-gateway-cli smoke-wire smoke-world smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5
 empty :=
@@ -328,6 +328,10 @@ smoke-gateway: build-smoke golden ## The gateway ladder: pair wiring (bridge + r
 smoke-wire: build-smoke golden ## The wire plane (1.6.14e): two machines, one wire, no host object; both membranes judge; the frozen peer's mail is discarded and counted
 	$(LOG)
 	$(SCRIPTS)/test/wire.sh
+
+smoke-world: build-smoke golden ## The world plane, stateless half (1.6.14e): --net world -- ARP and gateway echo at the edge, ICMP/UDP through sockets, replies park incoming
+	$(LOG)
+	$(SCRIPTS)/test/world.sh
 
 smoke-multinet: build-smoke golden ## A machine takes N taps: two-tap boot, both nics in the guest, host pings eth0, claims exclusive per tap
 	$(LOG)

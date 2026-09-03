@@ -183,6 +183,19 @@ the translator, and the translator only transports it. Nothing
 resolves for the resident. Nothing crosses because of its class.
 Nothing stands.
 
+## The knock (Ruling: a port map in the manifest)
+
+The world reaches a machine only where the manifest says it may:
+`--net world:1709/tcp,1709/udp` maps host ports to the guest,
+and the translator listens on them as the invoking user. An
+arrival becomes a frame on the edge and parks in the ingress
+lane, like any knock: the machine does not freeze, the guest
+sees nothing before a release, refuse drops the knock unseen, a
+closed valve drops it before the park, and the guest's answer
+parks on its way out. The port map grants nothing. It names the
+knockable surface, in the manifest, witnessed like every other
+declaration.
+
 ## The guest contract (Ruling: byte-identical)
 
 From the inside of a machine, nothing changes: the same subnets,
@@ -255,7 +268,13 @@ to damage.
    internet fetch through freeze cycles.
 5. The removal: each item in the list above is deleted; the
    translator gets its final jail and seccomp list; install and
-   doctor are rewritten. Gate: the full battery green with no tap
-   on the host, and a getcap sweep that finds nothing.
+   doctor are rewritten. The rung also cleans both hosts -- the
+   VM host and the bare-metal host -- of what the pool left: the
+   taps, the pair taps, the bridges, the nft table, the firewalld
+   and DOCKER-USER rules, the boot unit and its linger, and every
+   make target or script that assumed a tap. Gate: the full
+   battery green with no tap on the host, a getcap sweep that
+   finds nothing, and a sweep that finds no tap, bridge, or nft
+   table of cella's after make install.
 6. Both machines: `make install` and the full battery on the
    second host.

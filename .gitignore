@@ -1,5 +1,4 @@
 /target
-probes/*/target
 dist/
 .env
 .toolbox

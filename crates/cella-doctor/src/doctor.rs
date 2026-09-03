@@ -219,11 +219,17 @@ pub fn check() -> u32 {
     }
 
     // The boot unit: without it a reboot silently eats the pool.
-    match run_out("systemctl", &["is-enabled", "cella-network.service"]) {
-        Some(v) if v.trim() == "enabled" => r.ok("boot unit", "cella-network.service enabled"),
+    // A USER unit with linger since 2026-09-02 (a system service
+    // runs in init_t and SELinux denies the witness -- see
+    // tasks/PHASE1.md #NOTES); the whole fact retires with the
+    // pool at the rootless network's last rung.
+    match run_out("systemctl", &["--user", "is-enabled", "cella-network.service"]) {
+        Some(v) if v.trim() == "enabled" => {
+            r.ok("boot unit", "cella-network.service enabled (user unit, linger)")
+        }
         _ => r.fail(
             "boot unit",
-            "cella-network.service not enabled -- run: make install (a reboot then keeps the pool)",
+            "cella-network.service (user) not enabled -- run: make install (a reboot then keeps the pool)",
         ),
     }
 

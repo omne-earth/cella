@@ -777,6 +777,11 @@ pub fn create(m: &Manifest) -> Result<(), String> {
             let nic = nic.trim();
             // A wire nic (1.6.14e): no host object, no claim -- two
             // manifests naming the same wire ARE the pairing.
+            if nic == "world" {
+                // The world nic (1.6.14e rung 3): the machine's own
+                // translator is the far side; nothing to claim.
+                continue;
+            }
             if let Some(w) = nic.strip_prefix("wire:") {
                 let ok = !w.is_empty()
                     && w.bytes()
@@ -927,6 +932,18 @@ fn cmdline_for(m: &Manifest) -> String {
     // convention; an agent-side pair tap (pair<n>a) uses the pair
     // convention, with the gateway as the route to everything.
     let first = taps[0];
+    if first == "world" {
+        // The world nic's contract (1.6.14e rung 3): the pool
+        // convention on the translator's own subnet -- see
+        // config::WORLD_GUEST_IP.
+        let g = config::WORLD_GUEST_IP;
+        let w = config::WORLD_GW_IP;
+        line.push_str(&format!(
+            " ip={}.{}.{}.{}::{}.{}.{}.{}:255.255.255.0::eth0:off",
+            g[0], g[1], g[2], g[3], w[0], w[1], w[2], w[3]
+        ));
+        return line;
+    }
     if first.starts_with("wire:") {
         // A wire nic carries no host addressing convention: the
         // guest (or the gate driving its console) configures eth0
@@ -1342,8 +1359,9 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| find_program("cella-network"));
         for tap in m.net.split(',') {
-            // Wires have no tap to own (1.6.14e).
-            if tap.trim().starts_with("wire:") {
+            // Wires and the world have no tap to own (1.6.14e).
+            let nic = tap.trim();
+            if nic.starts_with("wire:") || nic == "world" {
                 continue;
             }
             let status = std::process::Command::new(&net_bin)
@@ -1446,11 +1464,11 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     if m.net != "none" {
         for (i, nic) in m.net.split(',').enumerate() {
             let nic = nic.trim();
-            if nic.starts_with("wire:") {
-                // The wire plane (1.6.14e rung 2): the machine's own
-                // translator stands between this nic and the world of
-                // wires. Spawn it if it does not stand, connect this
-                // nic to edge.sock, and hand the VMM the connected fd.
+            if nic.starts_with("wire:") || nic == "world" {
+                // The translator's planes (1.6.14e): wires at rung 2,
+                // the world at rung 3. Spawn the translator if it does
+                // not stand, connect this nic to edge.sock, and hand
+                // the VMM the connected fd.
                 ensure_translator(name, &dir)?;
                 let fd = connect_edge_nic(&dir, i as u8, std::time::Duration::from_secs(5))?;
                 edge_fds.push(fd);

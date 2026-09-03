@@ -1264,15 +1264,21 @@ fn dump_state(dir: &PathBuf) -> ! {
 
 /// Print every framed Message of a ledger file, one line per event.
 fn dump_ledger(path: &PathBuf) -> ! {
-    // A dump is a pipeline citizen: `... | grep -q` closes stdout
-    // early, and Rust's default SIGPIPE=ignore turns the next
-    // println into a panic-abort. Default disposition makes the
-    // process end quietly mid-pipe, like every other unix tool.
-    // SAFETY: resetting a signal disposition has no failure mode
-    // that matters here.
-    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+    // A dump is a pipeline citizen: `... | grep -q` under pipefail
+    // closes stdout early. A println there is a panic-abort under
+    // Rust's SIGPIPE=ignore, and a SIG_DFL death is exit 141 --
+    // both make pipefail report the dump, not grep. So the text is
+    // built whole and written once; a broken pipe is a normal end,
+    // exit 0, and the pipeline's status is the consumer's.
     let messages =
         ledger::read_all(path).unwrap_or_else(|e| fatal(&format!("reading {path:?}: {e}")));
+    let mut out = String::new();
+    macro_rules! println {
+        ($($arg:tt)*) => {{
+            out.push_str(&format!($($arg)*));
+            out.push('\n');
+        }};
+    }
     for msg in &messages {
         if let Some(proto::message::Body::Audit(a)) = &msg.body {
             println!(
@@ -1326,6 +1332,9 @@ fn dump_ledger(path: &PathBuf) -> ! {
             None => println!("(empty event)"),
         }
     }
+    use std::io::Write;
+    let _ = std::io::stdout().write_all(out.as_bytes());
+    let _ = std::io::stdout().flush();
     std::process::exit(0);
 }
 

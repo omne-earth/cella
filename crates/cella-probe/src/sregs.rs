@@ -11,7 +11,7 @@
 //! inconsistent state KVM's validation rejects. Three attempts below
 //! check that hypothesis and two candidate fixes.
 //!
-//! Run: cargo run --manifest-path probes/sregs/Cargo.toml
+//! Run: make probe-sregs
 
 use kvm_bindings::{
     kvm_pit_config, kvm_segment, kvm_sregs, CpuId, KVM_MAX_CPUID_ENTRIES, KVM_MP_STATE_RUNNABLE,

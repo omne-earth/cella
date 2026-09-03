@@ -13,6 +13,7 @@ mod seccomp;
 use cella_libs::machine;
 
 mod edge;
+mod world;
 
 fn main() {
     // Hidden self-test hook for `make test-seccomp-network`. See

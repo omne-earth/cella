@@ -74,6 +74,14 @@ pub const DEFAULT_THAW_PREFAULT: &str = "deep";
 pub const SUBID_RANGE_HINT: &str = "524288-589823";
 
 pub const DEFAULT_GUEST_IP: &str = "192.168.200.2";
+
+/// The world nic's contract (1.6.14e rung 3): the pool convention,
+/// byte for byte, on a subnet the pool never claims. The guest is
+/// .2, its gateway is .1, and the translator answers ARP and echo
+/// for the gateway address with the deterministic MAC below.
+pub const WORLD_GUEST_IP: [u8; 4] = [192, 168, 210, 2];
+pub const WORLD_GW_IP: [u8; 4] = [192, 168, 210, 1];
+pub const WORLD_GW_MAC: [u8; 6] = [0x02, 0xce, 0x11, 0xa0, 0x00, 0x77];
 pub const DEFAULT_HOST_IP: &str = "192.168.200.1";
 
 pub fn default_cmdline() -> String {

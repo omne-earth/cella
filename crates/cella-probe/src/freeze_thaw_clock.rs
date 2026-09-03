@@ -46,7 +46,7 @@
 //! probe checks that the thaw restores the time of the guest, which the
 //! script cannot see.
 //!
-//! Run: cargo run --manifest-path probes/freeze-thaw-clock/Cargo.toml
+//! Run: make probe-freeze-thaw-clock
 //! (needs the canonical goldens -- `make golden` -- and a
 //! configured tap0 -- `make setup-tap`)
 

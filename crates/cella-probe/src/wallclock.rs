@@ -39,7 +39,7 @@
 //!   CELLA_BIN, CELLA_TEST_KERNEL, CELLA_TEST_DISK, CELLA_TEST_TAP
 //!                          The same meaning as in the smoke tests.
 //!
-//! Run: cargo run --manifest-path probes/wallclock/Cargo.toml
+//! Run: make probe-wallclock
 //! (needs the canonical goldens -- `make golden` -- and a
 //! configured tap0 -- `make setup-tap`)
 
