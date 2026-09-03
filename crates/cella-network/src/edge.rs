@@ -99,27 +99,36 @@ fn is_listener(my_name: &str, peer_name: &str) -> bool {
     my_name < peer_name
 }
 
-/// The peer machine of `wire`: the one other manifest that names
-/// it. Scanned fresh on each reconnect attempt, so a peer created
+/// The peer machine of `wire`: the one other marker under the
+/// wires directory that names it. A translator runs as its own
+/// machine's sub-uid and cannot read another machine's manifest,
+/// thus each one leaves a marker `<wire>.<machine>` in the shared
+/// wires directory at startup, and the peer is the other marker.
+/// Scanned fresh on each reconnect attempt, so a peer created
 /// after this translator still pairs.
-fn wire_peer(my_name: &str, wire: &str) -> Option<String> {
-    let dir = machine::home().join("machines");
-    let entries = std::fs::read_dir(dir).ok()?;
+fn wire_peer(wires_dir: &std::path::Path, my_name: &str, wire: &str) -> Option<String> {
+    let prefix = format!("{wire}.");
+    let entries = std::fs::read_dir(wires_dir).ok()?;
     for e in entries.flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        if name == my_name {
-            continue;
-        }
-        let Ok(m) = machine::read_manifest(&name) else {
-            continue;
-        };
-        for nic in m.net.split(',') {
-            if nic.trim().strip_prefix("wire:") == Some(wire) {
-                return Some(name);
+        let file = e.file_name().to_string_lossy().to_string();
+        if let Some(name) = file.strip_prefix(&prefix) {
+            if name != my_name && !name.is_empty() {
+                return Some(name.to_string());
             }
         }
     }
     None
+}
+
+/// The listener's socket must admit the peer's sub-uid: a unix
+/// connect needs write permission on the socket inode. The wires
+/// directory itself admits only the machines' sub-uids (by ACL),
+/// thus a world-writable socket inside it is open to exactly them.
+fn admit_peer(path: &std::path::Path) {
+    if let Ok(c) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
+        // SAFETY: a valid C path; chmod on our own socket file.
+        unsafe { libc::chmod(c.as_ptr(), 0o666) };
+    }
 }
 
 /// The translator's main loop. Runs until killed (destroy owns
@@ -181,8 +190,16 @@ pub fn run(vm: &str) -> Result<(), String> {
         seq::listen(&edge_sock).map_err(|e| format!("listening on {edge_sock:?}: {e}"))?;
     set_nonblocking(vmm_listener);
 
+    // The spawn made the wires directory and granted this sub-uid
+    // rwx on it. The markers: one per wire nic, naming this machine.
     let wires_dir = machine::home().join("wires");
-    std::fs::create_dir_all(&wires_dir).map_err(|e| format!("creating {wires_dir:?}: {e}"))?;
+    for nic in &nics {
+        if let Kind::Wire { name, .. } = &nic.kind {
+            let marker = wires_dir.join(format!("{name}.{vm}"));
+            std::fs::write(&marker, b"")
+                .map_err(|e| format!("writing the wire marker {}: {e}", marker.display()))?;
+        }
+    }
 
     println!(
         "cella-network: edge for {vm:?} up -- {} nic(s), listening on edge.sock",
@@ -232,13 +249,14 @@ pub fn run(vm: &str) -> Result<(), String> {
             if peer.is_some() {
                 continue;
             }
-            let Some(peer_name) = wire_peer(vm, name) else {
+            let Some(peer_name) = wire_peer(&wires_dir, vm, name) else {
                 continue;
             };
             let path = wires_dir.join(&*name);
             if is_listener(vm, &peer_name) {
                 if listener.is_none() {
                     if let Ok(l) = seq::listen(&path) {
+                        admit_peer(&path);
                         set_nonblocking(l);
                         *listener = Some(l);
                     }

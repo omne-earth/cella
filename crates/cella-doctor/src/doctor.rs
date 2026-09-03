@@ -29,13 +29,6 @@ impl Report {
     }
 }
 
-fn run_out(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(cmd).args(args).output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
-}
-
 /// The gate for the test scripts: quiet, one SKIP line on the
 /// first unmet need, exit through the caller. Needs: kvm, bwrap,
 /// golden:<axis>:<flavor>. The scripts stop re-implementing
@@ -53,7 +46,7 @@ pub fn gate(needs: &[String]) -> u32 {
                 }
             }
             "bwrap" => {
-                if run_out("bwrap", &["--version"]).is_none() {
+                if !Path::new(&cella_libs::jail::find_program("bwrap")).is_file() {
                     println!("SKIP: bwrap not found -- run: make install");
                     return 3;
                 }
@@ -96,6 +89,20 @@ pub fn check() -> u32 {
         r.ok("flavor", "release -- no console exists (the field)");
     }
 
+    // This process's own jail. The marker is set by the parent on
+    // the bwrap exec alone (cella_libs::jail::confine_self), thus its
+    // presence says this incarnation came through the jail. There
+    // is no escape hatch; an unconfined doctor is a FAIL of the
+    // fact, stated, never a variant.
+    if std::env::var(cella_libs::jail::JAILED_ENV).is_ok() {
+        r.ok(
+            "jail",
+            "confined -- this doctor runs inside its bwrap profile",
+        );
+    } else {
+        r.fail("jail", "unconfined -- the jail did not run");
+    }
+
     // /dev/kvm: the one device that makes a machine possible.
     let kvm = Path::new("/dev/kvm");
     if !kvm.exists() {
@@ -112,8 +119,11 @@ pub fn check() -> u32 {
         }
     }
 
-    // bwrap: the jail of every VMM.
-    if run_out("bwrap", &["--version"]).is_some() {
+    // bwrap: the jail of every VMM, and of this process. Presence by
+    // path, not by running it: a bwrap inside a bwrap cannot make its
+    // namespaces, and the fact doctor states is that the binary is
+    // installed where the spawn looks for it.
+    if Path::new(&cella_libs::jail::find_program("bwrap")).is_file() {
         r.ok("bwrap", "present");
     } else {
         r.fail("bwrap", "not found -- run: make install");
@@ -177,28 +187,6 @@ pub fn check() -> u32 {
     // machine's translator is spawned by its start and dies at
     // its destroy; there is no pool, no unit, and no capability.
 
-    // Forwarding: guest egress dies without it.
-    match fs::read_to_string("/proc/sys/net/ipv4/ip_forward") {
-        Ok(v) if v.trim() == "1" => r.ok("ip_forward", "on"),
-        _ => r.fail("ip_forward", "off -- run: cella doctor fix"),
-    }
-
-    // The nft tables need root to inspect: state the fact, no guess.
-    if unsafe { libc::geteuid() } == 0 {
-        match run_out("nft", &["list", "table", "inet", "cella_nat"]) {
-            Some(_) => r.ok("nat", "table inet cella_nat present"),
-            None => r.fail(
-                "nat",
-                "table inet cella_nat absent -- run: cella doctor fix",
-            ),
-        }
-    } else {
-        r.note(
-            "nat",
-            "needs root to inspect -- run: sudo cella doctor check",
-        );
-    }
-
     // The goldens, and their manifests.
     for (axis, flavor) in [
         ("kernel", "canonical"),
@@ -227,15 +215,6 @@ pub fn check() -> u32 {
         }
     }
 
-    // The build toolbox: only the build verb needs it.
-    match run_out("podman", &["container", "exists", "cella-build"]) {
-        Some(_) => r.ok("toolbox", "cella-build present"),
-        None => r.note(
-            "toolbox",
-            "cella-build absent -- the build verb creates it on first use",
-        ),
-    }
-
     if r.failed == 0 {
         println!("cella doctor: all facts hold");
     } else {
@@ -244,30 +223,20 @@ pub fn check() -> u32 {
     r.failed
 }
 
-/// Repair what fix can, then re-check. Net facts (the tap pool,
-/// ip_forward, the NAT) go to cella-network, which carries
-/// CAP_NET_ADMIN as a file capability -- no sudo in the path, the
-/// root moment happened at install time. Everything else prints its
-/// command; doctor escalates nothing.
+/// The repairs, gathered, never run. Doctor escalates nothing and
+/// builds nothing: build makes, doctor judges. fix runs check,
+/// collects the exact command for every FAIL it knows how to name,
+/// and prints them once, as one script the operator can read and
+/// run. The one root moment stays make install's; a sub-id
+/// delegation that install did not lay is the same usermod, printed.
 pub fn fix() -> u32 {
     let failed = check();
     if failed == 0 {
         return 0;
     }
-    println!();
-    let net_bin = sibling("cella-network");
-    println!("cella doctor: fix -- running {net_bin} setup");
-    let ran = std::process::Command::new(&net_bin)
-        .args(["setup"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !ran {
-        println!("cella doctor: {net_bin} failed -- run: make install (grants it cap_net_admin)");
-    }
-    // The identity slice: a missing sub-id delegation is repairable
-    // with one usermod -- the same root moment the install spends.
-    // sudo asks the terminal; a refusal leaves the check's message.
+    let mut script: Vec<String> = Vec::new();
+
+    // The identity slice: a missing sub-id delegation is one usermod.
     let user = std::env::var("USER").unwrap_or_default();
     let missing = ["/etc/subuid", "/etc/subgid"].iter().any(|f| {
         !fs::read_to_string(f)
@@ -278,21 +247,15 @@ pub fn fix() -> u32 {
             .unwrap_or(false)
     });
     if missing && !user.is_empty() {
-        println!("cella doctor: fix -- delegating a sub-id range (sudo usermod)");
-        let _ = std::process::Command::new("sudo")
-            .args([
-                "usermod",
-                "--add-subuids",
-                cella_libs::config::SUBID_RANGE_HINT,
-                "--add-subgids",
-                cella_libs::config::SUBID_RANGE_HINT,
-                &user,
-            ])
-            .status();
+        script.push(format!(
+            "sudo usermod --add-subuids {r} --add-subgids {r} {user}",
+            r = cella_libs::config::SUBID_RANGE_HINT
+        ));
     }
-    // The goldens: building needs no root, thus fix builds what is
-    // absent or unmanifested. The kernel compile takes minutes; the
-    // build says what it does while it does it.
+
+    // The goldens: an absent or unmanifested artifact rebuilds fresh,
+    // so that the manifest is born with the artifact it states. The
+    // kernel compile takes minutes; the build says so while it runs.
     for (axis, flavor) in [
         ("kernel", "canonical"),
         ("rootfs", "canonical"),
@@ -307,33 +270,28 @@ pub fn fix() -> u32 {
         if p.is_file() && golden::manifest_path(&p).is_file() {
             continue;
         }
-        println!("cella doctor: fix -- building {axis} {flavor} (minutes for the kernel)");
-        // Green-field: an artifact without a manifest rebuilds fresh,
-        // so that the manifest is born with the artifact it states.
-        if let Err(e) = cella_build::flags::build_flags(axis, flavor, true) {
-            println!("cella doctor: build {axis} {flavor} failed: {e}");
-        }
+        script.push(format!("cella build {axis} {flavor} --fresh"));
+    }
+
+    println!();
+    if script.is_empty() {
+        println!(
+            "cella doctor: fix -- {failed} FAIL, none with a command doctor can name; see the lines above"
+        );
+        return failed;
+    }
+    println!("cella doctor: fix -- nothing runs here. The repairs, as one script:");
+    println!();
+    println!("#!/usr/bin/env bash");
+    println!("set -euo pipefail");
+    for line in &script {
+        println!("{line}");
     }
     println!();
-    println!("cella doctor: re-check");
-    check()
+    println!("cella doctor: then run: cella doctor check");
+    failed
 }
 
-/// A sibling thin CLI: beside the current binary when present (an
-/// installation, or target/release), else by PATH.
-fn sibling(name: &str) -> String {
-    if let Ok(me) = std::env::current_exe() {
-        let p = me.parent().unwrap().join(name);
-        if p.is_file() {
-            return p.to_string_lossy().to_string();
-        }
-    }
-    name.to_string()
-}
-
-/// Recompute a machine's layer digests against its manifest, where
-/// a universe operation recorded them. Absent digests are a note:
-/// only branch and archive write them.
 pub fn verify_machine(name: &str) -> u32 {
     let dir = machine::machine_dir(name);
     let Ok(raw) = fs::read_to_string(dir.join("manifest.json")) else {
@@ -488,90 +446,4 @@ pub fn verify(target: Option<(&str, &str)>) -> u32 {
         println!("cella doctor: {failed} FAIL");
     }
     failed
-}
-
-/// The AVC harvest: denials are correlated, never captured. The
-/// audit book's host clocks are the ausearch join key -- this verb
-/// reads the book's time window, asks ausearch for the matching AVC
-/// denials, and files the result beside the book as `avc`. It is
-/// privileged and optional: the debugger exists before the lane
-/// that generates the denials (the shakedown's SELinux work). A
-/// permissive or clean host files an empty set and says so.
-pub fn harvest(vm: Option<&str>) -> u32 {
-    let book = match vm {
-        Some(vm) => cella_libs::machine::machine_dir(vm).join("audit"),
-        None => cella_libs::machine::home().join("audit"),
-    };
-    if !book.is_file() {
-        println!(
-            "cella doctor: no audit book at {} -- nothing to correlate",
-            book.display()
-        );
-        return 1;
-    }
-    let messages = match cella_libs::ledger::read_all(&book) {
-        Ok(m) => m,
-        Err(e) => {
-            println!("cella doctor: reading the audit book: {e}");
-            return 1;
-        }
-    };
-    let clocks: Vec<u64> = messages
-        .iter()
-        .filter_map(|m| match &m.body {
-            Some(cella_libs::proto::message::Body::Audit(a)) => Some(a.host_ns),
-            _ => None,
-        })
-        .collect();
-    let (Some(&first), Some(&last)) = (clocks.iter().min(), clocks.iter().max()) else {
-        println!("cella doctor: the audit book holds no entries -- nothing to correlate");
-        return 1;
-    };
-    let fmt = |ns: u64, round_up: bool| -> Option<String> {
-        let secs = ns / 1_000_000_000 + if round_up { 1 } else { 0 };
-        let out = std::process::Command::new("date")
-            .args(["-d", &format!("@{secs}"), "+%m/%d/%Y %H:%M:%S"])
-            .output()
-            .ok()?;
-        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    };
-    let (Some(start), Some(end)) = (fmt(first, false), fmt(last, true)) else {
-        println!("cella doctor: date failed -- cannot shape the window");
-        return 1;
-    };
-    let out = match std::process::Command::new("ausearch")
-        .args(["-m", "avc", "-ts"])
-        .args(start.split(' '))
-        .arg("-te")
-        .args(end.split(' '))
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => {
-            println!("cella doctor: ausearch not found -- install audit, or run where it exists");
-            return 1;
-        }
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    let err = String::from_utf8_lossy(&out.stderr);
-    if !out.status.success() && !err.contains("no matches") && !text.trim().is_empty() {
-        println!("cella doctor: ausearch refused ({}) -- the harvest is privileged: sudo cella doctor harvest", err.trim());
-        return 1;
-    }
-    let avc = book.with_file_name("avc");
-    let denials = text.lines().filter(|l| l.contains("avc:")).count();
-    let content = if text.trim().is_empty() || err.contains("no matches") {
-        format!("no matching denials in the window {start} .. {end} (permissive, or clean)\n")
-    } else {
-        text.to_string()
-    };
-    if let Err(e) = std::fs::write(&avc, content) {
-        println!("cella doctor: writing {}: {e}", avc.display());
-        return 1;
-    }
-    println!(
-        "cella doctor: harvested {denials} denial(s) into {} (window {start} .. {end})",
-        avc.display()
-    );
-    0
 }

@@ -65,19 +65,6 @@ AFTER=$(entries "$M/audit" gateway)
 [ "$AFTER" -eq $((BEFORE + 2)) ] || { echo "FAIL: two shows made $((AFTER - BEFORE)) entries, not 2"; exit 1; }
 echo "  show twice makes two entries: reading is an act"
 
-say "step 4: the harvest files the denial set and says so"
-OUT=$("$BIN" doctor harvest 2>&1 || true)
-echo "  $OUT"
-if echo "$OUT" | grep -q "ausearch not found\|privileged"; then
-    echo "  (no ausearch or no privilege here -- the harvest stated it honestly)"
-elif echo "$OUT" | grep -q "harvested"; then
-    [ -f "$CELLA_HOME/avc" ] || { echo "FAIL: the harvest reported but filed nothing"; exit 1; }
-    echo "  the denial set is filed beside the book"
-else
-    echo "FAIL: the harvest neither filed nor explained"
-    exit 1
-fi
-
 echo
 echo "PASS: every verb is an event -- both books carry the border's human side"
 "$BIN" stop "$VM" >/dev/null 2>&1 || true

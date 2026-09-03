@@ -1,16 +1,16 @@
 # bwrap profile for cella-doctor (1.6.14a): check reads host facts,
 # fix repairs what the uid can, verify audits the goldens and the
-# machines, harvest files AVC denials beside the audit book (lane
-# c's SELinux work). It needs the whole home tree read-write (fix
-# writes goldens and manifests), /proc for host facts, and
-# /sys/class/net read-only for the tap pool census.
+# machines. It needs the whole home tree read-write (fix writes
+# goldens and manifests) and /proc for host facts.
 #
-# Not wired, ruled 2026-09-02: fix execs cella-build, whose
-# rootless podman needs newuidmap -- setuid dies under bwrap's
-# nosuid user namespace -- so a self-jailed doctor loses its
-# repair verb. Doctor's walls are its seccomp allowlist (lane b)
-# and its SELinux domain (lane c). The directives below stay as
-# data.
+# Jailed since the join's first pass (2026-09-03): fix runs nothing
+# (it prints the repairs as one script), thus nothing in doctor
+# needs a setuid helper. check reads /etc/subuid and /etc/subgid,
+# /sys/module for the nested-kvm parameter, and /usr/bin and
+# /usr/sbin for the presence of the mapping helpers and of bwrap
+# (`bwrap --version` runs inside the jail; it prints and exits).
+# The consumer binds CELLA_HOME read-write (the audit book, the
+# goldens fix would name).
 
 unshare-user
 unshare-pid
@@ -21,7 +21,11 @@ unshare-cgroup
 ro-bind /lib
 ro-bind /usr/lib
 ro-bind /lib64
-ro-bind /sys/class/net
+ro-bind /usr/bin
+ro-bind /usr/sbin
+ro-bind /etc/subuid
+ro-bind /etc/subgid
+ro-bind /sys/module
 
 dev-bind /dev/kvm
 

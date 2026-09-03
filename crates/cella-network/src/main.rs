@@ -20,12 +20,23 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("--selftest-seccomp") {
         seccomp::selftest_provoke_kill();
     }
+    // The jail, before anything else: security/profiles/
+    // cella-network/bwrap.txt, plus CELLA_HOME read-write (the
+    // machine directory, the wires, the audit book).
+    if let Err(e) =
+        cella_libs::jail::confine_self("cella-network", &[cella_libs::machine::home()], &[])
+    {
+        eprintln!("cella-network: jail: {e}");
+        std::process::exit(1);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    // The witnessed border: setup and pair are placeless verbs, and
-    // the wiring binary witnesses them like every other verb (the
-    // static gate of make test counts this door).
+    // The witnessed border: edge is a machine-scoped verb, and the
+    // translator runs as that machine's sub-uid -- its entry lands
+    // in the machine's own book, the one book that uid can append
+    // (the static gate of make test counts this door).
     if let Some(verb) = args.first() {
-        if let Err(e) = cella_libs::audit::witness(None, verb, &args[1..]) {
+        let vm = args.get(1).map(String::as_str);
+        if let Err(e) = cella_libs::audit::witness(vm, verb, &args[1..]) {
             eprintln!("cella-network: {e}");
             std::process::exit(1);
         }
@@ -48,9 +59,8 @@ fn main() {
             return;
         }
         Some("--help") | Some("-h") => {
-            println!("cella-network -- the tap pool, without sudo");
-            println!("usage: cella-network setup [--taps N] [--from N] | pair --id N --via tap<n>");
-            println!("needs cap_net_admin (make install grants it) or root");
+            println!("cella-network -- the translator: one process per machine, no capability");
+            println!("usage: cella-network edge <vm>");
             std::process::exit(0);
         }
         Some(other) => {

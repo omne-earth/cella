@@ -1,7 +1,7 @@
-; SELinux domain for cella-doctor: check, fix, verify, harvest. An
-; operator domain, deliberately not MCS constrained -- verify and
-; harvest read across every machine's directory by design (that is
-; the verb's purpose), so this domain runs at the full category
+; SELinux domain for cella-doctor: check, fix, verify. An operator
+; domain, deliberately not MCS constrained -- verify reads across
+; every machine's directory by design (that is the verb's purpose),
+; so this domain runs at the full category
 ; range (s0:c0.c1023) instead of one machine's category. Still one
 ; domain, still denied anything outside these allow rules: an
 ; operator range is not a bypass of type enforcement.
@@ -18,7 +18,3 @@
 (allow cella_doctor_t cella_data_t (dir (read search getattr)))
 (allow cella_doctor_t cella_home_t (dir (read search getattr)))
 (allow cella_doctor_t cella_home_t (file (read open getattr)))
-
-; harvest runs ausearch, which reads the audit daemon's log.
-(allow cella_doctor_t auditd_log_t (dir (read search getattr)))
-(allow cella_doctor_t auditd_log_t (file (read open getattr)))

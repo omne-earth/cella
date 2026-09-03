@@ -17,6 +17,19 @@ use std::path::{Path, PathBuf};
 
 /// The operational home. CELLA_HOME overrides it, for the tests and
 /// for a relocated installation.
+/// A scratch directory name that is unique across concurrent
+/// processes, jailed or not. A pid is not: inside a pid namespace
+/// every persona is pid 2, thus two jailed probes named by pid
+/// would share one directory. The name carries the clock's
+/// nanoseconds and the pid; the caller creates it.
+pub fn scratch_dir(prefix: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos:x}", std::process::id()))
+}
+
 pub fn home() -> PathBuf {
     if let Ok(h) = std::env::var("CELLA_HOME") {
         return PathBuf::from(h);
@@ -237,7 +250,13 @@ fn find_program(name: &str) -> String {
 /// start (or after a translator crash), killed by destroy. The
 /// binary resolves like every sibling: beside the current
 /// binary first (the lab runs the lab's), then the install.
-fn ensure_translator(name: &str, dir: &Path) -> Result<(), String> {
+fn ensure_translator(
+    name: &str,
+    dir: &Path,
+    host_uid: u32,
+    host_gid: u32,
+    root: bool,
+) -> Result<(), String> {
     if let Ok(pid) = fs::read_to_string(dir.join("edge.pid")) {
         if let Ok(pid) = pid.trim().parse::<i32>() {
             // SAFETY: signal 0 probes liveness only.
@@ -262,6 +281,22 @@ fn ensure_translator(name: &str, dir: &Path) -> Result<(), String> {
     let log2 = log
         .try_clone()
         .map_err(|e| format!("cloning edge.log: {e}"))?;
+    // The translator runs as its machine's sub-uid, the identity the
+    // VMM has (ruled 2026-09-03: an escapee from the frame parser
+    // lands as one machine, never as the operator). The same
+    // handshake as the VMM's spawn: the child unshares its user
+    // namespace and blocks; this process maps the sub-uid to itself
+    // with the setuid helpers; the child continues into exec, and
+    // the persona's own jail nests inside that namespace.
+    let mut rfds = [0i32; 2]; // child -> parent: "unshared, map me"
+    let mut gfds = [0i32; 2]; // parent -> child: "mapped, proceed"
+                              // SAFETY: rfds and gfds are valid two-element arrays.
+    if unsafe { libc::pipe(rfds.as_mut_ptr()) } != 0
+        || unsafe { libc::pipe(gfds.as_mut_ptr()) } != 0
+    {
+        return Err("creating the translator's identity pipes".to_string());
+    }
+    let (ready_read, ready_write, go_read, go_write) = (rfds[0], rfds[1], gfds[0], gfds[1]);
     use std::os::unix::process::CommandExt;
     let mut c = std::process::Command::new(&bin);
     c.args(["edge", name])
@@ -269,15 +304,95 @@ fn ensure_translator(name: &str, dir: &Path) -> Result<(), String> {
         .stdout(log)
         .stderr(log2);
     // SAFETY: setsid detaches the translator from this verb's
-    // session; nothing async-signal-unsafe runs in the hook.
+    // session; unshare, one pipe write, and one blocking pipe read
+    // are async-signal-safe; the fds are this process's own.
     unsafe {
-        c.pre_exec(|| {
+        c.pre_exec(move || {
             libc::setsid();
+            libc::close(ready_read);
+            libc::close(go_write);
+            if !root {
+                if libc::unshare(libc::CLONE_NEWUSER) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let pid = libc::getpid().to_ne_bytes();
+                if libc::write(ready_write, pid.as_ptr() as *const libc::c_void, 4) != 4 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let mut byte = [0u8; 1];
+                if libc::read(go_read, byte.as_mut_ptr() as *mut libc::c_void, 1) != 1 {
+                    return Err(std::io::Error::other("the identity mapping never arrived"));
+                }
+            }
+            libc::close(ready_write);
+            libc::close(go_read);
             Ok(())
         });
     }
-    c.spawn()
-        .map_err(|e| format!("spawning the translator for {name:?}: {e}"))?;
+    // Command::spawn returns only after the child's exec, and the
+    // child waits in pre_exec for the go byte: the mapper must run
+    // while spawn is in flight. A thread does it -- it reads the
+    // child's readiness, learns the pid from the readiness itself
+    // (the child writes its pid), maps, and releases.
+    let mapper = if root {
+        None
+    } else {
+        let name = name.to_string();
+        Some(std::thread::spawn(move || -> Result<(), String> {
+            let mut pid_bytes = [0u8; 4];
+            // SAFETY: a valid four-byte buffer; ready_read is ours.
+            if unsafe { libc::read(ready_read, pid_bytes.as_mut_ptr() as *mut libc::c_void, 4) }
+                != 4
+            {
+                return Err(format!(
+                    "the translator for {name:?} never signaled readiness for the identity mapping"
+                ));
+            }
+            let pid = i32::from_ne_bytes(pid_bytes);
+            // The sub-uid maps to itself: inside, the translator is the
+            // number it is outside, and no uid 0 exists in its namespace.
+            for (tool, id) in [("newuidmap", host_uid), ("newgidmap", host_gid)] {
+                let status = std::process::Command::new(find_program(tool))
+                    .args([&pid.to_string(), &id.to_string(), &id.to_string(), "1"])
+                    .status();
+                if !matches!(status, Ok(s) if s.success()) {
+                    return Err(format!(
+                        "{tool} {pid} {id} {id} 1 failed for the translator ({status:?})"
+                    ));
+                }
+            }
+            // SAFETY: go_write is ours, and the write wakes the child's read.
+            unsafe {
+                libc::write(go_write, [0u8].as_ptr() as *const libc::c_void, 1);
+            }
+            Ok(())
+        }))
+    };
+    let spawned = c.spawn();
+    // SAFETY: the parent's copies of the child's ends.
+    unsafe {
+        libc::close(ready_write);
+        libc::close(go_read);
+    }
+    let mapped = match mapper {
+        Some(t) => t
+            .join()
+            .unwrap_or_else(|_| Err("the mapper thread panicked".to_string())),
+        None => Ok(()),
+    };
+    // SAFETY: the parent's remaining ends.
+    unsafe {
+        libc::close(ready_read);
+        libc::close(go_write);
+    }
+    let child = spawned.map_err(|e| format!("spawning the translator for {name:?}: {e}"))?;
+    if let Err(e) = mapped {
+        // SAFETY: the child is this function's own, blocked or dying.
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGKILL);
+        }
+        return Err(e);
+    }
     Ok(())
 }
 
@@ -986,7 +1101,23 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         // Every nic is the translator's (1.6.14e): spawn the
         // translator if it does not stand, connect each nic to
         // edge.sock, and hand the VMM the connected fd.
-        ensure_translator(name, &dir)?;
+        // The wires directory is shared by every translator: each
+        // machine's sub-uid gets rwx on it (the rendezvous markers and
+        // the wire sockets live there), and nothing else under
+        // CELLA_HOME opens to that uid.
+        if !root {
+            let wires = home().join("wires");
+            fs::create_dir_all(&wires).map_err(|e| format!("creating {}: {e}", wires.display()))?;
+            let status = std::process::Command::new(find_program("setfacl"))
+                .args(["-m", &format!("u:{host_uid}:rwx"), wires.to_str().unwrap()])
+                .status();
+            if !matches!(status, Ok(s) if s.success()) {
+                return Err(format!(
+                    "granting machine {name:?}'s sub-user the wires directory failed ({status:?})"
+                ));
+            }
+        }
+        ensure_translator(name, &dir, host_uid, host_gid, root)?;
         for (i, _nic) in m.net.split(',').enumerate() {
             let fd = connect_edge_nic(&dir, i as u8, std::time::Duration::from_secs(5))?;
             edge_fds.push(fd);

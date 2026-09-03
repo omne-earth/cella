@@ -27,7 +27,6 @@ unshare-uts
 unshare-cgroup
 
 dev-bind /dev/kvm
-dev-bind /dev/net/tun
 
 ro-bind /lib
 ro-bind /usr/lib

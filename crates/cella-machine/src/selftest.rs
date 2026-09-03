@@ -52,7 +52,7 @@ pub fn selftest() -> Result<(), String> {
 
     // A sandboxed home, so that the test disturbs no machine. The
     // goldens link in from the real home.
-    let sandbox = std::env::temp_dir().join(format!("cella-selftest-{}", std::process::id()));
+    let sandbox = cella_libs::machine::scratch_dir("cella-selftest");
     let _ = fs::remove_dir_all(&sandbox);
     fs::create_dir_all(&sandbox).map_err(|e| format!("creating the sandbox: {e}"))?;
     std::env::set_var("CELLA_HOME", &sandbox);

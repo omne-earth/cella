@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # smoke-selinux (lane c's own gate, 1.6.14c): the enforced policy
-# denies lateral movement between machine directories, and
-# `cella doctor harvest` files the denial. Needs root (semodule,
+# denies lateral movement between machine directories, and the
+# denial stands in the audit log. Needs root (semodule,
 # setenforce, runcon under a transitioned MCS category) -- if this
 # script is not root, it names the exact privileged steps and exits
 # without asserting anything (a permissive or unloaded host is a
@@ -11,9 +11,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
-DOCTOR=target/smoke/cella-doctor
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
-[ -f "$DOCTOR" ] || { echo "SKIP: $DOCTOR not built -- run: make build-smoke"; exit 0; }
 
 if ! command -v semodule >/dev/null || ! command -v runcon >/dev/null; then
     echo "SKIP: semodule or runcon not on PATH -- install policycoreutils"
@@ -37,8 +35,9 @@ What this proves once run as root:
   3. A process transitioned into cella_vmm_t at one machine's
      category is denied touching a path inside the other machine's
      directory -- the AVC is asserted, not assumed.
-  4. cella doctor harvest correlates that denial into the audit
-     book's avc file.
+  4. ausearch shows that denial, naming cella_vmm_t against
+     cella_machine_data_t (the harvest verb is retired; the gate
+     reads the audit log itself, as root).
 EOF
     exit 1
 fi
@@ -104,21 +103,12 @@ fi
 [ ! -e "$TARGET" ] || { echo "FAIL: the file exists despite the denied touch"; exit 1; }
 echo "PASS: the AVC denied cella_vmm_t:c0 -> beta's cella_machine_data_t:c1 (verified below via the audit book)"
 
-# Widen the root audit book's window past the denial so harvest's
-# ausearch correlation brackets it.
-"$BIN" list >/dev/null 2>&1
-
-echo "--- selinux gate: cella doctor harvest files the denial ---"
-OUT=$("$DOCTOR" harvest 2>&1)
-echo "  $OUT"
-echo "$OUT" | grep -q "^cella doctor: harvested [1-9][0-9]* denial" || {
-    echo "FAIL: harvest did not report at least one denial (got: $OUT)"
-    exit 1
-}
-[ -f "$CELLA_HOME/avc" ] || { echo "FAIL: harvest reported denials but filed nothing"; exit 1; }
-grep -q "avc:.*cella_vmm_t.*cella_machine_data_t" "$CELLA_HOME/avc" \
-    || { echo "FAIL: the filed avc set does not name the expected domain/type pair"; cat "$CELLA_HOME/avc"; exit 1; }
-echo "PASS: the harvest filed the denial, naming cella_vmm_t against cella_machine_data_t"
+echo "--- selinux gate: the audit log holds the denial ---"
+command -v ausearch >/dev/null || { echo "FAIL: ausearch not on PATH -- install audit"; exit 1; }
+AVC=$(ausearch -m avc -ts recent 2>/dev/null | grep "avc:.*denied.*cella_vmm_t.*cella_machine_data_t" || true)
+[ -n "$AVC" ] || { echo "FAIL: ausearch shows no denial of cella_vmm_t against cella_machine_data_t"; exit 1; }
+echo "  $(echo "$AVC" | tail -1)"
+echo "PASS: the audit log names cella_vmm_t against cella_machine_data_t"
 
 echo
 echo "ALL SELINUX GATE PROBES PASSED"

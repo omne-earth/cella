@@ -207,6 +207,20 @@ pub fn show(vm: &str, all: bool, direction: Option<&str>) -> Result<(), String> 
         return Err(format!("no machine named {vm:?}"));
     }
     let book = read_book(vm)?;
+    // show is a pipeline citizen: `show | grep -q` closes stdout at
+    // the first match. A println after that is a panic-abort under
+    // Rust's SIGPIPE=ignore, and the abort's own syscalls are not on
+    // this persona's seccomp list (found 2026-09-03, smoke-ping,
+    // SIGSYS). The text is built whole and written once; a broken
+    // pipe is a normal end, and the pipeline's status is the
+    // consumer's -- the same rule as the VMM's --dump-ledger.
+    let mut out = String::new();
+    macro_rules! println {
+        ($($arg:tt)*) => {{
+            out.push_str(&format!($($arg)*));
+            out.push('\n');
+        }};
+    }
     match direction {
         None => println!(
             "{:<34} {:<9} {:<40} {:>6}  STATE",
@@ -262,6 +276,8 @@ pub fn show(vm: &str, all: bool, direction: Option<&str>) -> Result<(), String> 
     if held == 0 {
         println!("(no held operations)");
     }
+    use std::io::Write;
+    let _ = std::io::stdout().write_all(out.as_bytes());
     Ok(())
 }
 

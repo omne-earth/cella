@@ -58,6 +58,12 @@ pub struct Net {
     /// joins an existing operation emits no ledger event, and the
     /// park is the freeze for joins too (the one-shot rule).
     parked_flag: bool,
+    /// The edge reported EOF: the translator behind it is gone.
+    /// Read once, logged once; the poll never reads it again. An
+    /// EOF re-read in a loop returns 0 forever, and the earlier
+    /// code spun on it (found 2026-09-03, a translator killed
+    /// under a dying bwrap).
+    edge_closed: bool,
     /// The inbound lane: frames the world pushed under an open
     /// valve, held for a decision. An incoming hold never freezes
     /// the machine -- the world's knock is not the resident's deed
@@ -150,6 +156,7 @@ impl Net {
             guest_clock,
             pending_ledger: Vec::new(),
             parked_flag: false,
+            edge_closed: false,
             inbound: Vec::new(),
             inbound_bytes: 0,
             inbound_dropped: 0,
@@ -196,14 +203,31 @@ impl Net {
             used_any = true;
             self.deliver_queue.pop_front();
         }
+        if self.edge_closed {
+            return used_any;
+        }
         let mut buf = vec![0u8; MAX_FRAME];
-        while let Ok(n) = self.edge.read_frame(&mut buf) {
-            match self.valve {
-                // Closed: nothing goes in. The TAP drains (the
-                // host must not see backpressure from a dark
-                // machine) and every frame discards.
-                ValveState::Closed => {}
-                ValveState::Open => self.park_inbound(&buf[..n]),
+        loop {
+            match self.edge.read_frame(&mut buf) {
+                // EOF: the translator is gone. Nothing arrives on
+                // this edge again; the machine keeps running dark
+                // on it, and egress parks or drops as the valve
+                // says. The machine verbs own the translator's
+                // life, thus the VMM states the fact and stops
+                // reading.
+                Ok(0) => {
+                    eprintln!("cella: the edge closed -- the translator is gone; no frame arrives on this nic again");
+                    self.edge_closed = true;
+                    break;
+                }
+                Ok(n) => match self.valve {
+                    // Closed: nothing goes in. The edge drains (the
+                    // host must not see backpressure from a dark
+                    // machine) and every frame discards.
+                    ValveState::Closed => {}
+                    ValveState::Open => self.park_inbound(&buf[..n]),
+                },
+                Err(_) => break,
             }
         }
         used_any

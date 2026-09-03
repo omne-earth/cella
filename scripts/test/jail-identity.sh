@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lane a's gate (1.6.14a, identity and the jail): three negatives,
+# Lane a's gate (1.6.14a, identity and the jail): negatives,
 # asserted, never assumed.
 #
 #   1. a cross-machine file touch fails by uid, before SELinux exists
@@ -8,6 +8,9 @@
 #      applies exactly security/profiles/cella-vmm/bwrap.txt's bind
 #      set and namespace set).
 #   3. a path outside a persona's bind set refuses.
+#   4. the self-jailing personas run jailed (the join's first pass):
+#      doctor states its own confinement as a fact, and the
+#      translator's parent process is bwrap.
 #
 # Boots two real machines (net none: tap ownership is the deferred
 # cella-network ruling's territory, not this gate's), then probes
@@ -125,5 +128,29 @@ then
 fi
 rm -rf "$OUTSIDE"
 pass "a path outside the bind set refused"
+
+echo "--- probe 4: the self-jailing personas run jailed ---"
+# Captured first: doctor exits nonzero in this sandbox (two rootfs
+# flavors are absent by design), and under pipefail that status
+# would mask the row.
+DOC=$("$BIN" doctor check 2>/dev/null || true)
+echo "$DOC" | grep -q "ok    jail: confined" || fail "cella doctor check does not report its jail as confined"
+pass "doctor runs inside its bwrap profile and says so"
+# The translator: a machine on --net world spawns one; its parent
+# must be bwrap (confine_self execs bwrap in place, and bwrap forks
+# the jailed translator). No pid namespace for this persona, thus
+# edge.pid is the host pid and ps can answer.
+VM_C=jailid-c
+"$BIN" create "$VM_C" --kernel canonical --rootfs canonical --mem-mb 128 --net world >/dev/null || fail "create $VM_C"
+"$BIN" start "$VM_C" >/dev/null || fail "start $VM_C"
+EDGE=$(cat "$CELLA_HOME/machines/$VM_C/edge.pid")
+PARENT=$(ps -o comm= -p "$(ps -o ppid= -p "$EDGE" | tr -d ' ')" | tr -d ' ')
+EDGE_UID=$(awk '/^Uid:/ {print $2}' "/proc/$EDGE/status")
+HOST_C=$(( $(grep "^$(id -un):" /etc/subuid | cut -d: -f2) + $(cat "$CELLA_HOME/machines/$VM_C/uid") ))
+"$BIN" stop "$VM_C" >/dev/null 2>&1 || true
+[ "$PARENT" = "bwrap" ] || fail "the translator's parent is '$PARENT', not bwrap -- it did not jail itself"
+pass "the translator runs under bwrap"
+[ "$EDGE_UID" = "$HOST_C" ] || fail "the translator runs as uid $EDGE_UID, not its machine's sub-uid $HOST_C"
+pass "the translator runs as its machine's sub-uid ($HOST_C), not the operator"
 
 echo "ALL JAIL-IDENTITY PROBES PASSED"

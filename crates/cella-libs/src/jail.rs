@@ -25,11 +25,6 @@ use std::path::{Path, PathBuf};
 /// the child so it does not jail itself a second time.
 pub const JAILED_ENV: &str = "CELLA_JAILED";
 
-/// The escape hatch for tests that must run unjailed on purpose
-/// (e.g. a gate that inspects the pre-jail state). Never set by
-/// installed code.
-pub const NO_JAIL_ENV: &str = "CELLA_NO_JAIL";
-
 /// One profile: the namespace set and the bind set, exactly as the
 /// file names them.
 #[derive(Debug, Default, Clone)]
@@ -41,6 +36,11 @@ pub struct Profile {
     pub unshare_cgroup: bool,
     pub unshare_net: bool,
     pub proc: bool,
+    /// bwrap --dev /dev: the minimal device set (null, zero, random,
+    /// tty and friends). A persona that spawns a child with a null
+    /// stdio needs /dev/null to exist; the kvm node is a dev-bind on
+    /// top of it.
+    pub dev: bool,
     pub tmp: bool,
     pub new_session: bool,
     /// Literal host paths, read-only.
@@ -66,24 +66,37 @@ pub fn profiles_root() -> PathBuf {
     ))
 }
 
+/// The profile text compiled into the binary, one per persona. The
+/// file under security/profiles/ is the source of truth at run time
+/// when it exists; this copy serves a binary that runs where no
+/// checkout exists -- the static cella inside a nested guest, or an
+/// install without the repository -- and it is the same bytes.
+fn embedded(persona: &str) -> Option<&'static str> {
+    Some(match persona {
+        "cella" => include_str!("../../../security/profiles/cella/bwrap.txt"),
+        "cella-build" => include_str!("../../../security/profiles/cella-build/bwrap.txt"),
+        "cella-doctor" => include_str!("../../../security/profiles/cella-doctor/bwrap.txt"),
+        "cella-gateway" => include_str!("../../../security/profiles/cella-gateway/bwrap.txt"),
+        "cella-machine" => include_str!("../../../security/profiles/cella-machine/bwrap.txt"),
+        "cella-network" => include_str!("../../../security/profiles/cella-network/bwrap.txt"),
+        "cella-probe" => include_str!("../../../security/profiles/cella-probe/bwrap.txt"),
+        "cella-universe" => include_str!("../../../security/profiles/cella-universe/bwrap.txt"),
+        "cella-vmm" => include_str!("../../../security/profiles/cella-vmm/bwrap.txt"),
+        _ => return None,
+    })
+}
+
 /// Parse one profile file. A line is a directive and its argument,
 /// or a comment (#) or blank line. An unknown directive is an
 /// error: a profile that cannot be understood must not be silently
 /// narrowed or widened.
 pub fn load(persona: &str) -> Result<Profile, String> {
     let path = profiles_root().join(persona).join("bwrap.txt");
-    // The file is the source of truth; the same text is embedded at
-    // compile time as the last resort for a binary that runs where
-    // no checkout exists -- the static cella inside a nested guest,
-    // or an install without the repository. Only the VMM's profile
-    // is consumed at run time today.
     let text = match fs::read_to_string(&path) {
         Ok(s) => s,
-        Err(e) => match persona {
-            "cella-vmm" => {
-                include_str!("../../../security/profiles/cella-vmm/bwrap.txt").to_string()
-            }
-            _ => {
+        Err(e) => match embedded(persona) {
+            Some(t) => t.to_string(),
+            None => {
                 return Err(format!(
                     "reading the {persona} jail profile ({}): {e}",
                     path.display()
@@ -108,6 +121,7 @@ pub fn load(persona: &str) -> Result<Profile, String> {
             "unshare-cgroup" => p.unshare_cgroup = true,
             "unshare-net" => p.unshare_net = true,
             "proc" => p.proc = true,
+            "dev" => p.dev = true,
             "tmpfs-tmp" => p.tmp = true,
             "new-session" => p.new_session = true,
             "ro-bind" if !arg.is_empty() => p.ro_binds.push(arg.to_string()),
@@ -155,6 +169,12 @@ pub fn apply(profile: &Profile, args: &mut Vec<String>) {
             args.push(p.clone());
         }
     }
+    // --dev before any --dev-bind: the node binds mount on top of
+    // the minimal /dev, not the other way round.
+    if profile.dev {
+        args.push("--dev".into());
+        args.push("/dev".into());
+    }
     for p in &profile.dev_binds {
         if Path::new(p).exists() {
             args.push("--dev-bind".into());
@@ -177,20 +197,24 @@ pub fn apply(profile: &Profile, args: &mut Vec<String>) {
 
 /// Re-exec the current process inside its own jail, described by
 /// security/profiles/<persona>/bwrap.txt. A no-op when the marker
-/// says the process is already jailed, or when the escape hatch is
-/// set. Never returns on the confining path: exec replaces this
+/// says the process is already jailed. There is no escape hatch: a
+/// persona that cannot jail does not run. Never returns on the
+/// confining path: exec replaces this
 /// process with bwrap, which in turn execs the same binary again
 /// with the marker set, and that second incarnation returns here to
 /// find the marker and fall through to real work.
 ///
 /// `extra_binds` names paths this invocation needs beyond the
 /// profile's static set (a machine name resolved to its directory,
-/// for instance) -- always read-write, since the caller already
-/// knows the exact use.
-pub fn confine_self(persona: &str, extra_binds: &[PathBuf]) -> Result<(), String> {
-    if std::env::var(NO_JAIL_ENV).is_ok() {
-        return Ok(());
-    }
+/// for instance), read-write. `extra_ro_binds` names the paths it
+/// only reads (the goldens, a sibling binary's directory). Both are
+/// resolved at run time because they move per install and per test
+/// sandbox; a profile names literal host paths alone.
+pub fn confine_self(
+    persona: &str,
+    extra_binds: &[PathBuf],
+    extra_ro_binds: &[PathBuf],
+) -> Result<(), String> {
     if std::env::var(JAILED_ENV).is_ok() {
         return Ok(());
     }
@@ -199,6 +223,14 @@ pub fn confine_self(persona: &str, extra_binds: &[PathBuf]) -> Result<(), String
     let bwrap = find_program("bwrap");
     let mut args: Vec<String> = Vec::new();
     apply(&profile, &mut args);
+    for p in extra_ro_binds {
+        if p.exists() {
+            let s = p.to_string_lossy().to_string();
+            args.push("--ro-bind".into());
+            args.push(s.clone());
+            args.push(s);
+        }
+    }
     for p in extra_binds {
         if p.exists() {
             let s = p.to_string_lossy().to_string();
@@ -206,6 +238,14 @@ pub fn confine_self(persona: &str, extra_binds: &[PathBuf]) -> Result<(), String
             args.push(s.clone());
             args.push(s);
         }
+    }
+    // The binary itself, read-only, so that the re-exec inside the
+    // jail finds the same inode the parent ran.
+    if let Some(dir) = me.parent() {
+        let s = dir.to_string_lossy().to_string();
+        args.push("--ro-bind".into());
+        args.push(s.clone());
+        args.push(s);
     }
     args.push(me.to_string_lossy().to_string());
     args.extend(std::env::args().skip(1));

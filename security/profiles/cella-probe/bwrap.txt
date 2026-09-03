@@ -1,13 +1,17 @@
-# bwrap profile for cella-probe (1.6.14a): the calibration persona
-# -- the smallest bind set in the lane, used to prove the profile
-# format and cella_libs::jail::apply() before the larger personas.
-# Needs /dev/kvm and a tap, nothing else (see the lane brief).
+# bwrap profile for cella-probe: the diagnostics. Each probe opens
+# /dev/kvm itself, and freeze-thaw-clock and wallclock launch the
+# sibling cella-vmm through the flag interface and read its
+# console. Jailed since the join's first pass (2026-09-03); the
+# earlier "instrument, not product" exception is retired -- every
+# persona but the shim runs confined.
 #
-# Not wired into cella-probe's own main(): docs/LIFECYCLE.md already
-# names the probe's host-side spawn of the VMM through the flag
-# interface as the one deliberate unjailed exception ("the probe is
-# the instrument, not the product"). This file stays as data, and
-# as the calibration fixture the lane gate exercises directly.
+# The dynamic parts are bound by the consumer: CELLA_HOME read-only
+# (the goldens), and the directory of the binary itself read-only
+# (the sibling VMM). /tmp is the host's, read-write, not a tmpfs:
+# a failed probe keeps its logs there and names the path.
+# /sys/devices/system/clocksource: the probe reports the host's
+# clocksource beside the guest's. dev: the probe launches the VMM
+# with a null stdin, and /dev/null must exist for that.
 
 unshare-user
 unshare-pid
@@ -15,13 +19,14 @@ unshare-ipc
 unshare-uts
 unshare-cgroup
 
+dev
 dev-bind /dev/kvm
-dev-bind /dev/net/tun
 
 ro-bind /lib
 ro-bind /usr/lib
 ro-bind /lib64
+ro-bind /sys/devices/system/clocksource
+bind /tmp
 
 proc
-tmpfs-tmp
 new-session

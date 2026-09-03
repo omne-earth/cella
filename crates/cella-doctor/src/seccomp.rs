@@ -1,18 +1,17 @@
 //! cella-doctor's seccomp table (1.6.14b).
 //!
-//! `check`, `fix`, `gate`, and `harvest` all shell out to trusted
-//! host tools this process does not own (`bwrap --version`, `ip`,
-//! `systemctl`, `nft`, `podman`, `sudo usermod`, `ausearch`, `date`,
-//! and cella-network's own binary) to read or repair host facts.
-//! Because a seccomp filter installed here is inherited across
-//! `execve` and can only get stricter down the chain, narrowing this
-//! process would also narrow every one of those external tools --
-//! either killing them outright (none of their real syscall needs,
-//! e.g. `ip`'s netlink sockets or `sudo`'s PAM/setuid path, are
-//! enumerable from this crate) or requiring a table so wide it stops
-//! meaning anything. So `check`/`fix`/`gate`/`harvest` stay
-//! unconfined at this layer, same reasoning as cella-machine's
-//! `start`/`thaw` (see cella-machine/src/seccomp.rs).
+//! `check`, `fix`, and `gate` shell out to trusted host tools this
+//! process does not own (`bwrap --version`, `podman`, and the build
+//! verb's toolbox) to read or repair host facts. Because a seccomp
+//! filter installed here is inherited across `execve` and can only
+//! get stricter down the chain, narrowing this process would also
+//! narrow every one of those external tools -- either killing them
+//! outright (none of their real syscall needs are enumerable from
+//! this crate) or requiring a table so wide it stops meaning
+//! anything. So `check`/`fix`/`gate` stay unconfined at this layer,
+//! same reasoning as cella-machine's `start`/`thaw` (see
+//! cella-machine/src/seccomp.rs). The join's seccomp pass revisits
+//! this with the jail in place.
 //!
 //! `verify`/`verify_machine` are the one pure subcommand family: they
 //! read manifests and hash storage layers (`cella_libs::golden`) and

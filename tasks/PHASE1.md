@@ -227,23 +227,26 @@ requires a decision, nothing stands, and the mouth closes.
       reserved predecessor-hash field (the chain lands with the
       shakedown); branch and archive carry both books with the
       tree. AVC denials are correlated, never captured: the
-      audit entries' clocks are the ausearch join key, and the
+      audit entries' clocks are the ausearch join key~~, and the
       harvest verb lands HERE, before the shakedown needs it --
       a privileged, optional doctor verb that files matching
       denials beside the audit log (the debugger exists before
-      the lane that generates the denials). Gate: smoke-witness,
+      the lane that generates the denials)~~. The harvest verb is
+      retired (ruled 2026-09-03): an operator at the point of
+      needing ausearch runs ausearch; there is nothing to fix,
+      only to see, and doctor escalates nothing. Gate: smoke-witness,
       in the aggregate -- one of each verb class runs against a
       sandbox machine, and every one lands in the right book
       (machine-scoped in machines/<vm>/audit, placeless in the
       CELLA_HOME audit file) with uid, gid, and persona; the
       negatives: a verb that only reads still writes its entry
-      (show twice makes two entries), and the AVC harvest on a
-      permissive host files an empty set and says so. The static
+      (show twice makes two entries)~~, and the AVC harvest on a
+      permissive host files an empty set and says so~~. The static
       gate rides make test, the one-door pattern applied to the
       witness: every verb arm of the dispatch calls the audit
       append, thus an unwitnessed verb fails the battery, not a
       review. Builder's own calls, unruled: the real uid and gid
-      of the invoking process, the harvest file's name, and the
+      of the invoking process, ~~the harvest file's name,~~ and the
       Audit variant's field number in the Message envelope.
 
 - [x] 1.6.12 IPv6 leaves the canonical kernel fragment.
@@ -381,8 +384,10 @@ requires a decision, nothing stands, and the mouth closes.
             directories dies; LIFECYCLE's one "planned" cell
             turns "enforced"; ENFORCING lands on every host at
             the merge. Lane gate: a cross-machine touch denies
-            with an AVC, and cella doctor harvest files that
-            denial -- the 1.6.11 verb meets its purpose.
+            with an AVC~~, and cella doctor harvest files that
+            denial -- the 1.6.11 verb meets its purpose~~, shown
+            by ausearch, which the gate runs itself as root
+            (harvest retired 2026-09-03).
       - [x] 1.6.14d The hash chain. Field 15 fills: every Audit
             and Event entry carries the digest of its
             predecessor, both books, and the chain survives
@@ -535,32 +540,127 @@ requires a decision, nothing stands, and the mouth closes.
       KVM gates -- serially, one pool, no concurrent batteries. A
       conflict belongs to the reviewer, resolved with the lane's
       agent before the merge commit, never inside it.
-      The join (re-sequenced 2026-09-02): the join runs AFTER e
-      and f -- the single measurement-and-enforcement pass
-      against the final architecture, so no wall is measured
-      twice. Its mechanism is make install (the one install):
-      semodule loads the ten CIL modules, semanage fcontext
-      rules label the installed binaries, the checkout's
-      target/smoke paths (the lab confines like the field), and
-      the ~/.cella tree; restorecon applies them; the profiles
-      copy to their installed home; the boot unit returns as a
-      system unit in cella_network_t (the init transition rule
-      lands with it). Its proof is the full battery green under
-      ENFORCING on both machines with every verb transitioned
-      into its domain. The deal-breakers close here, once,
+      The join (re-sequenced 2026-09-02; ordered into three
+      passes 2026-09-03): the join runs AFTER e, as the single
+      measurement-and-enforcement pass against the final
+      architecture, so no wall is measured twice. Its mechanism
+      is make install (the one install). The three layers land
+      in a fixed order, because each layer changes the syscall
+      reality the next one measures -- the lane merge order (a,
+      c, b) applied to enforcement:
+      1. The jail pass (lane a made live, with f). No persona
+         calls jail::confine_self today: the profiles are data
+         and the VMM's spawn is the only live jail. First the
+         four personas that need no broker -- cella-doctor,
+         cella-probe, cella-universe, cella-network -- gain
+         confine_self at the top of main, with CELLA_HOME and
+         the verb's own paths as extra binds; cella-network's
+         profile gets its directives (no unshare-net: it holds
+         the world sockets and the wire listeners in the host
+         netns; the wires dir and the machine dir as binds); the
+         tap-era binds leave every profile (/dev/net/tun in
+         probe and machine); the stale words go with them
+         (cella-network's help text -- the tap pool,
+         cap_net_admin, setup, pair -- and the 1.6.14a
+         capability comment in its profile; doctor's ip_forward
+         and cella_nat rows, and fix's call to the retired
+         `cella-network setup`). Doctor escalates nothing (ruled
+         2026-09-03): fix prints the usermod command for the
+         sub-id delegation instead of running it under sudo, and
+         the harvest verb is retired -- witness.sh drops its
+         step 4, selinux.sh runs ausearch itself. Then f, the broker,
+         for the three that cannot: the shim forks, the persona
+         child confines itself, the parent answers the fixed
+         request set over a socketpair and exits with the child
+         -- the gateway's SIGWINCH after release, refuse, and
+         close (the shim reads the pid file; the machine name
+         must equal the shim's own argv); the machine's sub-id
+         mapping at start and thaw (~~the shim maps the persona
+         child's whole delegated range, and the persona writes
+         each VMM's uid_map itself~~ ruled 2026-09-03: no uid 0
+         and no capability inside any jail, that is a hole -- the
+         persona asks the shim to map the one VMM child it just
+         spawned; the shim reads the machine's own uid file for
+         the target, verifies the pid descends from the persona
+         child it forked, and runs newuidmap and newgidmap
+         itself; cella-machine's profile keeps the host pid
+         namespace so the pid it names is real); the build's toolbox command
+         per `build <axis> <flavor>` from a compile-time table
+         under a pinned XDG session. Rulings before f's code:
+         ~~the mapping design,~~ the build granularity, the shim's
+         SELinux domain as the sole holder of the transitions.
+         Every CLI jails, cella-machine included (ruled
+         2026-09-03): the rootless network exists so that nothing
+         needs a capability to hold.
+         Found on the way and fixed in the pass (2026-09-03): the
+         VMM busy-looped on EOF from its edge fd (read returned 0
+         in a tight loop when the translator died) -- it now
+         states the edge closed once and never reads it again;
+         the probes and selftest named their scratch directory by
+         pid, which is 2 inside a pid namespace -- a shared
+         scratch_dir helper (pid plus the clock's nanoseconds)
+         names it now; doctor's toolbox row ran podman inside the
+         jail, where rootless podman cannot start, and read
+         "absent" on a host that has the toolbox -- the row is
+         gone (the build verb creates the toolbox on first use).
+         LIFECYCLE.md's sentence naming the probe as the one
+         unjailed exception retires at the doc pass.
+         Pass gate: test-jail-identity's persona check covers
+         all eight; a persona invoked without the shim loses its
+         crossing act (EPERM on the signal, a failed mapping, no
+         toolbox); the shim refuses a request outside its table;
+         a static test asserts the table is the only door (the
+         test-one-door shape); the full battery, every verb
+         jailed.
+      2. The SELinux pass (lane c enforced): semodule loads the
+         ten CIL modules, semanage fcontext rules label the
+         installed binaries, the checkout's target/smoke paths
+         (the lab confines like the field), and the ~/.cella
+         tree; restorecon applies them; the profiles copy to
+         their installed home. The transitions are written
+         against the jail pass's reality: the shim's domain
+         holds them, and the bwrap re-exec is what each persona
+         domain must allow. Pass gate: the full battery green
+         under ENFORCING on both machines with every verb
+         transitioned into its domain; a cross-machine touch
+         denies with an AVC that the gate shows with ausearch.
+         The root-needing gates live under one target,
+         smoke-sudo (ruled 2026-09-03): the aggregate of every
+         smoke that needs root -- selinux.sh joins it as
+         smoke-selinux, the first member -- and smoke itself
+         never asks for sudo (rootless.sh's sudo -n probe passes
+         without it and stays in smoke).
+      3. The seccomp pass (lane b made final): the lists shrink
+         against the syscall reality of a jailed, transitioned
+         persona -- strace-derived for the tool-spawning verbs,
+         make golden under strace against build's list, the
+         KVM request table unchanged. Pass gate: each persona's
+         selftest dies by SIGSYS outside its own list, and the
+         full battery once more.
+      Hard requirement (ruled 2026-09-03), across all three
+      passes: no unconfined SELinux domain for any of the nine
+      binaries -- no unconfined_t, no permissive domain, no
+      domain left in the default type -- and no seccomp
+      catch-all: every list is an allowlist of named syscalls,
+      no allow-by-default with a denylist, no wildcard ioctl,
+      no "the rest is allowed" arm. A persona that needs a
+      syscall names it. A gate fails the join if any binary
+      runs unconfined or under a catch-all.
+      The deal-breakers close across the three passes, once,
       against reality: start/thaw and probe confine-after-fork
-      (3), strace-derived lists for the tool-spawning verbs (4),
-      make golden under strace against build's list (5), the
-      labels (6), spawn's MCS labeling of machine dirs --
-      refusing to start when labeling fails under enforcement
-      (7), the boot unit's real domain (8) -- plus the
-      neverallow assertions and the per-persona checklist, one
-      line per persona, ticked as each proves out. Until the
-      join, b's merged lists are provisional and the domains are
-      inert: the smokes stay green and meaningful for the
-      membrane's mechanics, and the join adds the in-domain
-      battery as its own, separate certification.
-
+      (3, pass 1), strace-derived lists for the tool-spawning
+      verbs (4, pass 3), make golden under strace against
+      build's list (5, pass 3), the labels (6, pass 2), spawn's
+      MCS labeling of machine dirs -- refusing to start when
+      labeling fails under enforcement (7, pass 2), the boot
+      unit's real domain (8; retired with the pool under e --
+      confirm nothing remains to label) -- plus the neverallow
+      assertions and the per-persona checklist, one line per
+      persona, ticked as each proves out. Until the join, b's
+      merged lists are provisional and the domains are inert:
+      the smokes stay green and meaningful for the membrane's
+      mechanics, and the join adds the in-domain battery as its
+      own, separate certification.
 - [ ] 1.6.7 The documents state the tightened law, and the
       retired phases make "Not in scope" the permanent scope
       statement. One pass, itemized:

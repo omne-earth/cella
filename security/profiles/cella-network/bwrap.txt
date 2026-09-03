@@ -1,26 +1,37 @@
-# bwrap profile for cella-network (1.6.14a): NOT USED, ruled
-# 2026-09-02 (this was the lane's one open ruling).
+# bwrap profile for cella-network: the translator (1.6.14e), one
+# process per machine, machine-lifetime, no capability. It holds
+# the machine's edges: edge.sock under the machine directory, the
+# wires under CELLA_HOME/wires, and the world side over ordinary
+# sockets in the host network namespace. Jailed since the join's
+# first pass (2026-09-03): the file capability is gone, thus the
+# user namespace costs it nothing. Its identity is its machine's
+# sub-uid, mapped by the spawn with the VMM's own handshake: an
+# escapee from the frame parser lands as one machine, with that
+# machine's directory and the shared wires directory, never as the
+# operator. This jail nests inside that namespace.
 #
-# cella-network holds CAP_NET_ADMIN as a file capability, granted
-# once at install. Two independent walls close every jail route:
-# the kernel severs a child user namespace from all capabilities
-# over the host network namespace (ambient set included) -- and
-# unprivileged bwrap always builds its sandbox from a user
-# namespace; bwrap itself refuses to start when invoked with
-# elevated or ambient capabilities on a non-setuid install
-# ("Unexpected capabilities but not setuid"). Measured, not
-# assumed: the same setup verb succeeds unjailed and reports
-# CapEff 0 inside bwrap.
+# The dynamic part (CELLA_HOME, resolved at run time) is not named
+# here: the consumer binds cella_libs::machine::home() read-write
+# (the machine directory, the wires directory, the audit book).
 #
-# The ruling: thin at the bwrap layer. cella-network's walls are
-# its seccomp allowlist (lane b) and its SELinux domain (lane c),
-# which bind with no user namespace in the way. The binary stays
-# the one CAP_NET_ADMIN holder, and gains the `own` verb: at
-# machine start the spawn calls `cella-network own <tap> <uid>`
-# (TUNSETOWNER) so the tap's ownership follows the machine's own
-# sub-uid, and only that machine can attach it.
-#
-# This file carries no directives. 1.6.14e (the rootless
-# network) retires the file capability entirely -- taps leave the
-# host netns, the wire goes userspace -- and this persona jails
-# like everyone else after it.
+# No unshare-net: the world sockets and the knock listeners live in
+# the host network namespace by design. No unshare-pid: the
+# translator writes its own pid to edge.pid and the machine verbs
+# kill it by that number; a pid namespace would make the number a
+# lie. No die-with-parent: bwrap's parent is the start verb, which
+# exits at once, and that flag would kill the translator with it
+# (measured 2026-09-03: PR_SET_PDEATHSIG in bwrap, SIGKILL on the
+# verb's exit). The machine verbs own the translator's life.
+
+unshare-user
+unshare-ipc
+unshare-uts
+unshare-cgroup
+
+ro-bind /lib
+ro-bind /usr/lib
+ro-bind /lib64
+
+proc
+tmpfs-tmp
+new-session

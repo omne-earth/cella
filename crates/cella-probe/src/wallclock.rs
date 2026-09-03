@@ -288,7 +288,7 @@ pub fn run() {
         fail("test assets missing -- run: make golden");
     }
 
-    let tmp = std::env::temp_dir().join(format!("cella-wallclock-probe-{}", std::process::id()));
+    let tmp = cella_libs::machine::scratch_dir("cella-wallclock-probe");
     let state_dir = tmp.join("state");
     std::fs::create_dir_all(&state_dir).expect("create state dir");
     let disk_copy = tmp.join("disk.img");

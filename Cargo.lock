@@ -64,7 +64,6 @@ dependencies = [
 name = "cella-doctor"
 version = "0.1.0"
 dependencies = [
- "cella-build",
  "cella-libs",
  "libc",
 ]

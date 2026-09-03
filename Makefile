@@ -337,6 +337,15 @@ smoke-rootless: build ## The rootless sweep (1.6.14e): no capability on any cell
 	$(LOG)
 	$(SCRIPTS)/test/rootless.sh
 
+smoke-selinux: build-smoke golden ## Lane c's gate (1.6.14c), root only: the enforced policy denies a cross-machine touch, and ausearch shows the AVC (scripts/test/selinux.sh)
+	$(LOG)
+	$(SCRIPTS)/test/selinux.sh
+
+smoke-sudo: smoke-selinux ## Every smoke that needs root, in one place; make smoke itself never asks for sudo
+	$(LOG)
+	echo ""
+	echo "=== make smoke-sudo: done ==="
+
 smoke-multinet: build-smoke golden ## A machine takes N taps: two-tap boot, both nics in the guest, host pings eth0, claims exclusive per tap
 	$(LOG)
 	$(SCRIPTS)/test/multinet.sh
@@ -349,7 +358,7 @@ smoke-udp: build-smoke golden ## No datagram leaves undecided, proven from withi
 	$(LOG)
 	$(SCRIPTS)/test/udp.sh
 
-smoke-witness: build-smoke golden ## Every verb is an event: machine-scoped verbs in machines/<vm>/audit, placeless in the root book, uid+gid+persona on each; show twice makes two entries; the harvest files and says so (scripts/test/witness.sh)
+smoke-witness: build-smoke golden ## Every verb is an event: machine-scoped verbs in machines/<vm>/audit, placeless in the root book, uid+gid+persona on each; show twice makes two entries (scripts/test/witness.sh)
 	$(LOG)
 	$(SCRIPTS)/test/witness.sh
 
