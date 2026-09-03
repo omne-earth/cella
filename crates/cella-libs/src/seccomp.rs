@@ -122,7 +122,7 @@ pub fn install(allowed: &[Entry], ioctl_requests: Option<&[Entry]>) -> io::Resul
     // against, on a guest kernel with a smaller syscall surface --
     // a verb dies by SIGSYS at its first stat, silently. The tables
     // are the host's; the in-guest lists are the join's to trace on
-    // the guest kernel (tasks/PHASE1.md #NOTES, 2026-09-03).
+    // the guest kernel (tasks/PHASE1-core.md #NOTES, 2026-09-03).
     if cfg!(target_feature = "crt-static") {
         return Ok(());
     }

@@ -15,7 +15,7 @@ fn main() {
         seccomp_bin::selftest_provoke_kill();
     }
     // No production filter at this layer (found 2026-09-02, see
-    // tasks/PHASE1.md #NOTES): a BPF filter is inherited across
+    // tasks/PHASE1-core.md #NOTES): a BPF filter is inherited across
     // exec, and this persona's whole job is exec'ing toolbox --
     // whose podman world's syscall needs are unbounded from here. A
     // filter installed above it killed toolbox on its first stat.

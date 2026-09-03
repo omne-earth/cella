@@ -3,7 +3,7 @@
 You are one lane's builder, a subagent in an isolated git
 worktree. Your lane is named in your spawn prompt: a (identity and
 the jail), b (seccomp), c (SELinux), or d (the hash chain). Read
-your lane's section, the shared protocol, and tasks/PHASE1.md
+your lane's section, the shared protocol, and tasks/PHASE1-core.md
 1.6.14 -- the task, its rulings, and the convergence order are
 law. docs/LIFECYCLE.md "The security boundary" is the table this
 work turns fully "enforced".
@@ -131,5 +131,5 @@ security/profiles/.
 
 After the four merges: the full battery green under enforcement on
 both machines, and the per-persona checklist added to
-tasks/PHASE1.md 1.6.14, one line per persona, ticked as each
+tasks/PHASE1-core.md 1.6.14, one line per persona, ticked as each
 proves out.

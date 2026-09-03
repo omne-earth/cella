@@ -1,16 +1,78 @@
-# Tasks
+# Cella Core - cryogenic time, state machine, gateway and rootless network
 
 Running scratch of the restructure work (feat/restructure). One line
 per task; move a line to Done with its commit when it lands.
 
-## Now (feat/gateway)
+## Branches
 
-The network model lives in docs/NETWORK-MODEL.md; these lines
-track progress only.
+Every feature branch merges onto edge fast-forward and stays
+(branches are never deleted). In merge order:
 
+### feat/freeze-time (2026-08-30)
+Cryogenic time: the guest's clocks halt across freeze and thaw --
+frozen time does not pass, and the RNG state rides along.
 
-Phase 1 -- the surface over the existing backend -- is closed
-(every line in Done, battery green on both machines 2026-09-01).
+### feat/nested-boot (2026-08-30)
+Cella hosts cella: a guest under KVM boots its own guest, proven
+airgapped, hybrid, and fully networked.
+
+### feat/kernel-update (2026-08-30)
+The golden kernel moves to 7.2.2, with the config pruned to
+necessity (what stays is what is needed, not what is cheap).
+
+### feat/inception (2026-08-30)
+The deep clock probe: the time model holds through stacked layers
+of cella-in-cella.
+
+### feat/guest-lifecycle (2026-08-31)
+The machine verbs: create, start, enter, freeze, thaw, stop,
+destroy -- a registry of machines with one manifest each.
+
+### feat/guest-lifecycle-contd (2026-08-31)
+The lifecycle hardened end to end: selftest drives the full cycle
+against a real guest.
+
+### feat/virtio-state (2026-08-31)
+Device state across the gap: the sidecar carries virtio transport
+state, and a thawed machine resumes exact, in-flight work included.
+
+### feat/restructure (2026-08-31)
+The tree and the make targets restructured: green-field CLI
+migration, purge and rebuild, no heal-on-skip.
+
+### feat/cli-split (2026-08-31)
+The split begins: verbs leave the monolith for persona binaries
+behind one routing shim.
+
+### feat/universe (2026-08-31)
+Machines as artifacts: branch (the frozen twin), archive (the
+latch), inspect (evidence at /rock, byte-identical after).
+
+### feat/gateway (2026-09-02)
+The total membrane: every frame parks, both books witness, the
+hash chain seals, and release is the only door -- plus the 1.6.13
+ten-crate split and the four shakedown lanes (identity, seccomp,
+SELinux, chain).
+
+### feat/rootless (2026-09-03)
+The rootless network (1.6.14e): per-machine translators over
+sockets replace the tap pool -- no capability, no daemon, no host
+network object; the one root moment is the install.
+
+## Now (edge; next: feat/security)
+
+The network model lives in docs/NETWORK-MODEL.md and the rootless
+network in docs/ROOTLESS-NETWORK.md; these lines track progress
+only.
+
+Phase 1 -- the surface over the existing backend -- closed
+2026-09-01 (every line in Done, battery green on both machines).
+Phase 1.6 is closed through 1.6.14e: the total membrane, the
+ten-crate split, the four shakedown lanes, and the rootless
+network are all on edge. What remains of 1.6: 1.6.14f (the broker
+shim), the join on make install (SELinux enforcement, the
+deal-breakers 3-8), the 1.6.7 doc pass, and the 1.6.8 closing
+battery -- the security work lives on feat/security.
 
 Phase 1.6 -- the total membrane (ruled 2026-09-01): everything
 requires a decision, nothing stands, and the mouth closes.
@@ -319,7 +381,9 @@ requires a decision, nothing stands, and the mouth closes.
       keeps the smoke profile; the install scripts, CELLA_DEV,
       and the Makefile paths follow.
 
-- [ ] 1.6.14 The shakedown (ruled 2026-09-02): the three
+- [x] 1.6.14 The shakedown (ruled 2026-09-02; lanes a-e landed
+      2026-09-03; 1.6.14f and the join move to
+      tasks/PHASE2-security.md): the three
       confinement layers go from built to tightened, per persona,
       now that each binary holds only its own verbs (1.6.13).
       Jail: the bwrap profile per persona, and the identity
@@ -499,27 +563,6 @@ requires a decision, nothing stands, and the mouth closes.
             plain user) and its own README sentence at the
             1.6.7 doc pass -- the strongest form of the
             deploy-in-an-hour thesis.
-      - [ ] 1.6.14f The broker shim (ruled 2026-09-02): the one
-            door to privilege. The shim stays unjailed and stops
-            exec'ing: it forks, the persona child runs jailed,
-            and a socketpair carries a fixed per-persona request
-            set that dies with the verb -- no daemon, no standing
-            socket, no standing allow. Requests name objects,
-            never authorities: gateway asks "kick <vm>" and the
-            shim reads the pid file itself; machine asks "map",
-            and the shim maps its own direct descendant; build
-            asks "build <axis> <flavor>" and the shim runs the
-            fixed toolbox command under a pinned, cella-owned
-            XDG session. The broker table is compile-time, the
-            same shape as persona_for(), and a persona invoked
-            directly (without the shim) loses its
-            namespace-crossing acts by construction -- the shim
-            is the one door, statically gateable like
-            write_egress. End state: 8 of 9 bwrap-jailed
-            (cella-network joins after 1.6.14e), the shim the
-            lone unjailed door, all nine under seccomp and
-            SELinux. Runs after e (the broker's table is written
-            against the final privilege reality).
       Convergence: every worktree branches from the same
       post-split commit. The reviewer merges serially onto
       feat/gateway in the order a, c, d, b -- identity first (the
@@ -533,99 +576,7 @@ requires a decision, nothing stands, and the mouth closes.
       KVM gates -- serially, one pool, no concurrent batteries. A
       conflict belongs to the reviewer, resolved with the lane's
       agent before the merge commit, never inside it.
-      The join (re-sequenced 2026-09-02): the join runs AFTER e
-      and f -- the single measurement-and-enforcement pass
-      against the final architecture, so no wall is measured
-      twice. Its mechanism is make install (the one install):
-      semodule loads the ten CIL modules, semanage fcontext
-      rules label the installed binaries, the checkout's
-      target/smoke paths (the lab confines like the field), and
-      the ~/.cella tree; restorecon applies them; the profiles
-      copy to their installed home; the boot unit returns as a
-      system unit in cella_network_t (the init transition rule
-      lands with it). Its proof is the full battery green under
-      ENFORCING on both machines with every verb transitioned
-      into its domain. The deal-breakers close here, once,
-      against reality: start/thaw and probe confine-after-fork
-      (3), strace-derived lists for the tool-spawning verbs (4),
-      make golden under strace against build's list (5), the
-      labels (6), spawn's MCS labeling of machine dirs --
-      refusing to start when labeling fails under enforcement
-      (7), the boot unit's real domain (8) -- plus the
-      neverallow assertions and the per-persona checklist, one
-      line per persona, ticked as each proves out. Until the
-      join, b's merged lists are provisional and the domains are
-      inert: the smokes stay green and meaningful for the
-      membrane's mechanics, and the join adds the in-domain
-      battery as its own, separate certification.
 
-- [ ] 1.6.7 The documents state the tightened law, and the
-      retired phases make "Not in scope" the permanent scope
-      statement. One pass, itemized:
-      - [ ] The law, stated: no frame leaves undecided at any
-            layer, no allow outlives its decision (there is
-            nothing for it to outlive), the ARP sentence dies,
-            and every failure of the apply is stillness.
-      - [ ] The scope, stated: cella judges every frame, both
-            directions, at its own seam -- named, held, decided
-            externally, witnessed.
-      - [ ] Permanently outside cella, named at the proto seam
-            where a judge builds them: the appliance pair, TCP
-            termination, TLS against a pair CA, DNS-in-frame and
-            every world-side service, ownership of peer patience,
-            and the timeline rewrite. NOT outside: ingress
-            judgment (the ear's customs, shipped) and UDP
-            judgment (shipped; UDP death was terminator territory
-            and retires with it).
-      - [ ] The temporary-backend language dies: the never-guess
-            rebind is the architecture, not scaffolding.
-      - [ ] The residuals, named once, plainly: a resident can
-            modulate its compute and I/O shadow on the host
-            (host-local, listener-required, silenced by the
-            freeze); frames that arrive during a freeze are lost
-            at the tap (no process listens; the protocols above
-            retransmit); the peer-patience bound on multi-cycle
-            exchanges is a permanent boundary, the judge's to
-            manage; the field machine is dark to the world, not
-            to its host's logbook (vmm.log carries the park
-            lines); the pool's neighbor pins assume the default
-            guest MAC (a custom --mac on a pool tap breaks the
-            convention, stated); the canonical kernel's quietness
-            is chosen (ipv6.disable=1), never an exemption --
-            chatter that exists still parks. Entries the shipped
-            mechanisms retired (the open-ingress residual) drop.
-      - [ ] The security boundary, post-shakedown (ruled
-            2026-09-02): cella-network is the one persona with no
-            bwrap jail -- a user namespace severs host-netns
-            capabilities by kernel design, and non-setuid bwrap
-            refuses ambient capabilities outright -- so it is
-            confined by its seccomp allowlist and its SELinux
-            domain instead, stated as data in its profile file
-            and in LIFECYCLE's boundary table. The tap's
-            ownership follows the machine: at start, the spawn
-            calls the file-capability cella-network to re-own the
-            tap to the machine's own sub-uid (TUNSETOWNER), so
-            only that machine can attach it.
-      - [ ] The identity slice, documented: per-machine sub-users
-            from the delegated /etc/subuid range, the host
-            prerequisites (subuid/subgid delegation, setfacl, a
-            traversable path to CELLA_HOME) laid by the install
-            scripts and checked/fixed by doctor.
-      - [ ] NETWORK-MODEL's phases section retires; DEVICE-STATE's
-            acceptance rows speak AC3's stand-in and AC5's
-            real-world leg (1.6.6d).
-      - [ ] The "aperture" wording in AC5 is replaced with plain
-            speech, and the sweep hunts any siblings of it.
-      The pass runs after every mechanism -- the border work,
-      the fragment, the split, and the shakedown -- and
-      immediately before the battery: the documents describe
-      what ships, and the battery certifies what the documents
-      describe, once each.
-- [ ] 1.6.8 Full battery both machines on the finished phase --
-      the regression close runs last, after the ear's customs
-      (1.6.9 changes every network gate's choreography again),
-      the inspect verb, and the witnessed border, so it certifies
-      the law that ships, once.
 
 Phases 2 and 3 are descoped (ruled 2026-09-02). The appliance
 and the TLS terminator are not cella's to build: cella ends at
@@ -641,40 +592,7 @@ mechanism; the phases section of NETWORK-MODEL.md retires.
 
 ## Later
 
-- [ ] The host image (post-1.6): the bare-metal host built the
-      way the guests are built. Today the metal is the least
-      audited resident in the tower -- a general-purpose distro
-      under machines that are born closed. The image applies the
-      guest discipline to layer zero: a host kernel from the
-      canonical-fragment philosophy (necessity, not cost), a
-      userland of nothing that was not chosen, the field flavor
-      baked (no lab tools on the metal), the pool at boot, and --
-      because nothing stands below the metal to park it -- the
-      strongest law available there: egress enumerable. nftables
-      default-drop with an explicit allow set, one line per
-      permitted destination, and a counter for everything that
-      tried. "Who knows what is reaching out" becomes "here is
-      the complete list." Gate: a host battery -- the image
-      boots, runs the full smoke, and its egress counters show
-      zero outside the list.
-
-
-
-- [ ] Identity separation for the VMMs (claimed by 1.6.14, which picks and builds one option; granularity open until then).
-      Today the jail separates mounts, not identity: the same uid
-      maps into every user namespace, and any unjailed process of
-      the user touches every machine's files. Options, one to pick:
-      (a) one dedicated cella uid for all VMMs -- separates them
-      from the user's session; (b) per-VMM subuid ranges via the
-      user namespace map -- separates VMMs from each other too;
-      (c) SELinux MCS categories per VM (sVirt) on top of either.
-      Per-VMM is undecided.
-- [ ] The cella <-> engine protocol: a .proto for the verdict
-      vocabulary; gRPC never enters a VMM (see NETWORK-MODEL.md,
-      the control plane).
-- [ ] Augmenting world engine (AWE): the engine over the appliance
-      seam; materializer = the Artifact Keeper fork with timeline
-      translation (response time = request T + delta).
+The Later items move with the phase: see tasks/PHASE2-security.md.
 
 ## Done
 

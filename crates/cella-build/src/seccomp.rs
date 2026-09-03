@@ -1,7 +1,7 @@
 //! The syscalls `cella_build::orchestrate` needs to spawn an external
 //! process (`toolbox`, `podman`, `ldd`) and wait for it -- shared
 //! between cella-build's own binary and cella-doctor's `fix` (its
-//! other user, see tasks/PHASE1.md 1.6.13). Read from
+//! other user, see tasks/PHASE1-core.md 1.6.13). Read from
 //! `std::process::Command`'s Linux implementation: recent glibc/std
 //! prefer `posix_spawn`, which itself clones with `vfork`-shaped
 //! flags before `execve`; the exact clone flavor a given libc picks

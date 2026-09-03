@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# The ledger backend's gate. See docs/NETWORK-MODEL.md, "The control
-# plane", and tasks/PHASE1.md phase 1.
+# The ledger backend's gate.
 #
 # Part A: under the total membrane a fetch's first egress is the
 # guest's ARP -- it parks as an L2 operation with an id and both

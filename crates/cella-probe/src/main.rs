@@ -4,7 +4,7 @@
 //! cryogenic principle from day one as standalone crates that cargo
 //! built at run time; an installed host must answer "is time
 //! cryogenic here" without a toolchain, thus they live here now
-//! (see tasks/PHASE1.md). Parameters stay environment variables (CELLA_*),
+//! (see tasks/PHASE1-core.md). Parameters stay environment variables (CELLA_*),
 //! the same interface the make targets always passed.
 
 mod freeze_thaw_clock;

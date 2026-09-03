@@ -5,8 +5,6 @@
 ; selinux-policy-devel refpolicy headers, and CIL loads straight
 ; through `semodule -i`, on any targeted-policy host.
 ;
-; See scripts/selinux-build.sh for the build/load/verify sequence,
-; and tasks/PHASE1.md 1.6.14c for the ruling this implements.
 
 ; ---- shared object types ----------------------------------------
 

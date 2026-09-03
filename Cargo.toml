@@ -1,5 +1,5 @@
-# The workspace: per-persona crates over one cella-libs (see
-# tasks/PHASE1.md 1.6.13). A binary contains only its own verbs; the
+# The workspace: per-persona crates over one cella-libs
+# A binary contains only its own verbs; the
 # commons live in cella-libs behind features, thus what a binary does
 # not need is not compiled into it -- thinness by the feature graph,
 # not by trust in the linker.

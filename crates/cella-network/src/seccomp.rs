@@ -4,7 +4,7 @@
 //! `setup`/`pair`/`own` provision TAP devices and netlink addresses:
 //! `ioctl(TUNSETIFF, ...)`, `AF_NETLINK` sockets for addressing and
 //! deterministic MACs, and the NAT table (via `nft`, an external
-//! process). tasks/PHASE1.md 1.6.14e retires exactly these verbs
+//! process). tasks/PHASE1-core.md 1.6.14e retires exactly these verbs
 //! (setup/pair/own as host-netns verbs, nftables NAT) and rewrites
 //! cella-network around fd-passing instead -- "the seccomp list
 //! re-shrinks with it" is 1.6.14e's own text. Building this

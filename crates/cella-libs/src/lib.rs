@@ -1,4 +1,4 @@
-//! cella-libs: the commons, by observation (see tasks/PHASE1.md
+//! cella-libs: the commons, by observation (see tasks/PHASE1-core.md
 //! 1.6.13). Every module here has two or more genuine users; the
 //! features are the thinness proof -- a persona that does not
 //! enable a feature does not compile its code.
