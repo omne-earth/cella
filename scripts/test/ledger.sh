@@ -183,7 +183,9 @@ for _ in 1 2 3 4; do
         "$BIN" gateway "$VM" release "$id" >/dev/null 2>&1 || true
     done
     "$BIN" thaw "$VM" >/dev/null 2>&1 || true
-    pump_while_running 3
+    # Best-effort too: the settle's pump may end on a false test
+    # (bare-metal timing), and that is not a failure of the settle.
+    pump_while_running 3 || true
 done
 # Both new fetches park in one typed line: two operations, one
 # batch, one self-freeze. The chronicle exists, thus the valve is
@@ -196,7 +198,7 @@ tries=0
 until "$BIN" --dump-ledger "$LEDGER" | grep -q "port=8082"; do
     tries=$((tries + 1))
     [ $tries -le 4 ] || { echo "FAIL: D never parked"; exit 1; }
-    "$BIN" thaw "$VM" >/dev/null
+    "$BIN" thaw "$VM" >/dev/null 2>&1 || true
     wait_frozen || { echo "FAIL: the machine did not refreeze while D was due"; exit 1; }
 done
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
