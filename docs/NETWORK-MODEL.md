@@ -218,10 +218,12 @@ sequenceDiagram
     end
 ```
 
-Nothing is inherited. A pass entry lives only in the running
-epoch. A thaw starts a fresh epoch: a destination a past decision
-allowed parks again and is decided again. Twins park and freeze
-identically; the ratchet is deterministic in the guest's frame.
+Nothing is inherited, within an epoch or across one. No pass
+table exists: a release delivers one operation, and the next frame
+to the same destination parks again. A thaw starts a fresh epoch
+and every staged judgment applies in park order. Twins park and
+freeze identically; the ratchet is deterministic in the guest's
+frame.
 
 ## The ingress lane
 
@@ -303,8 +305,9 @@ graph LR
 No cella process holds a capability, and no host network object of
 cella's exists -- no tap, no bridge, no NAT rule, no daemon. Every
 frame in both directions parks and is decided at the membrane.
-Every machine is born closed. No pass entry outlives its epoch,
-and no interface carries an unmanaged mode.
+Every machine is born closed. No allow outlives its decision --
+a release moves one operation and installs nothing -- and no
+interface carries an unmanaged mode.
 
 ## The accepted costs
 

@@ -120,7 +120,7 @@ stateDiagram-v2
 | doctor  | check: the host facts, one line each. fix: repairs what the uid can (the sub-id delegation, absent goldens via build), deletes nothing. verify: recomputes each golden digest against its manifest, and the recorded layer digests of a machine (verify <vm>) | Rust only |
 | probe   | The cryogenic diagnostics (cella-probe): wallclock, freeze-thaw-clock, sregs | Rust only |
 | network | The translator (cella-network edge <vm>, N.T.1): one per machine, spawned by start; not an operator's verb | Rust only |
-| gateway | The membrane surface (N.X.1): show [incoming|outgoing], release <id>, refuse <id>, inspect <id> (frozen holds only), open, close. A machine is born closed (nothing in or out); open arms the membrane, never a free flow; no pass entry outlives its epoch | Rust only |
+| gateway | The membrane surface (N.X.1): show [incoming|outgoing], release <id>, refuse <id>, inspect <id> (frozen holds only), open, close. A machine is born closed (nothing in or out); open arms the membrane, never a free flow; a release delivers one operation, and no allow outlives its decision | Rust only |
 
 The difference between stop and freeze is intent. Freeze preserves the
 in-flight reality of the guest, and time stays cryogenic across the

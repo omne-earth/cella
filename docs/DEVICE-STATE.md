@@ -90,12 +90,12 @@ decide-then-deliver, not excavation.
 
 Under the open valve the polarity is default-hold, and the park is
 the freeze: the manager cannot know in advance which destination
-needs the world to grow, thus every egress frame to an undecided
-destination parks -- and the first park stops the machine. Within
-one epoch the decision cost is amortized per destination: one park
-and one decision for each destination without a pass entry, and an
-inline table match for every frame after it. A pass entry dies
-with its epoch, and every policy lives outside the VMM.
+needs the world to grow, thus every egress frame parks -- and the
+first park stops the machine. No pass table exists (the
+total-membrane ruling; proto field allow_flow is retired): a
+release delivers one operation and nothing more, and the next
+frame to the same destination parks again. Every policy lives
+outside the VMM.
 
 ```mermaid
 sequenceDiagram
@@ -134,13 +134,13 @@ The concrete surface, in order:
 4. Decisions are framed proto messages in the verdict file, one
    per operation id, written by `cella gateway <vm> release|refuse
    <id>`. The thaw applies them strictly in park order: a release
-   delivers and completes, and may install a pass entry
-   (allow_flow); a refusal lapses the operation; an operation
-   behind an undecided predecessor stays held. Against a running
-   machine the verb kicks the VMM and the decisions apply at once
-   (the signals underneath are the wire, never the surface). A
-   pass entry lives only in the running epoch: a thaw evaluates
-   everything afresh, and a once-allowed destination parks again.
+   delivers and completes one operation, and installs nothing; a
+   refusal lapses the operation; an operation behind an undecided
+   predecessor stays held. Against a running machine the verb
+   kicks the VMM and an incoming decision applies at once (the
+   signals underneath are the wire, never the surface). No allow
+   outlives its decision -- there is nothing for it to outlive:
+   the next frame to a released destination parks again.
 
 Therefore the save is a copy of registers, indices, the held
 egress frames, and the ingress lanes; no drain step exists beyond
