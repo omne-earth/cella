@@ -85,7 +85,7 @@ sleep 1
 B=$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true); knock; knock; sleep 3
 [ "$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true)" -gt "$B" ] && { echo "FAIL: an open machine answered without a decision"; exit 1; }
 # The knock parks incoming and never freezes the machine (the
-# world's knock is not the resident's deed); release it live, and
+# world's knock is not the machine's own action); release it live, and
 # the guest's own reply parks in the egress lane -- that park is the
 # freeze.
 deadline=$((SECONDS + 20))

@@ -174,7 +174,7 @@ if [ -f "$STATE" ]; then "$BIN" thaw "$VM" >/dev/null; sleep 1; fi
 pump_mail
 printf 'knock\n' > /dev/udp/127.0.0.1/$WORLD_PORT 2>/dev/null || true
 sleep 2
-[ -f "$STATE" ] && { echo "FAIL: the machine froze on inbound -- the knock is not its deed"; exit 1; }
+[ -f "$STATE" ] && { echo "FAIL: the machine froze on inbound -- the knock is not its own action"; exit 1; }
 # The knock came from the host's loopback, which the translator
 # shows to the guest as the gateway address (1.6.14e).
 ID_IN=$("$BIN" gateway "$VM" show incoming | grep "192.168.210.1" | awk '{print $1}' | tail -1)

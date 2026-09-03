@@ -70,7 +70,7 @@ sleep 4
 "$BIN" gateway "$VM" open >/dev/null
 sleep 1
 # A host ping no longer freezes the machine: it parks incoming (the
-# world's knock is not the resident's deed). Release it live, and
+# world's knock is not the machine's own action). Release it live, and
 # the guest's own reply parks in the egress lane -- that park is the
 # freeze.
 for _ in 1 2 3; do printf 'knock\n' > /dev/udp/127.0.0.1/$WORLD_PORT 2>/dev/null || true; sleep 1; done

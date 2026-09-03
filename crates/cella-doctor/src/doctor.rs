@@ -244,27 +244,16 @@ pub fn check() -> u32 {
     r.failed
 }
 
-/// Repair what fix can, then re-check. Net facts (the tap pool,
-/// ip_forward, the NAT) go to cella-network, which carries
-/// CAP_NET_ADMIN as a file capability -- no sudo in the path, the
-/// root moment happened at install time. Everything else prints its
-/// command; doctor escalates nothing.
+/// Repair what fix can, then re-check. The rootless network needs
+/// no repair verb: the translator is spawned per machine by start,
+/// and no host network object exists to heal. Everything else
+/// prints its command; doctor escalates nothing.
 pub fn fix() -> u32 {
     let failed = check();
     if failed == 0 {
         return 0;
     }
     println!();
-    let net_bin = sibling("cella-network");
-    println!("cella doctor: fix -- running {net_bin} setup");
-    let ran = std::process::Command::new(&net_bin)
-        .args(["setup"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !ran {
-        println!("cella doctor: {net_bin} failed -- run: make install (grants it cap_net_admin)");
-    }
     // The identity slice: a missing sub-id delegation is repairable
     // with one usermod -- the same root moment the install spends.
     // sudo asks the terminal; a refusal leaves the check's message.
@@ -317,18 +306,6 @@ pub fn fix() -> u32 {
     println!();
     println!("cella doctor: re-check");
     check()
-}
-
-/// A sibling thin CLI: beside the current binary when present (an
-/// installation, or target/release), else by PATH.
-fn sibling(name: &str) -> String {
-    if let Ok(me) = std::env::current_exe() {
-        let p = me.parent().unwrap().join(name);
-        if p.is_file() {
-            return p.to_string_lossy().to_string();
-        }
-    }
-    name.to_string()
 }
 
 /// Recompute a machine's layer digests against its manifest, where

@@ -147,7 +147,7 @@ fn selftest_cycle() -> Result<(), String> {
     // The installed world's negative (1.6.14e): a machine is born
     // closed, a knock on its mapped port gets nothing, and no
     // freeze happens on inbound traffic -- the world's knock is not
-    // the resident's deed.
+    // the machine's own action.
     {
         let mut n = defaults();
         n.name = "m2".into();

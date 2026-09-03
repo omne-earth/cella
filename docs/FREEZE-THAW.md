@@ -265,7 +265,7 @@ Order rules, and the reason for each rule:
   load from the current XCR0.
 - The prefill runs before the clock restore. A thaw makes a new KVM VM
   with empty stage-2 page tables. Without the prefill, the first
-  heartbeat cycle of the guest pays one stage-2 fault for each page
+  heartbeat cycle of the guest costs one stage-2 fault for each page
   that it touches, and the clock of the guest counts that time
   (measured on nested KVM: ~25 ms; ~4 ms with the prefill).
 

@@ -1,210 +1,337 @@
 # The network model
 
 The decision record for how a cella machine touches the world.
-Status: accepted 2026-09-01. The phases below implement it; the
-current code (a pool tap per machine, hold by signal at the agent
-VMM) is the starting state, not the model.
+Accepted 2026-09-01. Revised 2026-09-03: the rootless network
+(1.6.14e) is the shipped architecture, and the appliance phases
+are descoped (ruled 2026-09-02). The mechanism's design record is
+docs/ROOTLESS-NETWORK.md; this document states the law.
+
+The diagrams share one identifier space, prefixed N: N.G is the
+guest, N.M the membrane (the VMM), N.T the translator, N.H the
+host kernel, N.F the files, N.X the control plane, N.L the
+lifecycle plane. An identifier keeps its meaning in every diagram
+here and in docs/ROOTLESS-NETWORK.md; a node owned by another
+diagram appears as a pointer, named "(see Nx)". The topology
+diagrams live in docs/ROOTLESS-NETWORK.md and docs/EXAMPLES.md.
 
 ## The decision
 
-A machine is always shielded. `cella create <name>` builds one
-thing: the machine and its network appliance, as a pair. No flag
-creates an unshielded machine, and no configuration connects a
-machine to a host tap directly. The appliance's birth state is
-closed: every egress operation parks until a decision.
+A machine is always shielded. The membrane is the machine's own
+VMM, and no configuration bypasses it. `cella create <name>` takes
+one flag, `--net SPEC`, where SPEC is a comma list of nics:
+`none` (the default, airgapped), `world[:PORT/proto+...]`, or
+`wire:NAME`. A machine is born closed.
 
-The rule applies at every nesting depth -- a cella inside a cella
-creates pairs too, the same inductive principle. The base case:
-appliances are the one machine class that touches a pool tap
-directly. An appliance gets no appliance; it is the membrane. The
-cost (two VMMs per machine, at every depth) is accepted and paid.
+No host network object exists at any depth. The rule applies to a
+cella inside a cella: each layer runs its own translators, and
+each membrane judges its own frames.
 
 ## The shape
 
-- **One appliance per machine.** The appliance is an ordinary
-  cella machine -- the same VMM class, the same defaults, the same
-  freeze machinery -- running the gateway flavors: a gateway
-  kernel (the canonical fragment plus netfilter, for transparent
-  termination, and nothing else gets netfilter) and the gateway
-  rootfs. Two interfaces: the agent side, an L2 pair shared with
-  its machine alone, and the world side, a pool tap. The machine's
-  only neighbor is its appliance.
-- **One directory.** The appliance lives inside its machine:
-  `machines/<name>/network/` holds its manifest, disk, RAM, and
-  sidecar; `machines/<name>/ca/` holds the pair's certificate
-  authority. The pair is one tree, thus every operation on the
-  machine as an artifact (branch, archive, destroy) carries the
-  appliance and the CA with it. A branch forks the pair and its
-  lineage CA together.
-- **Pair order.** Freeze: the machine first, the appliance last.
-  Thaw: the appliance first, the machine last. The world side
-  stands before the machine wakes, and the verbs own the order.
+- **One translator per machine.** `cella start` spawns
+  `cella-network edge <vm>`, one process, machine-lifetime:
+  destroy kills it, and it survives freeze and thaw. It holds no
+  capability. It exits on its own when its machine directory is
+  removed.
+
+- **The world side.** The translator answers ARP and the gateway's
+  echo at the edge. It carries ICMP, UDP, and TCP through plain
+  host sockets. DNS is UDP like any other; no resolver stands in
+  the path.
+
+- **The wire side.** A wire joins exactly two machines. Pairing is
+  two manifests that name the same wire; the translators meet at
+  `$CELLA_HOME/wires/<name>`. A wire imposes no address
+  convention.
+
+### N2 -- the translator
+
+One process per machine, machine-lifetime, no capability.
+
+```mermaid
+graph LR
+    M1p["N.M.1 virtio-net (see N1)"]
+    T1["N.T.1 the edge loop"]
+    T2["N.T.2 world side: answers ARP and the gateway echo itself"]
+    T3["N.T.3 wire side"]
+    H13p["N.H.1-N.H.3 protocol sockets (see N3)"]
+    H4p["N.H.4 the wire socket (see N3)"]
+    M1p ---|"edge fd"| T1
+    T1 --- T2
+    T1 --- T3
+    T2 --- H13p
+    T3 --- H4p
+```
+
+### N3 -- the host kernel
+
+Plain sockets, opened by the translator. Nothing else of cella's
+exists in the host's network: no tap, no bridge, no rule.
+
+```mermaid
+graph LR
+    T2p["N.T.2 world side (see N2)"]
+    T3p["N.T.3 wire side (see N2)"]
+    H1["N.H.1 ICMP DGRAM socket, one per echo id"]
+    H2["N.H.2 UDP socket, one per flow"]
+    H3["N.H.3 TCP socket, one per flow, plus the knock listeners"]
+    H4["N.H.4 CELLA_HOME/wires/NAME: one socket, two ends"]
+    W(("the world"))
+    PEER["N.T.1 of the peer machine (see N2)"]
+    T2p --- H1
+    T2p --- H2
+    T2p --- H3
+    H1 --- W
+    H2 --- W
+    H3 --- W
+    T3p --- H4
+    H4 --- PEER
+```
+
+- **The guest contract.** The guest sees a byte-identical network:
+  the same virtio-net device, gateway 192.168.210.1, guest
+  address 192.168.210.2 on a world nic. A guest image cannot tell
+  the translator from a tap.
+
+- **One directory.** `machines/<name>/` holds the network's whole
+  state: the valve record, the verdict file, the ledger at
+  `network/ledger`, and the translator's edge.sock, edge.pid, and
+  edge.log. Branch, archive, and destroy carry it as one tree.
+
+### N4 -- the files, their writers and readers
+
+All under machines/NAME/. Each edge names the one writer or
+reader; no file has two writers.
+
+```mermaid
+graph LR
+    X1p["N.X.1 cella-gateway (see N5)"]
+    L1p["N.L.1 cella-machine (see N5)"]
+    M1p["N.M.1 virtio-net (see N1)"]
+    T1p["N.T.1 the edge loop (see N2)"]
+    F1["N.F.1 valve"]
+    F2["N.F.2 verdict"]
+    F3["N.F.3 network/ledger"]
+    F4["N.F.4 edge.sock"]
+    F5["N.F.5 edge.pid"]
+    F6["N.F.6 edge.log"]
+    X1p -->|"writes the posture"| F1
+    M1p -->|"reads"| F1
+    X1p -->|"appends decisions"| F2
+    M1p -->|"reads on the kick"| F2
+    M1p -->|"appends the chronicle"| F3
+    X1p -->|"reads the held set"| F3
+    T1p -->|"listens; exits when it is gone (the tether)"| F4
+    L1p -->|"connects, one hello byte per nic"| F4
+    L1p -->|"writes at spawn; destroy kills by it"| F5
+    T1p -->|"stdout, redirected at spawn"| F6
+```
 
 ## The membrane
 
 The chronicle is the machine's append-only record of what its
-operations did -- parked, released, lapsed, when and to where --
-written as history, never read back as truth.
+operations did -- parked, released, refused, when and to where --
+written as history, never read back as truth. Field 15 chains each
+entry to its predecessor by SHA-256; `cella doctor verify` proves
+the book.
 
-The membrane is a holder process inside the appliance guest --
-pure dataplane, no control agent. Its held state (parked
-operations, warm connections, buffered bytes) lives in the guest's
-own memory, thus the appliance's ram.img is the vessel: a freeze
-preserves the holds, and a thaw resumes them, the cryogenic
-principle doing the persistence. The sidecar carries no payload
-blocks; the ledger (below) is a chronicle, never the store.
+### N1 -- the frame path, machine side
 
-The valve has two postures, and no third: closed and open. A
-machine is born closed. Nothing goes in or out: no
-park, no ledger, no freeze. The machine runs dark, and its own
-calls fail at the tap. `cella gateway open` turns the tap into the
-membrane, never into a free flow: every egress frame -- an
-initiation or a reply, the echo reply included -- parks for a
-decision, and the first parked batch stops the machine. The VMM
-completes the TX batch in hand (the batch bounds the holds per
-instant, and the ring size is its ceiling), flushes the ledger,
-and freezes before the guest runs again: the park is the freeze.
-`close` closes the machine again and blocks even the flows a
-decision allowed. The posture lives in the manifest, thus it survives stop,
-thaw, and restart; the verbs change it live through a Valve
-message. No unmanaged posture exists on any interface: the raw
-flag interface opens into the membrane like every other path.
+```mermaid
+graph LR
+    G1["N.G.1 eth0 / ethN"]
+    M1["N.M.1 virtio-net: parks, ledgers, freezes"]
+    M2["N.M.2 the ingress lane: parks, never freezes"]
+    T1p["N.T.1 the edge loop (see N2)"]
+    G1 --- M1
+    M1 ---|"edge fd, SEQPACKET"| T1p
+    T1p ---|"inbound frames"| M2
+    M2 -->|"release delivers"| G1
+```
+
+The valve has two postures and no third: closed and open. Closed
+is dark: no park, no ledger, no crossing, in either direction.
+`cella gateway open` opens into the membrane, never into a free
+flow. The posture is a file beside the machine; it survives stop,
+freeze, thaw, and restart.
+
+### The two automata
+
+The valve's record is N.F.1; the machine's freeze is N.M.1's act.
+
+```mermaid
+stateDiagram-v2
+    state "the valve (N.F.1, written by N.X.1)" as V {
+        closed --> open: cella gateway open
+        open --> closed: cella gateway close
+    }
+    state "the machine (frozen by N.M.1)" as A {
+        running --> frozen: its own egress parks
+        frozen --> running: thaw -- a fresh epoch,<br/>nothing inherited
+    }
+```
+
+The two automata are independent: a valve verb works against a
+frozen machine, and the posture survives freeze, thaw, stop, and
+restart. Closed drops at the membrane in both directions. Open
+parks everything: egress freezes the machine, ingress never does.
+
+Every egress frame parks by its most primitive name: (ethertype,
+destination MAC), refined to (ip, port, proto) when IPv4 parses.
+No frame is exempt -- ARP, IPv6, kernel chatter, any future
+protocol. The frames of one flow group into one operation with one
+UUIDv7 identifier, minted in the guest's frame.
+
+The park is the freeze:
+
+1. The VMM completes the TX batch in hand (the ring size bounds
+   the holds).
+2. It flushes the ledger.
+3. It freezes before the guest runs again.
+4. A release delivers the operation; a refusal lapses it
+   cleanly, and the park order advances.
+
+### The egress walk -- the machine's own action
+
+The identifiers are N1-N5's: the frame walks N.G.1 into N.M.1, and a
+release walks it out through N.T.1.
+
+```mermaid
+sequenceDiagram
+    participant G1 as N.G.1 guest
+    participant M1 as N.M.1 virtio-net
+    participant X1 as N.X.1 cella-gateway
+    participant T1 as N.T.1 / N.T.2 / N.T.3 translator
+    participant H as N.H.1-N.H.4 host sockets
+    G1->>M1: TX frame
+    Note over M1: valve (N.F.1) closed: the frame drops here.<br/>No park, no ledger, no freeze.
+    M1->>M1: park by primitive key,<br/>append the park to the ledger (N.F.3)
+    Note over M1: the park is the freeze:<br/>the TX batch completes, then stillness.
+    X1->>M1: release ID: append to the verdict (N.F.2),<br/>kick by SIGWINCH
+    M1->>T1: the frame, over the edge fd
+    alt world nic (N.T.2)
+        Note over T1: ARP and the gateway echo:<br/>answered inside N.T.2, never leaves it.
+        T1->>H: ICMP to N.H.1, UDP to N.H.2, TCP to N.H.3
+    else wire nic (N.T.3)
+        T1->>H: the frame crosses the wire socket (N.H.4)
+        Note over H: the peer's N.M.1 judges it again.
+    end
+```
 
 Nothing is inherited. A pass entry lives only in the running
-epoch; the rules evaluate atomically, from the canonical present,
-every time. A thaw starts a fresh epoch: traffic to a destination
-a past decision allowed parks again, and is decided again. Twins
-park and freeze identically, thus the ratchet is deterministic in
-the guest's frame. The adversarial spray cannot happen, because
-the sprayer freezes after its first batch: no operation cap
-exists, and none is needed. The flow: open -> park -> freeze ->
-the engine decides by id -> the thaw applies the decisions in park
-order -> the answers land.
+epoch. A thaw starts a fresh epoch: a destination a past decision
+allowed parks again and is decided again. Twins park and freeze
+identically; the ratchet is deterministic in the guest's frame.
 
-The membrane holds in both directions, for two different reasons:
+## The ingress lane
 
-- **Egress parks for decisions.** An outbound operation stops at
-  the appliance's world side. The frames of one flow group into
-  one operation with one identifier (UUIDv7, minted in the guest
-  frame; identifiers repeat across branched twins, thus the engine
-  keys on machine name plus identifier -- branch demands a unique
-  name, and the pair is unambiguous). A release delivers the
-  operation and installs the pass entry for its destination, for
-  the life of that epoch alone. A refusal answers the machine
-  cleanly, in-frame, instead of by timeout.
-- **Ingress waits for the frozen.** A machine may freeze while its
-  appliance stands. The appliance keeps holding, decisions stay
-  possible, and the answer waits at the membrane for delivery at
-  thaw. Freeze, grow the world by releasing, thaw into the answer.
-  With TCP ended at the appliance, the wait costs no memory: the
-  membrane stops reading its world side, and flow control makes
-  the sender hold the data.
+The world's knock is not the machine's own action. An inbound frame --
+a flow's reply, or a connection on a mapped port -- parks in the
+ingress lane, and the machine keeps running. The knock reaches a
+machine only through the port map its manifest names
+(`world:1709/tcp+1709/udp` maps host port 1709 to the guest).
 
-TCP ends at the appliance -- a hard stop. The machine's peer is
-always its appliance, in its own frame, thus a connection survives
-any freeze length; the world-side flows belong to the appliance,
-and it rebuilds them without the machine watching.
+Release is a live wire:
 
-**The world side carries TCP only.** UDP dies at the membrane: DNS
-is an appliance service (the machine resolves against its
-appliance in-frame; the appliance resolves upstream over TCP, and
-every resolution becomes a parkable operation on a name), NTP is
-dead by design (time comes from the frame), and QUIC falls back to
-TCP -- into the terminating membrane instead of around it. ICMP
-dies with UDP; diagnosis is host-side. The full law waits for the
-appliance; what the current seam already proves, from within the
-guest, is `make smoke-udp`: no datagram leaves undecided -- closed
-drops it, open parks it, a refusal delivers nothing.
+1. Against a running machine, the decision applies now, no thaw
+   needed.
+2. Against a frozen machine, it stages, and the thaw applies it
+   in park order.
+3. A frame that arrives while no VMM is attached is discarded at
+   the edge and counted, never buffered across the gap.
 
-TLS terminates at the membrane too (a later phase): the pair CA
-signs, the machine trusts its own CA from birth, and every
-application-layer timestamp becomes rewritable into the machine's
-frame at the one boundary.
+### The ingress walk -- the world's knock
+
+```mermaid
+sequenceDiagram
+    participant H as N.H.1-N.H.4 host sockets
+    participant T1 as N.T.1 / N.T.2 translator
+    participant M2 as N.M.2 ingress lane
+    participant X1 as N.X.1 cella-gateway
+    participant G1 as N.G.1 guest
+    H->>T1: a reply on a flow socket (N.H.1-N.H.2-N.H.4),<br/>or a knock on a mapped port (N.H.3)
+    Note over T1: no VMM attached (a frozen epoch):<br/>discarded at the edge, counted in edge.log (N.F.6).
+    T1->>M2: the frame, over the edge fd
+    M2->>M2: park in the ingress lane,<br/>append the park to the ledger (N.F.3)
+    Note over M2: the machine keeps running --<br/>the world's knock is not the machine's own action.
+    X1->>M2: release ID: a live wire --<br/>applies now, no thaw needed
+    M2->>G1: the frame lands
+```
 
 ## The control plane
 
-`cella gateway <name> <verb>` is the surface, its own thin CLI
-(cella-gateway, unprivileged: it acts on files and signals, thus
-it never lives in the capability binary -- cella-network keeps
-CAP_NET_ADMIN and the wiring verbs, nothing else):
+`cella gateway <name> <verb>` is the surface, its own thin CLI. It
+acts on files and signals alone: it writes the valve record, reads
+the ledger, and kicks the running VMM. It holds no capability, and
+neither does any other network binary.
 
-- `show` -- the held operations, one line each: identifier,
-  destination, age, frame count.
-- `release <id>` -- deliver one operation, and install its pass
-  entry.
-- `refuse <id>` -- lapse one operation, with its why; the park
-  order advances.
-- `open` / `close` -- the valve. Closed: nothing
-  goes in or out. Open is the membrane: egress parks for
-  decisions. No posture forwards freely.
+- `show [incoming|outgoing]` -- the held operations, one line
+  each: identifier, destination or source, age, state.
+- `release <id>` / `refuse <id>` -- decide one operation by id
+  prefix.
+- `open` / `close` -- the valve.
+- `inspect <id>` -- render a frozen hold's plaintext; the look is
+  witnessed in the chronicle. Judgment requires sight, and sight
+  requires stillness.
 
-The ledger lives at `machines/<name>/network/ledger`: an
-append-only chronicle of operations (parked, released, lapsed,
-timings, bytes). `show` reads it for the held set; `cella info`
-renders a network section from it (valve, counts, last RTT,
-average latency); branch and archive carry it with the tree -- a
-rock keeps its own phone records.
+**One language.** `proto/cella.proto` defines the vocabulary:
+Event (an operation parked, released, or lapsed), Operation (id,
+destination, both clocks), Decision, Valve, and `service Engine {
+rpc Preside(stream Event) returns (stream Decision) }`. The verbs
+speak it today; an engine that presides later speaks the same
+schema, and nothing gets rewritten. gRPC never enters a VMM.
 
-**One language.** `proto/cella.proto` defines the vocabulary, and
-every party speaks it: Message (the envelope on the control wire),
-Accord (the version handshake), Event (a ledger entry: Operation
-parked | Released | Lapsed), Operation (id, Destination, guest_ns,
-host_ns -- both clocks, thus the timeline rewrite needs no schema
-change), Decision (Release with allow_flow | Refusal), Valve
-(OPEN | CLOSED), and `service Engine { rpc Preside(stream Event)
-returns (stream Decision) }`.
+### N5 -- the control and lifecycle planes
 
-The transport layers under the language. Between the appliance's
-VMM and the membrane: length-delimited protobuf over a second
-serial line (ttyS1, gateway machines only, never a console -- the
-console noise of ttyS0 must not touch the framing). The VMM
-shuttles opaque bytes between the wire and the control files; it
-parses nothing, thus gRPC and protobuf never enter a VMM. Outside
-the TCB the same messages ride real gRPC: the engine presides over
-the identical schema. The gRPC here is the proof of the trade --
-the engine implements the service on the longer term, and nothing
-gets rewritten when it arrives: the appliance has spoken the
-engine's language since birth.
+Files and signals only. Neither binary holds a capability.
+
+```mermaid
+graph LR
+    X1["N.X.1 cella-gateway: show, release, refuse, open, close, inspect"]
+    L1["N.L.1 cella-machine: create, start, freeze, thaw, destroy"]
+    M1p["N.M.1 virtio-net (see N1)"]
+    T1p["N.T.1 the edge loop (see N2)"]
+    F14p["N.F.1, N.F.2, N.F.3 (see N4)"]
+    X1 --- F14p
+    X1 -->|"the kick: SIGWINCH"| M1p
+    L1 -->|"start spawns; destroy kills"| T1p
+    L1 -->|"spawns jailed; hands it the edge fds"| M1p
+```
 
 ## The invariant
 
-There exists no cella machine whose frames reach a host tap
-without an appliance between -- only appliances touch pool taps --
-and every machine is born closed. No posture forwards freely, no
-pass entry outlives its epoch, and no interface carries an
-unmanaged mode.
-
-## The phases
-
-1. **The thin CLI first.** proto/cella.proto, and cella-gateway
-   (show, release, open, close) over the hold/release that exists
-   today in the machine's own VMM, as a temporary backend behind
-   the final surface. No appliance yet. No regression.
-2. **The membrane moves.** The gateway kernel (netfilter, ttyS1)
-   and the membrane inside the appliance; `create` builds the pair
-   (network/, ca/ -- the CA is born at create so the machine's
-   trust store carries it from the first boot); the universe and
-   lifecycle verbs go pair-wide; the machine's own VMM keeps only
-   the raw hold primitive. No regression.
-3. **The terminator.** TCP ends at the membrane, TLS terminates
-   against the pair CA, and the timeline rewrite follows at the
-   same point.
+No cella process holds a capability, and no host network object of
+cella's exists -- no tap, no bridge, no NAT rule, no daemon. Every
+frame in both directions parks and is decided at the membrane.
+Every machine is born closed. No pass entry outlives its epoch,
+and no interface carries an unmanaged mode.
 
 ## The accepted costs
 
-- Two VMMs per machine, at every nesting depth; the batteries
-  boot pairs, and their runtime grows accordingly.
-- A second kernel flavor (gateway: canonical + netfilter) and a
-  second UART in the VMM, for gateway machines only.
-- The datapath crosses two synchronous VMMs; `cella info` renders
-  the cost per machine, permanently, from the ledger.
+- Every crossing is judged: the datapath costs a decision per
+  operation, and multi-cycle exchanges ride the peer's patience.
+- One translator process per machine, for the machine's life.
+- A forwarding topology (a gateway guest between wires) costs a
+  judged crossing at every membrane it traverses, deliberately.
 
-## Not in scope
+## Roadmap
 
-- Shared appliances: one appliance serves one machine, always --
-  branching demands it.
-- Guest-side control agents: control is files and signals on a VMM;
-  the membrane is dataplane.
-- Direct tap access for machines: removed from the surface, not
-  deprecated.
-- UDP, ICMP, and every non-TCP protocol on the world side.
+Cella ends as the enforcement primitive: every crossing named,
+held, decided by someone else, witnessed. The items below build on
+that primitive, in order, at the proto seam -- each one belongs to
+a presiding engine, not to cella.
+
+1. The engine: `service Engine` presides over the Event stream and
+   answers with Decisions -- the judge becomes a program.
+2. The appliance pair: a gateway machine between a member and the
+   world, judging as a resident.
+3. TCP termination at the appliance: the member's peer is always
+   its appliance, and world-side flows survive any freeze length.
+4. TLS against a pair CA: the appliance terminates, the member
+   trusts its own CA from birth.
+5. DNS as a service: resolution becomes a parkable operation on a
+   name.
+6. Ownership of peer patience: the presider manages what the
+   world's timeouts will bear.
+7. The timeline rewrite: application-layer timestamps translated
+   into the machine's frame at the one boundary.

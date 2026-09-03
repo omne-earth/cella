@@ -60,8 +60,8 @@ pub struct Net {
     parked_flag: bool,
     /// The inbound lane: frames the world pushed under an open
     /// valve, held for a decision. An incoming hold never freezes
-    /// the machine -- the world's knock is not the resident's deed
-    /// -- and in the guest frame an undelivered packet is network
+    /// the machine -- the world's knock is not the machine's own
+    /// action -- and in the guest frame an undelivered packet is network
     /// latency. Its own lane: park order advances per direction.
     inbound: Vec<InboundOp>,
     /// Bytes held across the inbound lane. Egress holds are bounded
@@ -167,7 +167,7 @@ impl Net {
     /// write. Then the TAP drains: under Closed every frame
     /// discards; under Open every frame parks in the inbound lane
     /// under its source's most primitive name -- the ear's customs.
-    /// No freeze: the world's knock is not the resident's deed.
+    /// No freeze: the world's knock is not the machine's own action.
     /// Called on a guest QueueNotify(0), on the TAP turning
     /// readable, and after an incoming decision applies.
     fn drain_rx(&mut self, mem: &GuestMemoryMmap, queue: &mut Queue) -> bool {

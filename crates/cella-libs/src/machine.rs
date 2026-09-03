@@ -56,7 +56,7 @@ pub struct Manifest {
     pub kernel: String,
     pub rootfs: String,
     pub mem_mb: u64,
-    /// A TAP device name, or "none".
+    /// The nic list ("none", "world[:PORTS]", "wire:NAME", comma-joined).
     pub net: String,
     /// "rw" or "ro".
     pub root: String,
@@ -502,9 +502,9 @@ fn cmdline_for(m: &Manifest) -> String {
             6 + 2 * i
         ));
     }
-    // The first tap configures eth0. A pool tap uses the pool
-    // convention; an agent-side pair tap (pair<n>a) uses the pair
-    // convention, with the gateway as the route to everything.
+    // The first nic configures eth0. A world nic gets the
+    // translator's convention (guest .2, gateway .1); a wire nic
+    // gets no ip= -- the guests address the wire themselves.
     let first = nics[0];
     if first.starts_with("world") {
         // The world nic's contract (1.6.14e rung 3): the pool

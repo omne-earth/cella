@@ -137,7 +137,7 @@ if [ "$MODE" != airgapped ]; then
     sleep 1
     B=$("$BIN" --dump-ledger "$CELLA_HOME/machines/outer/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true); knock; knock; sleep 3
     [ "$("$BIN" --dump-ledger "$CELLA_HOME/machines/outer/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true)" -gt "$B" ] && { echo "FAIL: an open machine answered without a decision"; exit 1; }
-    [ -f "$STATE" ] && { echo "FAIL: the outer machine froze on inbound -- the world's knock is not the resident's deed"; exit 1; }
+    [ -f "$STATE" ] && { echo "FAIL: the outer machine froze on inbound -- the world's knock is not the machine's own action"; exit 1; }
     "$BIN" gateway "$VM" show incoming | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show incoming lists no held knock"; exit 1; }
     echo "  the knock is held incoming; no freeze"
 
@@ -146,7 +146,7 @@ if [ "$MODE" != airgapped ]; then
     "$BIN" gateway "$VM" release "$ID_K" | grep -q "applies now" || { echo "FAIL: the incoming release did not apply live"; exit 1; }
     wait_frozen || { echo "FAIL: the guest's reply did not park and freeze"; exit 1; }
     "$BIN" gateway "$VM" show outgoing | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show outgoing lists no held reply"; exit 1; }
-    echo "  mail moved live; the resident's own deed froze the machine"
+    echo "  mail moved live; the machine's own egress froze it"
     knock_loop 30 & P4=$!
     pump_while "$P4"
     wait "$P4" || { echo "FAIL: no ICMP reply landed while the engine decided"; exit 1; }

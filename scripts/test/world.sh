@@ -186,7 +186,7 @@ until "$BIN" --dump-ledger "$LEDGER" 2>/dev/null | grep -q "dir=incoming ip=$HOS
     [ $SECONDS -lt $deadline ] || { echo "FAIL: the knock never parked incoming"; exit 1; }
     sleep 1
 done
-[ -f "$CELLA_HOME/machines/wo/state" ] && { echo "FAIL: the machine froze on a knock -- the world's knock is not the resident's deed"; exit 1; }
+[ -f "$CELLA_HOME/machines/wo/state" ] && { echo "FAIL: the machine froze on a knock -- the world's knock is not the machine's own action"; exit 1; }
 echo "  the knock stands in the ingress lane; the machine keeps running"
 kill "$KNOCK_PID" 2>/dev/null || true
 

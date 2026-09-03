@@ -14,15 +14,13 @@ mod tcp;
 mod world;
 
 fn main() {
-    // Hidden self-test hook for `make test-seccomp-network`. See
-    // seccomp.rs's module doc: the real verbs stay unconfined until
-    // 1.6.14e rewrites this persona's surface.
+    // Hidden self-test hook for `make test-seccomp-network`.
     if std::env::args().nth(1).as_deref() == Some("--selftest-seccomp") {
         seccomp::selftest_provoke_kill();
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    // The witnessed border: setup and pair are placeless verbs, and
-    // the wiring binary witnesses them like every other verb (the
+    // The witnessed border: edge is a placeless verb, and the
+    // translator binary witnesses it like every other verb (the
     // static gate of make test counts this door).
     if let Some(verb) = args.first() {
         if let Err(e) = cella_libs::audit::witness(None, verb, &args[1..]) {
@@ -47,9 +45,9 @@ fn main() {
             }
         }
         Some("--help") | Some("-h") => {
-            println!("cella-network -- the tap pool, without sudo");
-            println!("usage: cella-network setup [--taps N] [--from N] | pair --id N --via tap<n>");
-            println!("needs cap_net_admin (make install grants it) or root");
+            println!("cella-network -- the per-machine translator (no capability, no sudo)");
+            println!("usage: cella-network edge <vm>");
+            println!("spawned by the machine's start; destroy kills it by edge.pid");
             std::process::exit(0);
         }
         Some(other) => {

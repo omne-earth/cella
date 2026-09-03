@@ -203,7 +203,7 @@ tables above measure each one.
 ### 1. The ioctl prefill (KVM_PRE_FAULT_MEMORY)
 
 The thaw makes a new KVM VM with empty stage-2 tables, and the first
-heartbeat cycle of the guest paid one fault per touched page: ~25 ms
+heartbeat cycle of the guest cost one fault per touched page: ~25 ms
 of guest-visible lateness. The prefill fills the tables of the direct
 host before the clock restore, and the cost falls outside the clock
 window of the guest. This removed ~21 ms. It reaches one layer only:

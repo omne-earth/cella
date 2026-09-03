@@ -228,7 +228,7 @@ requires a decision, nothing stands, and the mouth closes.
       customs (ruled 2026-09-02): ingress
       under an open valve holds for a decision like egress does,
       with one asymmetry -- an incoming hold never freezes the
-      machine (the world's knock is not the resident's deed); the
+      machine (the world's knock is not the machine's own action); the
       frame waits at the border, and in the guest frame an
       undelivered packet is network latency. The show verb splits
       by direction: bare show renders both with a DIRECTION and a
@@ -512,7 +512,7 @@ requires a decision, nothing stands, and the mouth closes.
             listens on those host ports as the invoking user. An
             arrival becomes a frame on the VMM's edge and parks
             in the ingress lane like any knock: no freeze (the
-            world's knock is not the resident's deed), nothing
+            world's knock is not the machine's own action), nothing
             reaches the guest before a release, refuse drops it
             unseen, a closed valve drops it before the park, and
             the guest's answer parks on the way out. The port

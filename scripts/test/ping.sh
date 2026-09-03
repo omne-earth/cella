@@ -3,7 +3,7 @@
 # the ear's customs. A machine is born closed: a host ping fails,
 # and nothing freezes. Open arms both directions: the host's echo
 # request parks in the inbound lane -- and the machine keeps
-# running, because the world's knock is not the resident's deed.
+# running, because the world's knock is not the machine's own action.
 # Its release moves live (the ear's wire needs no thaw); the
 # guest's reply then parks in the egress lane, and that park is the
 # freeze. The pump decides both lanes, and a reply lands inside the
@@ -140,7 +140,7 @@ sleep 1
 # drain and parks nothing.
 B=$(outgoing_parks); knock; knock
 answered "$B" && { echo "FAIL: an open machine answered without a decision"; exit 1; }
-[ -f "$STATE" ] && { echo "FAIL: the machine froze on inbound -- the world's knock is not the resident's deed"; exit 1; }
+[ -f "$STATE" ] && { echo "FAIL: the machine froze on inbound -- the world's knock is not the machine's own action"; exit 1; }
 SHOW=$("$BIN" gateway "$VM" show incoming)
 echo "$SHOW" | sed "s/^/  /"
 echo "$SHOW" | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show incoming lists no held knock"; exit 1; }
@@ -152,7 +152,7 @@ ID_K=$("$BIN" gateway "$VM" show incoming | sed -n 's/^\([0-9a-f]\{32\}\) .*held
 "$BIN" gateway "$VM" release "$ID_K" | grep -q "applies now" || { echo "FAIL: the incoming release did not apply live"; exit 1; }
 wait_frozen || { echo "FAIL: the guest's reply did not park and freeze"; exit 1; }
 "$BIN" gateway "$VM" show outgoing | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show outgoing lists no held reply"; exit 1; }
-echo "  mail moved live; the resident's own deed froze the machine"
+echo "  mail moved live; the machine's own egress froze it"
 
 say "step 3: the engine decides, and a reply lands inside the ping's window"
 knock_loop 25 &

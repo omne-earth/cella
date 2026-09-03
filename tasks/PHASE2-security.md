@@ -131,8 +131,8 @@ lives in tasks/PHASE1-core.md.
 
 - [ ] 2.1 smoke-rootless asserts the installed shim exists and
       matches the build.
-- [ ] 2.2 docs/EXAMPLES.md notes that nested layers must use
-      distinct knock ports.
+- [x] 2.2 docs/EXAMPLES.md notes that nested layers must use
+      distinct knock ports (2026-09-03, the knockable example).
 - [ ] 2.3 cella selftest picks a random knock port (the gates
       already do; the selftest still pins 1709).
 
