@@ -82,6 +82,13 @@ EOT
 
 # The binary. A release build lands in ~/.local/bin, and PATH gains
 # the directory when absent. make install calls this script.
+# The workspace's own crates rebuild unconditionally: cargo trusts
+# mtimes, and a synced checkout (rsync keeps source times) under an
+# older target/ ships stale binaries with a 0.04s "Finished". The
+# dependency cache stays; only cella's crates are cleaned.
+for crate in $(sed -n 's/^name = "\(cella[a-z-]*\)"/\1/p' crates/*/Cargo.toml | sort -u); do
+    cargo clean --release -p "$crate" 2>/dev/null || true
+done
 cargo build --release
 # Every persona is its own binary since the split (1.6.13): the
 # shim routes, the personas own their verbs, and the shakedown
