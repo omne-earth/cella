@@ -34,6 +34,33 @@ lives in tasks/PHASE1-core.md.
       runs inside bwrap (spawned jailed by machine). The broker
       turns the profiles from shipped text into walls.
 
+- [ ] 1.6.14i The identity slice, finished (ruled 2026-09-03,
+      from the escape table: "if the agent escaped the VM, what
+      uid does it get"). Per-machine sub-uids landed in lane a;
+      what remains is everything that still lands as the
+      operator, and the map's inside face:
+      - [ ] The translator runs as the machine's sub-uid, never
+            as uid 1000. It is the one process that parses
+            attacker-influenced bytes for the machine's whole
+            life (every released frame, every wire and world
+            reply); today ensure_translator spawns it as the
+            invoking user. A jail is a view, not an identity:
+            this item is the uid, with or before the jail.
+      - [ ] The VMM's uid inside its namespace is not 0. The
+            spawn maps 0 -> sub-uid today (newuidmap child 0
+            target 1): namespace-root, a full in-namespace
+            capability set, against the no-uid0-in-a-jail
+            ruling. Map to an unprivileged inside uid.
+      - [ ] Supplementary groups drop at the spawn. The map
+            covers uid and gid; the parent's groups (kvm
+            included) must not survive into the jailed process.
+            One assertion in the identity gate.
+      - [ ] Persona sub-uids (ruled in the parallel session: no
+            uid outside is 1000): doctor, probe, and then every
+            persona runs as a fixed sub-uid from the top of the
+            delegated range, with per-purpose ACLs as its whole
+            authority, readable as data. On escape a persona
+            lands with its ACL slice, nothing of the operator's.
 - [ ] 1.6.14h The join (re-sequenced 2026-09-02): the join runs AFTER e
       and f -- the single measurement-and-enforcement pass
       against the final architecture, so no wall is measured
@@ -157,15 +184,13 @@ lives in tasks/PHASE1-core.md.
 
 
 
-- [ ] 2.5 Identity separation for the VMMs (claimed by 1.6.14, which picks and builds one option; granularity open until then).
-      Today the jail separates mounts, not identity: the same uid
-      maps into every user namespace, and any unjailed process of
-      the user touches every machine's files. Options, one to pick:
-      (a) one dedicated cella uid for all VMMs -- separates them
-      from the user's session; (b) per-VMM subuid ranges via the
-      user namespace map -- separates VMMs from each other too;
-      (c) SELinux MCS categories per VM (sVirt) on top of either.
-      Per-VMM is undecided.
+- [x] 2.5 Identity separation for the VMMs: option (b) was
+      picked and built by lane a (per-machine sub-uids from the
+      delegated range, allocated at first spawn, persisted in
+      the machine dir), with (c) -- MCS categories per VM --
+      landing at the join (deal-breaker 7). What the choice left
+      open moved to 1.6.14i: the inside face of the map, the
+      translator's uid, the personas, and the groups.
 - [ ] 2.6 The cella <-> engine protocol: a .proto for the verdict
       vocabulary; gRPC never enters a VMM (see NETWORK-MODEL.md,
       the control plane).
