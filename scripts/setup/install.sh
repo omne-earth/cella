@@ -93,6 +93,10 @@ cargo build --release
 # Every persona is its own binary since the split (1.6.13): the
 # shim routes, the personas own their verbs, and the shakedown
 # confines each inode. No binary carries a capability (1.6.14e).
+for name in cella cella-machine cella-vmm cella-gateway cella-universe cella-build cella-doctor cella-network cella-probe; do
+    install -D -m 0755 "target/release/$name" "$HOME/.local/bin/$name"
+done
+echo "cella: nine persona binaries installed (the shim routes; each owns its verbs)"
 
 # The network is rootless (1.6.14e): no capability, no unit, no
 # host object -- this install creates none. It also removes none:
