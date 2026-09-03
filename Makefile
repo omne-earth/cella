@@ -21,7 +21,7 @@ BUSYBOX_VERSION ?= 1.37.0
 GUEST_BASH_VERSION ?= 5.3
 export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 
-.PHONY: help build build-smoke install debug smoke-delta check lint fmt fmt-check \
+.PHONY: help build build-smoke install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested  \
         boot enter freeze thaw remove doctor \
@@ -332,10 +332,6 @@ smoke-wire: build-smoke golden ## The wire plane (1.6.14e): two machines, one wi
 smoke-world: build-smoke golden ## The world plane, stateless half (1.6.14e): --net world -- ARP and gateway echo at the edge, ICMP/UDP through sockets, replies park incoming
 	$(LOG)
 	$(SCRIPTS)/test/world.sh
-
-smoke-delta: ## Rerun only the targets that errored in a prior smoke log: make smoke-delta SMOKE_LOG=<file> (default: newest .logs/*smoke*.log)
-	$(LOG)
-	$(SCRIPTS)/utils/smoke-delta.sh $(SMOKE_LOG)
 
 smoke-rootless: build ## The rootless sweep (1.6.14e): no capability on any cella binary, no tap, bridge, or nft table of cella's on the host, no boot unit
 	$(LOG)
