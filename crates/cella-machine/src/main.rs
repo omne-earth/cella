@@ -3,6 +3,7 @@
 //! verbs and nothing else (1.6.13); the lifecycle core lives in
 //! cella-libs (the universe's inspect is its other user).
 
+mod seccomp;
 mod selftest;
 
 use cella_libs::machine;
@@ -35,6 +36,10 @@ fn main() {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    // Hidden self-test hook for `make test-seccomp-machine`.
+    if argv.first().map(String::as_str) == Some("--selftest-seccomp") {
+        seccomp::selftest_provoke_kill();
+    }
     let Some(verb) = argv.first().cloned() else {
         usage_error(&format!("usage: cella-machine <{}> ...", VERBS.join("|")))
     };
@@ -44,6 +49,12 @@ fn main() {
             "cella-machine does not own the verb {verb:?} -- its verbs: {}",
             VERBS.join(", ")
         ));
+    }
+    // start/thaw/selftest fork the bwrap+cella-vmm process tree, which
+    // installs its own filter downstream (see seccomp.rs's module
+    // doc) -- everything else is safe to confine here.
+    if seccomp::SAFE_VERBS.contains(&verb.as_str()) {
+        seccomp::install().unwrap_or_else(|e| fatal(&format!("seccomp: {e}")));
     }
     // The witnessed border: every verb is an event, before it runs
     // (1.6.11; the static gate counts one door per persona).

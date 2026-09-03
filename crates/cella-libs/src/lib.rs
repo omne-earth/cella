@@ -26,3 +26,6 @@ pub mod machine;
 
 #[cfg(feature = "jail")]
 pub mod jail;
+
+#[cfg(feature = "seccomp")]
+pub mod seccomp;

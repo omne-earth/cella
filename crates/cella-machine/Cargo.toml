@@ -9,6 +9,6 @@ name = "cella-machine"
 path = "src/main.rs"
 
 [dependencies]
-cella-libs = { workspace = true, features = ["machine", "audit"] }
+cella-libs = { workspace = true, features = ["machine", "audit", "seccomp"] }
 cella-doctor = { path = "../cella-doctor" }
 libc = { workspace = true }

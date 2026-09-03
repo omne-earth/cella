@@ -156,6 +156,12 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("--selftest-seccomp") {
         seccomp::selftest_provoke_kill();
     }
+    // Hidden self-test hook for `make test-seccomp-vmm-kvm`: install
+    // the real filter and trip the KVM ioctl request filter alone
+    // (a request outside the KVM_* table, not an unlisted syscall).
+    if std::env::args().nth(1).as_deref() == Some("--selftest-seccomp-kvm-ioctl") {
+        seccomp::selftest_provoke_ioctl_kill();
+    }
 
     // The shell scripts build their own command line, because they add
     // the root filesystem and the virtio devices. They read the defaults

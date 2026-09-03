@@ -1,6 +1,7 @@
 //! cella-universe: machines as artifacts -- branch, archive,
 //! inspect. Running is the only state a universe verb refuses.
 
+mod seccomp;
 mod universe;
 
 const VERBS: &[&str] = &["branch", "archive", "inspect"];
@@ -16,10 +17,24 @@ fn usage_error(msg: &str) -> ! {
 }
 
 fn main() {
+    // Hidden self-test hook for `make test-seccomp-universe`.
+    if std::env::args().nth(1).as_deref() == Some("--selftest-seccomp") {
+        seccomp::selftest_provoke_kill();
+    }
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(verb) = argv.first().cloned() else {
         usage_error("usage: cella-universe <branch|archive|inspect> ...")
     };
+    // inspect runs unconfined at this layer (1.6.14b): it starts its
+    // throwaway appliance through machine::start, whose spawn needs
+    // newuidmap -- a setuid helper that no_new_privs (mandatory for
+    // an unprivileged filter) forbids from elevating. Same physics
+    // as cella-machine's start/thaw; the appliance VMM's own filter
+    // bounds the sensitive work, and the join's confine-after-fork
+    // closes this layer too (deal-breaker 3).
+    if verb != "inspect" {
+        seccomp::install().unwrap_or_else(|e| fatal(&format!("seccomp: {e}")));
+    }
     if !VERBS.contains(&verb.as_str()) {
         usage_error(&format!(
             "cella-universe does not own the verb {verb:?} -- its verbs: {}",

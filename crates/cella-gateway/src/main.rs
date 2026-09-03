@@ -3,6 +3,7 @@
 //! machine's own directory, never a capability, never an exec.
 
 mod gateway;
+mod seccomp;
 
 fn usage_error(msg: &str) -> ! {
     eprintln!("{msg}");
@@ -15,6 +16,11 @@ fn fatal(msg: &str) -> ! {
 }
 
 fn main() {
+    // Hidden self-test hook for `make test-seccomp-gateway`.
+    if std::env::args().nth(1).as_deref() == Some("--selftest-seccomp") {
+        seccomp::selftest_provoke_kill();
+    }
+    seccomp::install().unwrap_or_else(|e| fatal(&format!("seccomp: {e}")));
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let usage = "usage: cella gateway <vm> <show [incoming|outgoing] [--all] | release <id> | refuse <id> [--why TEXT] | inspect <id> | open | close>";
     let (Some(vm), Some(verb)) = (argv.first(), argv.get(1)) else {

@@ -1,36 +1,69 @@
-//! Seccomp, hand-rolled.
+//! cella-vmm's seccomp allowlist (1.6.14b): the run loop's own
+//! syscalls, plus the exact KVM ioctl request numbers it issues once
+//! the filter is live. The BPF builder and installer live in
+//! `cella_libs::seccomp`; this module owns only the table and the
+//! comment naming who needs each entry, same discipline as before
+//! the split.
 //!
-//! No JSON, no seccompiler crate: this is small enough (one syscall-number
-//! allowlist, no argument filtering) to write directly as classic BPF and
-//! install with `prctl(PR_SET_SECCOMP)`.
-//!
-//! The list below is the steady-state set, applied once right before the
-//! run loop -- after every file has been opened and every KVM object has
-//! been created. It's wider than "just KVM_RUN" because freeze can happen
-//! at any point during the loop (in response to SIGUSR1) and needs
-//! ordinary filesystem syscalls to write the sidecar file. Each entry is
-//! commented with why it's there; if you can explain why a syscall is
-//! present, it's a candidate for tightening (e.g. filtering `ioctl` on
-//! `args[1]` to the exact KVM request codes this VMM issues).
+//! The filter installs once, right before the run loop -- after
+//! every file has been opened and every KVM object has been created
+//! (see `main::main`). Everything before that point (KVM_CREATE_VM,
+//! KVM_CREATE_VCPU, KVM_SET_USER_MEMORY_REGION, cpuid/sregs setup,
+//! the tap's TUNSETIFF, KVM_PRE_FAULT_MEMORY, and on a thaw the
+//! KVM_SET_* restore calls) runs unfiltered by this list -- the bwrap
+//! jail is the boundary there. From install() onward the run loop
+//! issues exactly two things on `ioctl`: KVM_RUN, every pass, and --
+//! only on the freeze path -- the KVM_GET_* calls that read the
+//! vCPU's live state into the freeze image. Nothing else calls
+//! `ioctl` after this point, so the KVM ioctl filter's request table
+//! is also the freeze path's complete inventory.
 
+use cella_libs::seccomp::Entry;
+use kvm_bindings::{
+    kvm_clock_data, kvm_fpu, kvm_irq_level, kvm_irqchip, kvm_lapic_state, kvm_mp_state, kvm_msrs,
+    kvm_pit_state2, kvm_regs, kvm_sregs, kvm_vcpu_events, kvm_xcrs, kvm_xsave,
+};
 use std::io;
+use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
-const BPF_LD: u16 = 0x00;
-const BPF_W: u16 = 0x00;
-const BPF_ABS: u16 = 0x20;
-const BPF_JMP: u16 = 0x05;
-const BPF_JEQ: u16 = 0x10;
-const BPF_K: u16 = 0x00;
-const BPF_RET: u16 = 0x06;
+const KVMIO: std::os::raw::c_uint = 0xAE;
 
-const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
-const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
+// Redeclared locally rather than imported: kvm-ioctls keeps its own
+// copies of these private (it calls them from inside VcpuFd/VmFd
+// methods, never returns the raw numbers). Same macro, same type,
+// same nr -- the value this crate computes is the value kvm-ioctls's
+// own call already used; nothing here is a guess.
+ioctl_io_nr!(KVM_RUN, KVMIO, 0x80);
+ioctl_ior_nr!(KVM_GET_REGS, KVMIO, 0x81, kvm_regs);
+ioctl_ior_nr!(KVM_GET_SREGS, KVMIO, 0x83, kvm_sregs);
+ioctl_iowr_nr!(KVM_GET_MSRS, KVMIO, 0x88, kvm_msrs);
+ioctl_ior_nr!(KVM_GET_FPU, KVMIO, 0x8c, kvm_fpu);
+ioctl_ior_nr!(KVM_GET_MP_STATE, KVMIO, 0x98, kvm_mp_state);
+ioctl_ior_nr!(KVM_GET_VCPU_EVENTS, KVMIO, 0x9f, kvm_vcpu_events);
+ioctl_ior_nr!(KVM_GET_XSAVE, KVMIO, 0xa4, kvm_xsave);
+ioctl_ior_nr!(KVM_GET_XCRS, KVMIO, 0xa6, kvm_xcrs);
+ioctl_io_nr!(KVM_GET_TSC_KHZ, KVMIO, 0xa3);
+ioctl_iowr_nr!(KVM_GET_IRQCHIP, KVMIO, 0x62, kvm_irqchip);
+ioctl_ior_nr!(KVM_GET_LAPIC, KVMIO, 0x8e, kvm_lapic_state);
+ioctl_ior_nr!(KVM_GET_PIT2, KVMIO, 0x9f, kvm_pit_state2);
+ioctl_ior_nr!(KVM_GET_CLOCK, KVMIO, 0x7c, kvm_clock_data);
+ioctl_iow_nr!(KVM_IRQ_LINE, KVMIO, 0x61, kvm_irq_level);
+// KVM_GET_NESTED_STATE has no fixed-size struct (it's a FAM, sized by
+// the caller's buffer) and is not encoded by these macros anywhere in
+// kvm-ioctls or kvm-bindings either; vcpu.rs already carries its raw
+// number (0xc080_aebe, taken from the kernel header) for the same
+// reason. Kept here as a plain constant so both sides of this filter
+// read from one inventory.
+const KVM_GET_NESTED_STATE_NR: u32 = 0xc080_aebe;
 
-// x86_64 syscall numbers (from arch/x86/entry/syscalls/syscall_64.tbl).
-// Hardcoded rather than pulled from a crate: there are ~25 of them and
-// they are part of the stable x86_64 ABI.
+/// The run loop's syscall allowlist (steady-state, applied once).
+/// Wider than "just KVM_RUN" because freeze can happen at any point
+/// (in response to SIGUSR1) and needs ordinary filesystem syscalls to
+/// write the sidecar file. Each entry is commented with why it's
+/// there; if you can't explain why a syscall is present, it's a
+/// candidate for tightening.
 #[rustfmt::skip]
-const ALLOWED: &[(u32, &str)] = &[
+pub const ALLOWED: &[Entry] = &[
     (0,   "read: serial input path, tap RX"),
     (7,   "poll: tap RX readiness check after each VM exit (poll_net_rx)"),
     (1,   "write: serial output, tap TX"),
@@ -46,7 +79,7 @@ const ALLOWED: &[(u32, &str)] = &[
     (14,  "rt_sigprocmask: signal mask save/restore around handler install"),
     (15,  "rt_sigreturn: returning from the freeze-request signal handler"),
     (131, "sigaltstack: glibc/Rust runtime thread teardown when exiting after a freeze"),
-    (16,  "ioctl: every KVM_* and the one-time TUNSETIFF"),
+    (cella_libs::seccomp::SYS_IOCTL, "ioctl: KVM_RUN and the freeze path's KVM_GET_* only -- see KVM_IOCTL_REQUESTS"),
     (17,  "pread64: virtio-blk reads"),
     (18,  "pwrite64: virtio-blk writes"),
     (21,  "access: std::fs path checks on some libc versions"),
@@ -77,193 +110,145 @@ const ALLOWED: &[(u32, &str)] = &[
     (82,  "rename: atomic state.tmp -> state"),
     (87,  "unlink: finalize_thaw removing the one-shot state file, on some libc versions"),
     (263, "unlinkat: finalize_thaw removing the one-shot state file"),
+    (74,  "fsync: state file and freeze-image directory durability"),
+    // The chain (1.6.14d) reaches the run loop: every ledger event
+    // appends through append_chained, which flocks the book and
+    // reads the last entry before it writes the next link. Without
+    // this entry the first park kills the VMM -- the cross-lane
+    // leak the merge order exists to catch, caught.
+    (73,  "flock: ledger::append_chained's exclusive lock on the event book"),
+    (268, "fchmodat: the lab console socket's group bits (0770) after bind -- the ACL mask fix of 1.6.14a; dead code in the field flavor, whose console does not exist"),
+    (26,  "msync: guest RAM durability before the state sidecar is written"),
 ];
-const SYNC_SYSCALLS: &[(u32, &str)] = &[
-    (
-        74,
-        "fsync: state file and freeze-image directory durability",
-    ),
-    (
-        26,
-        "msync: guest RAM durability before the state sidecar is written",
-    ),
-];
+
+/// The exact KVM ioctl request numbers the run loop issues once this
+/// filter is live: KVM_RUN every pass, and the freeze path's KVM_GET_*
+/// reads of the live vCPU/VM state (see the module doc for the full
+/// accounting -- everything KVM-shaped that happens earlier runs
+/// before install() and is outside this table by construction).
+/// Anything else on `ioctl` -- any other KVM request, and definitely
+/// anything not KVM at all -- kills the process (the gvisor shape,
+/// stricter than allowing the syscall outright).
+pub fn kvm_ioctl_requests() -> Vec<Entry> {
+    vec![
+        (KVM_RUN() as u32, "KVM_RUN: every pass of the run loop"),
+        (
+            KVM_IRQ_LINE() as u32,
+            "KVM_IRQ_LINE: every device interrupt -- serial output and \
+             virtio kicks raise legacy IRQs through VmFd::set_irq_line \
+             on each run-loop pass (mmio.rs, serial.rs); the first \
+             guest boot line dies without it",
+        ),
+        (
+            KVM_GET_REGS() as u32,
+            "KVM_GET_REGS: do_freeze -> vcpu::save",
+        ),
+        (
+            KVM_GET_SREGS() as u32,
+            "KVM_GET_SREGS: do_freeze -> vcpu::save",
+        ),
+        (
+            KVM_GET_MSRS() as u32,
+            "KVM_GET_MSRS: do_freeze -> vcpu::save, and vcpu::save_nested_msrs",
+        ),
+        (KVM_GET_FPU() as u32, "KVM_GET_FPU: do_freeze -> vcpu::save"),
+        (
+            KVM_GET_MP_STATE() as u32,
+            "KVM_GET_MP_STATE: do_freeze -> vcpu::save",
+        ),
+        (
+            KVM_GET_VCPU_EVENTS() as u32,
+            "KVM_GET_VCPU_EVENTS: do_freeze -> vcpu::save",
+        ),
+        (
+            KVM_GET_XSAVE() as u32,
+            "KVM_GET_XSAVE: do_freeze -> vcpu::save",
+        ),
+        (
+            KVM_GET_XCRS() as u32,
+            "KVM_GET_XCRS: do_freeze -> vcpu::save",
+        ),
+        (
+            KVM_GET_TSC_KHZ() as u32,
+            "KVM_GET_TSC_KHZ: do_freeze reads vcpu_fd.get_tsc_khz()",
+        ),
+        (
+            0x5421,
+            "FIONBIO: std's set_nonblocking on an accepted console \
+             client (main.rs, after accept4) issues this ioctl, not \
+             fcntl. The one non-KVM request in the table, and it \
+             exists only in the lab flavor -- the field VMM has no \
+             console listener to accept on. strace-proven 2026-09-02.",
+        ),
+        (
+            KVM_GET_LAPIC() as u32,
+            "KVM_GET_LAPIC: do_freeze -> vcpu::save (the local APIC state; strace-proven 2026-09-02)",
+        ),
+        (
+            KVM_GET_IRQCHIP() as u32,
+            "KVM_GET_IRQCHIP: do_freeze -> vcpu::save_irqchip",
+        ),
+        (
+            KVM_GET_PIT2() as u32,
+            "KVM_GET_PIT2: do_freeze -> vcpu::save_irqchip",
+        ),
+        (
+            KVM_GET_CLOCK() as u32,
+            "KVM_GET_CLOCK: do_freeze -> vcpu::save_vm_clock",
+        ),
+        (
+            KVM_GET_NESTED_STATE_NR,
+            "KVM_GET_NESTED_STATE: do_freeze -> vcpu::save_nested, a raw ioctl (FAM struct, no fixed size)",
+        ),
+    ]
+}
 
 pub fn install() -> io::Result<()> {
-    let mut allowed: Vec<u32> = ALLOWED.iter().map(|(n, _)| *n).collect();
-    allowed.extend(SYNC_SYSCALLS.iter().map(|(n, _)| *n));
-
-    let n = allowed.len();
-    let mut prog: Vec<libc::sock_filter> = Vec::with_capacity(n + 3);
-    prog.push(stmt(BPF_LD | BPF_W | BPF_ABS, 0)); // offsetof(seccomp_data, nr) == 0
-
-    for (i, sysno) in allowed.iter().enumerate() {
-        let jt = (n - i) as u8; // distance to the ALLOW instruction
-        prog.push(jump(BPF_JMP | BPF_JEQ | BPF_K, *sysno, jt, 0));
-    }
-    prog.push(stmt_ret(SECCOMP_RET_KILL_PROCESS));
-    prog.push(stmt_ret(SECCOMP_RET_ALLOW));
-
-    let fprog = libc::sock_fprog {
-        len: prog.len() as u16,
-        filter: prog.as_mut_ptr(),
-    };
-
-    // SAFETY: `fprog` points at `prog`, which is alive until this
-    // function returns; prctl copies it into the kernel synchronously.
-    unsafe {
-        if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if libc::prctl(
-            libc::PR_SET_SECCOMP,
-            libc::SECCOMP_MODE_FILTER,
-            &fprog as *const _,
-        ) != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-    }
-    Ok(())
+    let requests = kvm_ioctl_requests();
+    cella_libs::seccomp::install(ALLOWED, Some(&requests))
 }
 
-fn stmt(code: u16, k: u32) -> libc::sock_filter {
-    libc::sock_filter {
-        code,
-        jt: 0,
-        jf: 0,
-        k,
-    }
-}
-fn stmt_ret(k: u32) -> libc::sock_filter {
-    libc::sock_filter {
-        code: BPF_RET | BPF_K,
-        jt: 0,
-        jf: 0,
-        k,
-    }
-}
-fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
-    libc::sock_filter { code, jt, jf, k }
-}
-
-/// Self-test hook used by `make test-seccomp`: install the real filter,
-/// then deliberately make a disallowed syscall (`socket(2)`, not in
-/// `ALLOWED`). If the filter is wired correctly, the kernel kills this
-/// process with SIGSYS before `socket()` returns -- so the *expected*
-/// outcome of calling this function is that it never returns. A test
-/// harness runs this as a subprocess and asserts on the signal, not the
-/// exit code.
+/// Self-test hook used by `make test-seccomp`: see
+/// `cella_libs::seccomp::selftest_provoke_kill`.
 pub fn selftest_provoke_kill() -> ! {
-    install().expect("installing seccomp filter for selftest");
-    // SAFETY: deliberately calling a forbidden syscall to verify the
-    // filter kills us. socket() takes plain integer arguments; nothing
-    // here can be unsound, only refused by the kernel.
-    unsafe {
-        libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
-    }
-    // Only reachable if the filter failed to kill us -- exit distinctly
-    // from a normal 0/1 so the harness can tell "filter didn't fire"
-    // apart from an unrelated crash.
-    std::process::exit(42);
+    let requests = kvm_ioctl_requests();
+    cella_libs::seccomp::selftest_provoke_kill(ALLOWED, Some(&requests))
+}
+
+/// Self-test hook for the KVM ioctl filter alone: proves a request
+/// outside the KVM_* table above kills the process even though
+/// `ioctl` itself is allowed. Used by `make test-seccomp-vmm-kvm`.
+pub fn selftest_provoke_ioctl_kill() -> ! {
+    let requests = kvm_ioctl_requests();
+    cella_libs::seccomp::selftest_provoke_ioctl_kill(ALLOWED, &requests)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
-    /// The BPF program itself: every syscall we claim to allow must
-    /// resolve to the ALLOW instruction, and the jump distances must
-    /// land exactly on it (an off-by-one here means either an allowed
-    /// syscall falls through to KILL, or -- worse -- lands on the wrong
-    /// instruction and silently permits something unintended). We can't
-    /// install the real filter in a unit test (it would nuke the test
-    /// process's own ability to do I/O), so this interprets the BPF
-    /// program logically instead, the same way the kernel would.
-    fn build_program() -> Vec<libc::sock_filter> {
-        let mut allowed: Vec<u32> = ALLOWED.iter().map(|(n, _)| *n).collect();
-        allowed.extend(SYNC_SYSCALLS.iter().map(|(n, _)| *n));
-        let n = allowed.len();
-        let mut prog = Vec::with_capacity(n + 3);
-        prog.push(stmt(BPF_LD | BPF_W | BPF_ABS, 0));
-        for (i, sysno) in allowed.iter().enumerate() {
-            prog.push(jump(BPF_JMP | BPF_JEQ | BPF_K, *sysno, (n - i) as u8, 0));
-        }
-        prog.push(stmt_ret(SECCOMP_RET_KILL_PROCESS));
-        prog.push(stmt_ret(SECCOMP_RET_ALLOW));
-        prog
-    }
-
-    /// Minimal classic-BPF interpreter covering exactly the instruction
-    /// shapes this program uses (load nr, jeq, ret). Not a general BPF
-    /// VM -- just enough to check "does syscall N resolve to ALLOW."
-    fn eval(prog: &[libc::sock_filter], syscall_nr: u32) -> u32 {
-        let mut pc = 0usize;
-        let mut acc = 0u32;
-        loop {
-            let ins = prog[pc];
-            let class = ins.code & 0x07;
-            match class {
-                0x00 => acc = syscall_nr, // BPF_LD (we only ever load nr)
-                0x05 => {
-                    // BPF_JMP: only BPF_JEQ|BPF_K is used here.
-                    pc += 1 + if acc == ins.k {
-                        ins.jt as usize
-                    } else {
-                        ins.jf as usize
-                    };
-                    continue;
-                }
-                0x06 => return ins.k, // BPF_RET
-                _ => unreachable!("test interpreter doesn't model this instruction class"),
-            }
-            pc += 1;
-        }
+    #[test]
+    fn no_duplicate_syscalls_in_allowed() {
+        let all: Vec<u32> = ALLOWED.iter().map(|(n, _)| *n).collect();
+        let unique: HashSet<u32> = all.iter().copied().collect();
+        assert_eq!(all.len(), unique.len(), "duplicate syscall in ALLOWED");
     }
 
     #[test]
-    fn every_allowed_syscall_resolves_to_allow() {
-        let prog = build_program();
-        let mut all = ALLOWED.iter().map(|(n, _)| *n).collect::<Vec<_>>();
-        all.extend(SYNC_SYSCALLS.iter().map(|(n, _)| *n));
-        for sysno in all {
-            assert_eq!(
-                eval(&prog, sysno),
-                SECCOMP_RET_ALLOW,
-                "syscall {sysno} should resolve to ALLOW"
-            );
-        }
+    fn no_duplicate_kvm_requests() {
+        let requests = kvm_ioctl_requests();
+        let all: Vec<u32> = requests.iter().map(|(n, _)| *n).collect();
+        let unique: HashSet<u32> = all.iter().copied().collect();
+        assert_eq!(all.len(), unique.len(), "duplicate KVM ioctl request");
     }
 
+    /// KVM_RUN itself has no direction bits (it's a plain _IO), so
+    /// it must not collide with a syscall number or with 0 by
+    /// accident -- a sanity floor, not a real risk given how these
+    /// constants are computed, but cheap to assert.
     #[test]
-    fn unlisted_syscalls_resolve_to_kill() {
-        let prog = build_program();
-        let allowed: std::collections::HashSet<u32> = ALLOWED
-            .iter()
-            .chain(SYNC_SYSCALLS.iter())
-            .map(|(n, _)| *n)
-            .collect();
-        // A sample spanning the syscall table, deliberately including
-        // execve/ptrace/socket -- the ones a jail most needs to deny.
-        for sysno in [2u32, 41, 49, 56, 57, 59, 101, 165, 175, 435] {
-            assert!(!allowed.contains(&sysno), "test sample overlaps ALLOWED");
-            assert_eq!(
-                eval(&prog, sysno),
-                SECCOMP_RET_KILL_PROCESS,
-                "syscall {sysno} should resolve to KILL"
-            );
-        }
-    }
-
-    #[test]
-    fn no_duplicate_or_conflicting_entries() {
-        let mut all = ALLOWED.iter().map(|(n, _)| *n).collect::<Vec<_>>();
-        all.extend(SYNC_SYSCALLS.iter().map(|(n, _)| *n));
-        let unique: std::collections::HashSet<u32> = all.iter().copied().collect();
-        assert_eq!(
-            all.len(),
-            unique.len(),
-            "duplicate syscall number in the allowlist (harmless but a sign of a copy/paste error)"
-        );
+    fn kvm_run_is_nonzero() {
+        assert_ne!(KVM_RUN(), 0);
     }
 }

@@ -9,5 +9,5 @@ name = "cella-universe"
 path = "src/main.rs"
 
 [dependencies]
-cella-libs = { workspace = true, features = ["machine", "audit"] }
+cella-libs = { workspace = true, features = ["machine", "audit", "seccomp"] }
 libc = { workspace = true }

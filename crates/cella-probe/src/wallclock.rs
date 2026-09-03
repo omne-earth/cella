@@ -330,7 +330,10 @@ pub fn run() {
         .arg("--disk")
         .arg(&disk_copy)
         .arg("--tap")
-        .arg(&tap)
+        .arg({
+            crate::claim_tap(&tap);
+            &tap
+        })
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")

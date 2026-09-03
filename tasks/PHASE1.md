@@ -367,7 +367,7 @@ requires a decision, nothing stands, and the mouth closes.
             in cella-libs). Lane gate: a cross-machine file touch
             fails by uid before SELinux exists to deny it, and a
             persona runs under its own profile alone.
-      - [ ] 1.6.14b Seccomp, per binary. Each persona's allowlist
+      - [x] 1.6.14b Seccomp, per binary. Each persona's allowlist
             shrinks to its own verbs' needs; the VMM's shrinks to
             the run loop, and the ioctl filter lands: the exact
             KVM request numbers, anything else kills -- the
@@ -871,3 +871,52 @@ cella-network and cella-probe are real binaries -- a file
 capability binds to an inode, and only that inode may hold it. The
 lib crate stands in for cella-libs until a workspace split earns
 its keep.
+
+# NOTES
+
+Out-of-normal acts performed to get the batteries green, kept as
+tabs -- the bwrap task (1.6.14f), the rootless network (1.6.14e),
+and the join should each read this list before building.
+
+- no_new_privs strips file capabilities on exec (found 2026-09-02):
+  a seccomp-confined verb cannot usefully exec cella-network -- the
+  child arrives capless. Consequence: the tap handback at
+  stop/destroy was REMOVED; ownership follows the claim alone
+  (start re-owns; the probe claims via claim_tap before spawning
+  its VMM). The broker shim (f) is immune -- it installs no filter
+  of its own -- and e retires the file capability entirely.
+- FIONBIO (0x5421) sits in the VMM's KVM ioctl request table: std's
+  set_nonblocking on an accepted console client issues an ioctl,
+  not fcntl. Lab flavor only (the field has no console listener).
+  A code alternative (raw fcntl on the accepted fd) would let the
+  table return to pure KVM; take it or keep the entry, at f.
+- universe's inspect and machine's start/thaw run seccomp-unconfined
+  at the verb layer: no_new_privs forbids the spawn's newuidmap
+  from elevating. Closed by the join's confine-after-fork
+  (deal-breaker 3); until then the appliance VMM's own filter
+  bounds the sensitive work.
+- The pool's boot unit is a systemd USER unit with linger, running
+  as the operator: a system service runs in init_t, the installed
+  binary carries no SELinux exec type yet, and enforcement denied
+  both the exec and the witness's book append (AVCs of
+  2026-09-02, filed by 1.6.11's own mechanism). The join returns
+  it to a system unit in cella_network_t (deal-breaker 8).
+- docker's boot-time FORWARD drop empties DOCKER-USER of the
+  install's runtime tap rules: after a reboot, forwarded guest
+  traffic dies with ICMP unreachables from the host (AC5 red,
+  2026-09-02) until `nft insert rule ip filter DOCKER-USER
+  iifname/oifname "tap*" accept` is re-run by hand. Retires at e
+  with forwarding itself; until then, a rebooted host needs the
+  two rules re-added (or a fresh make install).
+- Machine directories carry default POSIX ACLs so files born of
+  either side (the invoker's verbs, the machine's sub-uid VMM)
+  grant both; the VMM widens its console socket to 0770 because a
+  file's ACL mask is its group bits and bind()'s 0755 clipped the
+  invoker's entry below connect(2). Any new file-creating surface
+  in a machine dir inherits this automatically -- but a new socket
+  or 0600-created file will hit the same mask wall.
+- Lane hygiene is host-global: one lane's in-protocol
+  `pkill -9 -x cella-vmm` and tap re-owns killed the reviewer's
+  concurrent battery (2026-09-02). On a shared host, ANY
+  KVM-touching or process-killing step waits for a quiet host --
+  the serialization clause covers hygiene, not just batteries.

@@ -4,3 +4,4 @@
 
 pub mod flags;
 pub mod orchestrate;
+pub mod seccomp;

@@ -10,7 +10,7 @@ name = "cella-probe"
 path = "src/main.rs"
 
 [dependencies]
-cella-libs = { workspace = true, features = ["machine", "audit"] }
+cella-libs = { workspace = true, features = ["machine", "audit", "seccomp"] }
 libc = { workspace = true }
 kvm-ioctls = { workspace = true }
 kvm-bindings = { workspace = true }

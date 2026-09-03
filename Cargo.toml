@@ -33,6 +33,7 @@ vm-memory = { version = "0.16", features = ["backend-mmap"] }
 linux-loader = { version = "0.13", features = ["bzimage", "elf"] }
 vm-superio = "0.8"
 virtio-queue = "0.14"
+vmm-sys-util = "0.12"
 sha3 = "0.10"
 sha2 = "0.10"
 prost = "0.13"

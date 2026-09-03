@@ -17,10 +17,11 @@ name = "cella-vmm"
 path = "src/main.rs"
 
 [dependencies]
-cella-libs = { workspace = true, features = ["wire", "sidecar"] }
+cella-libs = { workspace = true, features = ["wire", "sidecar", "seccomp"] }
 libc = { workspace = true }
 kvm-ioctls = { workspace = true }
 kvm-bindings = { workspace = true }
+vmm-sys-util = { workspace = true }
 vm-memory = { workspace = true }
 linux-loader = { workspace = true }
 vm-superio = "0.8"

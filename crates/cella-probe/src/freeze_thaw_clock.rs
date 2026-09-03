@@ -403,7 +403,10 @@ pub fn run() {
         .arg(&kernel)
         .arg("--disk")
         .arg(&disk_copy)
-        .args(tap.iter().flat_map(|t| ["--tap".to_string(), t.clone()]))
+        .args(tap.iter().flat_map(|t| {
+            crate::claim_tap(t);
+            ["--tap".to_string(), t.clone()]
+        }))
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")
@@ -504,7 +507,10 @@ pub fn run() {
         .arg(&state_dir)
         .arg("--disk")
         .arg(&disk_copy)
-        .args(tap.iter().flat_map(|t| ["--tap".to_string(), t.clone()]))
+        .args(tap.iter().flat_map(|t| {
+            crate::claim_tap(t);
+            ["--tap".to_string(), t.clone()]
+        }))
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")

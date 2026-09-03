@@ -13,5 +13,5 @@ name = "cella-gateway"
 path = "src/main.rs"
 
 [dependencies]
-cella-libs = { workspace = true, features = ["wire", "sidecar", "audit"] }
+cella-libs = { workspace = true, features = ["wire", "sidecar", "audit", "seccomp"] }
 libc = { workspace = true }

@@ -33,7 +33,11 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
-        test-jail test-seccomp test-machine test-one-door test-witness \
+        test-jail test-seccomp test-seccomp-vmm-kvm test-seccomp-personas \
+        test-seccomp-gateway test-seccomp-universe test-seccomp-build \
+        test-seccomp-doctor test-seccomp-network test-seccomp-probe \
+        test-seccomp-machine \
+        test-machine test-one-door test-witness \
         clean distclean logs-clean lines \
         probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -46,7 +50,7 @@ help: ## Show this help
 	grep -hE '^(build|build-smoke|install|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
-	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-machine|test-one-door|test-witness):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-seccomp-vmm-kvm|test-seccomp-personas|test-seccomp-gateway|test-seccomp-universe|test-seccomp-build|test-seccomp-doctor|test-seccomp-network|test-seccomp-probe|test-seccomp-machine|test-machine|test-one-door|test-witness):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
 	echo ""
 	echo "Run: a real jailed guest, interactively:"
 	grep -hE '^(boot|enter|freeze|thaw|remove):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
@@ -160,6 +164,43 @@ test-seccomp: build ## The real BPF filter kills a disallowed syscall (scripts/t
 	$(LOG)
 	$(SCRIPTS)/test/seccomp.sh
 
+test-seccomp-vmm-kvm: build ## Lane b (1.6.14b): a KVM ioctl request outside the table kills the VMM (scripts/test/seccomp-kvm.sh)
+	$(LOG)
+	$(SCRIPTS)/test/seccomp-kvm.sh
+
+test-seccomp-gateway: build ## Lane b: cella-gateway's own filter kills a disallowed syscall
+	$(LOG)
+	$(SCRIPTS)/test/seccomp-persona.sh cella-gateway
+
+test-seccomp-universe: build ## Lane b: cella-universe's own filter kills a disallowed syscall
+	$(LOG)
+	$(SCRIPTS)/test/seccomp-persona.sh cella-universe
+
+test-seccomp-build: build ## Lane b: cella-build's own filter kills a disallowed syscall
+	$(LOG)
+	$(SCRIPTS)/test/seccomp-persona.sh cella-build
+
+test-seccomp-doctor: build ## Lane b: cella-doctor's own filter kills a disallowed syscall
+	$(LOG)
+	$(SCRIPTS)/test/seccomp-persona.sh cella-doctor
+
+test-seccomp-network: build ## Lane b: cella-network's own filter kills a disallowed syscall (table not installed in production yet -- see cella-network/src/seccomp.rs)
+	$(LOG)
+	$(SCRIPTS)/test/seccomp-persona.sh cella-network
+
+test-seccomp-probe: build ## Lane b: cella-probe's own filter kills a disallowed syscall (table not installed in production yet -- see cella-probe/src/seccomp.rs)
+	$(LOG)
+	$(SCRIPTS)/test/seccomp-persona.sh cella-probe
+
+test-seccomp-machine: build ## Lane b: cella-machine's own filter kills a disallowed syscall
+	$(LOG)
+	$(SCRIPTS)/test/seccomp-persona.sh cella-machine
+
+test-seccomp-personas: test-seccomp test-seccomp-vmm-kvm test-seccomp-gateway test-seccomp-universe test-seccomp-build test-seccomp-doctor test-seccomp-network test-seccomp-probe test-seccomp-machine ## Lane b (1.6.14b): every persona's negative seccomp gate, one binary at a time
+	$(LOG)
+	echo ""
+	echo "=== test-seccomp-personas: every persona's filter kills its own canary ==="
+
 test-machine: build ## The machine registry verbs against a sandboxed CELLA_HOME (scripts/test/machine.sh)
 	$(LOG)
 	$(SCRIPTS)/test/machine.sh
@@ -196,7 +237,7 @@ test-witness: ## Static gate: one witness door per persona binary (the one-door 
 	fi
 	echo "OK: six witness doors, one per persona; the shim owns none"
 
-test: check lint unit-test integration-test test-jail test-seccomp test-machine test-one-door test-witness ## Everything above: build hygiene + all no-KVM tests
+test: check lint unit-test integration-test test-jail test-seccomp-personas test-machine test-one-door test-witness ## Everything above: build hygiene + all no-KVM tests
 	$(LOG)
 	echo ""
 	echo "=== make test: all no-KVM checks passed ==="

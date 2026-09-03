@@ -5,6 +5,7 @@
 #   sidecar  the freeze image: reader and writer, and the state types
 #   audit    the witnessed border (self-contained path resolution)
 #   machine  the registry and the lifecycle (paths, manifests, spawn)
+#   seccomp  the BPF allowlist builder and installer (1.6.14b)
 [package]
 name = "cella-libs"
 version.workspace = true
@@ -19,6 +20,7 @@ sidecar = ["wire", "dep:kvm-bindings"]
 audit = ["wire"]
 machine = ["wire", "golden", "jail"]
 jail = []
+seccomp = []
 
 [dependencies]
 libc = { workspace = true }

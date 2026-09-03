@@ -730,34 +730,6 @@ pub fn is_running(name: &str) -> bool {
 }
 
 /// Delete the machine, once and for all. Refuses a running machine.
-/// The tap follows the claim, both directions (1.6.14a): start
-/// re-owns a machine's taps to its sub-uid, and the end of the
-/// claim hands them back to the invoking user -- otherwise the
-/// next claimant (another machine, or the probe spawning its VMM
-/// directly as the invoker) finds a tap owned by a departed
-/// sub-uid and dies EPERM at attach. Best-effort: a tap that no
-/// longer exists, or a missing cella-network, is not this verb's
-/// failure -- the next start re-owns regardless.
-fn release_taps(name: &str) {
-    let Ok(m) = read_manifest(name) else { return };
-    if m.net == "none" {
-        return;
-    }
-    let net_bin = std::env::var("HOME")
-        .map(|h| PathBuf::from(h).join(".local/bin/cella-network"))
-        .ok()
-        .filter(|p| p.is_file())
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| find_program("cella-network"));
-    // SAFETY: getuid has no failure mode.
-    let me = unsafe { libc::getuid() };
-    for tap in m.net.split(',') {
-        let _ = std::process::Command::new(&net_bin)
-            .args(["own", tap, &me.to_string()])
-            .status();
-    }
-}
-
 pub fn destroy(name: &str) -> Result<(), String> {
     if !valid_name(name) {
         return Err(format!("invalid machine name {name:?}"));
@@ -769,7 +741,6 @@ pub fn destroy(name: &str) -> Result<(), String> {
     if is_running(name) {
         return Err(format!("machine {name:?} is running -- stop it first"));
     }
-    release_taps(name);
     fs::remove_dir_all(&dir).map_err(|e| format!("removing {}: {e}", dir.display()))
 }
 
@@ -1233,12 +1204,18 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
             ));
         }
     }
-    // The tap follows the machine (1.6.14a): the pool created its
-    // taps owned by the invoking user, and only a tap's owner may
-    // attach it -- re-own each of this machine's taps to its
-    // sub-uid before the VMM (running as that sub-uid) opens them.
-    // The one CAP_NET_ADMIN holder does it; this verb process holds
-    // no capability of its own.
+    // The tap follows the claim (1.6.14a), and ONLY the claim: the
+    // pool created its taps owned by the invoking user, and only a
+    // tap's owner may attach it -- re-own each of this machine's
+    // taps to its sub-uid before the VMM (running as that sub-uid)
+    // opens them. The one CAP_NET_ADMIN holder does it; this verb
+    // process holds no capability of its own. There is deliberately
+    // no handback at stop or destroy: a handback would run from a
+    // seccomp-confined verb, and no_new_privs (mandatory for an
+    // unprivileged filter) strips file capabilities on exec -- the
+    // handback child would arrive capless. Every claimant re-owns
+    // at its own claim instead: the next start does, and the probe
+    // does the same before it spawns its VMM (1.6.14b).
     if m.net != "none" {
         let net_bin = std::env::var("HOME")
             .map(|h| PathBuf::from(h).join(".local/bin/cella-network"))
@@ -1586,7 +1563,6 @@ pub fn stop(name: &str) -> Result<(), String> {
     } else {
         println!("cella: machine {name:?} was not running");
     }
-    release_taps(name);
     let cleared = clear_transients(name);
     if !cleared.is_empty() {
         println!("cella: cleared transients: {}", cleared.join(", "));

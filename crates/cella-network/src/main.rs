@@ -8,9 +8,17 @@
 //! firewalld zone binding stays in install.sh: it is a one-time
 //! permanent name binding, and dbus/polkit wants real root.
 
+mod seccomp;
+
 use cella_libs::machine;
 
 fn main() {
+    // Hidden self-test hook for `make test-seccomp-network`. See
+    // seccomp.rs's module doc: the real verbs stay unconfined until
+    // 1.6.14e rewrites this persona's surface.
+    if std::env::args().nth(1).as_deref() == Some("--selftest-seccomp") {
+        seccomp::selftest_provoke_kill();
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The witnessed border: setup and pair are placeless verbs, and
     // the wiring binary witnesses them like every other verb (the
