@@ -190,7 +190,17 @@ done
 # Both new fetches park in one typed line: two operations, one
 # batch, one self-freeze. The chronicle exists, thus the valve is
 # open across every thaw until the closing verb.
-type_in 'for p in 8081 8082; do wget -q $H:$p & done'
+# The settle may leave the machine frozen on a late park: a frozen
+# machine refuses enter, and a refused type_in must be loud, not a
+# silent set -e exit. Stand it up first, then type.
+if [ -f "$STATE" ]; then
+    for id in $("$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p'); do
+        "$BIN" gateway "$VM" release "$id" >/dev/null 2>&1 || true
+    done
+    "$BIN" thaw "$VM" >/dev/null 2>&1 || true
+    sleep 1
+fi
+type_in 'for p in 8081 8082; do wget -q $H:$p & done' || { echo "FAIL: could not type the batch into the guest"; exit 1; }
 wait_frozen || { echo "FAIL: C and D did not park-and-freeze (valve persistence)"; exit 1; }
 # The guest may freeze on C's batch before D's sender ran: thaw
 # (deciding nothing) until both operations stand held, in order.
