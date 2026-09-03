@@ -14,7 +14,7 @@ use std::sync::Arc;
 use virtio_queue::{Queue, QueueT};
 use vm_memory::{Bytes, GuestMemoryMmap};
 
-use super::tap::Tap;
+use super::tap::Edge;
 use super::{ValveState, VirtioDevice, VIRTIO_F_VERSION_1};
 use cella_libs::ledger::{self, Dest, GuestClock, OpenOperation};
 use cella_libs::proto;
@@ -39,7 +39,7 @@ struct ParkedOp {
 }
 
 pub struct Net {
-    tap: Tap,
+    edge: Edge,
     mac: [u8; 6],
     valve: ValveState,
     /// Egress frames read from the TX ring and not yet written to the
@@ -138,12 +138,12 @@ fn id_array(bytes: &[u8]) -> [u8; 16] {
 
 impl Net {
     pub fn new(
-        tap_name: &str,
+        edge: Edge,
         mac: [u8; 6],
         guest_clock: Arc<dyn GuestClock>,
     ) -> std::io::Result<Self> {
         Ok(Net {
-            tap: Tap::open(tap_name)?,
+            edge,
             mac,
             valve: ValveState::Closed,
             parked: Vec::new(),
@@ -157,8 +157,8 @@ impl Net {
         })
     }
 
-    pub fn tap_fd(&self) -> i32 {
-        self.tap.as_raw_fd()
+    pub fn edge_fd(&self) -> i32 {
+        self.edge.as_raw_fd()
     }
 
     /// The RX pass. Released incoming frames deliver first, into
@@ -197,7 +197,7 @@ impl Net {
             self.deliver_queue.pop_front();
         }
         let mut buf = vec![0u8; MAX_FRAME];
-        while let Ok(n) = self.tap.read_frame(&mut buf) {
+        while let Ok(n) = self.edge.read_frame(&mut buf) {
             match self.valve {
                 // Closed: nothing goes in. The TAP drains (the
                 // host must not see backpressure from a dark
@@ -447,7 +447,7 @@ impl VirtioDevice for Net {
     }
 
     fn write_egress(&mut self, frame: &[u8]) {
-        let _ = self.tap.write_frame(frame);
+        let _ = self.edge.write_frame(frame);
     }
 
     fn egress_queue(&self) -> u16 {

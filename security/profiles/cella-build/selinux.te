@@ -1,8 +1,0 @@
-# SELinux type enforcement for cella-build
-#
-# Superseded by selinux.cil in this directory: the enforced policy
-# (1.6.14c). CIL, not TE+M4 -- this host has no selinux-policy-devel
-# refpolicy headers to expand macros like domain_type(); CIL loads
-# straight through `semodule -i` on any targeted-policy host. See
-# selinux.cil here and security/selinux/cella-base.cil for the
-# shared types and the per-persona domain macro.

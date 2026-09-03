@@ -125,4 +125,10 @@ echo "  the pair froze and thawed; the agent reaches the world again, re-decided
 
 echo
 echo "PASS: the gateway ladder -- pair wiring, forwarding, pair freeze"
-for m in ag gw; do "$BIN" stop $m >/dev/null; "$BIN" destroy $m >/dev/null; done
+# Take each machine as the ladder left it: a member may stand
+# re-frozen on a post-PASS park (stop refuses frozen; destroy
+# takes any still machine).
+for m in ag gw; do
+    "$BIN" stop $m >/dev/null 2>&1 || true
+    "$BIN" destroy $m >/dev/null
+done

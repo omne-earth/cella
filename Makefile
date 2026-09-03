@@ -205,12 +205,13 @@ test-machine: build ## The machine registry verbs against a sandboxed CELLA_HOME
 	$(LOG)
 	$(SCRIPTS)/test/machine.sh
 
-test-one-door: ## Static gate: exactly one TX call site writes the TAP (the decision-delivery door)
+test-one-door: ## Static gate: exactly one TX call site writes the edge (the decision-delivery door)
 	$(LOG)
-	# With the pass table gone, the TAP is reachable from the decision
-	# delivery alone. A second door is a leak path, and it fails the
-	# battery here, not a review.
-	doors=$$(grep -c 'tap.write_frame' crates/cella-vmm/src/devices/virtio/net.rs)
+	# With the pass table gone, the edge (a TAP or the translator
+	# socketpair -- 1.6.14e) is reachable from the decision delivery
+	# alone. A second door is a leak path, and it fails the battery
+	# here, not a review.
+	doors=$$(grep -c 'edge.write_frame' crates/cella-vmm/src/devices/virtio/net.rs)
 	if [ "$$doors" -ne 1 ]; then
 		echo "FAIL: $$doors TX call sites write the TAP (exactly 1 allowed: write_egress)"
 		grep -n 'tap.write_frame' crates/cella-vmm/src/devices/virtio/net.rs

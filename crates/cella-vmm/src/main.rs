@@ -60,8 +60,11 @@ struct Args {
     /// A second disk, read-only at the device, always: the rock of
     /// the inspect verb. No flag makes it writable.
     attach_ro: Option<PathBuf>,
-    /// The taps, in order: eth0 is the first. --tap repeats.
-    taps: Vec<String>,
+    /// The nics, in order: eth0 is the first. --tap NAME attaches a
+    /// host TAP; --edge-fd N wraps an inherited backend fd (the
+    /// rootless wire to the machine's own translator, 1.6.14e).
+    /// The two repeat and mix; order is the interface order.
+    nics: Vec<NicSpec>,
     mac: [u8; 6],
     kernel: Option<PathBuf>,
     cmdline: String,
@@ -69,12 +72,29 @@ struct Args {
     console: Option<PathBuf>,
 }
 
+/// One nic's backend, as named on the command line.
+enum NicSpec {
+    /// A host TAP by interface name (the pre-rootless plumbing).
+    Tap(String),
+    /// An inherited fd: one end of the translator socketpair.
+    Fd(i32),
+}
+
+impl NicSpec {
+    fn label(&self) -> String {
+        match self {
+            NicSpec::Tap(name) => name.clone(),
+            NicSpec::Fd(n) => format!("edge-fd {n}"),
+        }
+    }
+}
+
 fn parse_args() -> Args {
     let mut state_dir = None;
     let mut disk = None;
     let mut disk_ro = false;
     let mut attach_ro = None;
-    let mut taps: Vec<String> = Vec::new();
+    let mut nics: Vec<NicSpec> = Vec::new();
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
     let mut console = None;
@@ -93,7 +113,12 @@ fn parse_args() -> Args {
             "--disk" => disk = Some(PathBuf::from(next())),
             "--disk-ro" => disk_ro = true,
             "--attach-ro" => attach_ro = Some(PathBuf::from(next())),
-            "--tap" => taps.push(next()),
+            "--tap" => nics.push(NicSpec::Tap(next())),
+            "--edge-fd" => nics.push(NicSpec::Fd(
+                next()
+                    .parse()
+                    .unwrap_or_else(|_| usage_error("--edge-fd must be a file descriptor number")),
+            )),
             "--mac" => mac = parse_mac(&next()),
             "--kernel" => kernel = Some(PathBuf::from(next())),
             "--console" => {
@@ -112,7 +137,7 @@ fn parse_args() -> Args {
                     .unwrap_or_else(|_| usage_error("--mem-mb must be a number"))
             }
             "-h" | "--help" => usage_error(
-                "cella --state-dir DIR --disk PATH [--attach-ro PATH] [--tap NAME] [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
+                "cella --state-dir DIR --disk PATH [--attach-ro PATH] [--tap NAME | --edge-fd N] [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
             ),
             other => usage_error(&format!("unknown argument: {other}")),
         }
@@ -123,7 +148,7 @@ fn parse_args() -> Args {
         disk: disk.unwrap_or_else(|| usage_error("--disk is required")),
         disk_ro,
         attach_ro,
-        taps,
+        nics,
         mac,
         kernel,
         cmdline,
@@ -281,23 +306,30 @@ fn main() {
             MmioTransport::new(Box::new(attached), irq_raiser.clone(), ATTACH_IRQ),
         ));
     }
-    // The network is optional, and a machine takes N taps: eth<i>
-    // is the i-th --tap. net0 keeps its address and IRQ; each later
-    // nic takes base + i*0x2000 and IRQ 6 + 2*i, thus the attach
-    // slot between them (0xd0002000:7) never moves -- the ABI of
-    // every existing manifest holds. A guest without --tap gets the
-    // block device only.
+    // The network is optional, and a machine takes N nics: eth<i>
+    // is the i-th --tap/--edge-fd, in command-line order. net0
+    // keeps its address and IRQ; each later nic takes base +
+    // i*0x2000 and IRQ 6 + 2*i, thus the attach slot between them
+    // (0xd0002000:7) never moves -- the ABI of every existing
+    // manifest holds. A guest without nics gets the block device
+    // only.
     let mut net_poll: Vec<(usize, i32)> = Vec::new();
-    for (i, tap) in args.taps.iter().enumerate() {
-        // Must precede Tap::open (inside Net::new): the TAP fd is
-        // O_ASYNC, and SIGIO's default action is to terminate the
-        // process. A frame can arrive the instant the fd exists.
+    for (i, nic) in args.nics.iter().enumerate() {
+        // Must precede the edge's arming (inside Edge::tap/from_fd):
+        // the backend fd is O_ASYNC, and SIGIO's default action is
+        // to terminate the process. A frame can arrive the instant
+        // the fd exists.
         install_sigio_handler();
         let mut mac = args.mac;
         mac[5] = mac[5].wrapping_add(i as u8);
-        let net = Net::new(tap, mac, guest_clock.clone())
-            .unwrap_or_else(|e| fatal(&format!("open tap {tap:?}: {e}")));
-        let net_fd = net.tap_fd();
+        let edge = match nic {
+            NicSpec::Tap(name) => devices::virtio::tap::Edge::tap(name),
+            NicSpec::Fd(n) => devices::virtio::tap::Edge::from_fd(*n),
+        }
+        .unwrap_or_else(|e| fatal(&format!("open edge {:?}: {e}", nic.label())));
+        let net = Net::new(edge, mac, guest_clock.clone())
+            .unwrap_or_else(|e| fatal(&format!("nic {:?}: {e}", nic.label())));
+        let net_fd = net.edge_fd();
         mmio_devices.push((
             NET_MMIO_BASE + (i as u64) * 0x2000,
             MMIO_LEN,

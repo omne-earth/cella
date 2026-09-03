@@ -1,8 +1,14 @@
-//! Minimal TAP wrapper.
+//! The edge: one nic's backend fd (1.6.14e, rung 1).
 //!
-//! Opens an already-created TAP interface (see `sudo cella setup net`) --
-//! this process never needs `CAP_NET_ADMIN` to create one, only read/write
-//! on the fd once it exists and is owned by the invoking user.
+//! A nic's backend is a file descriptor the VMM reads and writes
+//! whole frames on -- historically a TAP the host provisioned
+//! (`Edge::tap`), and under the rootless network a socketpair to the
+//! machine's own cella-network translator (`Edge::from_fd`). The
+//! frame contract is identical on both: 12-byte virtio_net_hdr
+//! prefix, one frame per read/write, O_ASYNC + SIGIO as the kick
+//! that interrupts KVM_RUN when the world has mail. The membrane
+//! (park, decide, release -- net.rs) never knows which kind it
+//! stands on.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -29,16 +35,16 @@ struct IfReq {
     _pad: [u8; 22],
 }
 
-pub struct Tap {
+pub struct Edge {
     file: File,
 }
 
-impl Tap {
+impl Edge {
     /// Attaches to an existing TAP interface `name` (created out-of-band,
     /// see scripts/setup/tap.sh). Requires only rw on /dev/net/tun and
     /// that the interface is already owned by the calling user
     /// (`ip tuntap ... user $USER`).
-    pub fn open(name: &str) -> io::Result<Self> {
+    pub fn tap(name: &str) -> io::Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -78,13 +84,31 @@ impl Tap {
             return Err(io::Error::last_os_error());
         }
 
-        // Non-blocking: RX is driven by an external poll (see main.rs),
-        // and we don't want a spurious read to stall the vCPU thread.
-        // O_ASYNC + F_SETOWN: an arriving frame raises SIGIO at this
-        // process, which interrupts KVM_RUN (EINTR) so the run loop can
-        // drain RX. With the in-kernel irqchip an idle guest blocks
-        // inside KVM_RUN indefinitely, so without this kick host->guest
-        // traffic would sit unread until some unrelated VM exit.
+        Self::arm(&file);
+        Ok(Edge { file })
+    }
+
+    /// Wrap an inherited backend fd (the spawn passes the VMM its
+    /// translator socketpair end by number). The fd must speak the
+    /// same frame contract as a TAP: one whole frame per datagram,
+    /// 12-byte vnet header first. Ownership transfers here.
+    pub fn from_fd(fd: i32) -> io::Result<Self> {
+        // SAFETY: the caller (parse_args) hands an fd this process
+        // inherited and owns; From_raw_fd takes ownership exactly
+        // once.
+        let file = unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(fd) };
+        Self::arm(&file);
+        Ok(Edge { file })
+    }
+
+    /// Non-blocking + O_ASYNC + F_SETOWN, both kinds: RX is driven
+    /// by an external poll (see main.rs), and an arriving frame
+    /// raises SIGIO at this process, which interrupts KVM_RUN
+    /// (EINTR) so the run loop can drain RX. With the in-kernel
+    /// irqchip an idle guest blocks inside KVM_RUN indefinitely;
+    /// without this kick, world->guest mail would sit unread until
+    /// some unrelated VM exit.
+    fn arm(file: &File) {
         let fd = file.as_raw_fd();
         // SAFETY: fd is valid and open for the lifetime of `file`.
         unsafe {
@@ -92,8 +116,6 @@ impl Tap {
             let flags = libc::fcntl(fd, libc::F_GETFL, 0);
             libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK | libc::O_ASYNC);
         }
-
-        Ok(Tap { file })
     }
 
     pub fn read_frame(&self, buf: &mut [u8]) -> io::Result<usize> {

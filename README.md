@@ -194,7 +194,7 @@ scripts/
                         inception, jail, seccomp, machine
   utils/count_lines.py  source-vs-tests line counting for `make lines`
 security/profiles/<cli>/  seccomp + SELinux placeholders per thin CLI (shakedown fills them)
-selinux/cella.te.example  policy sketch, reference only
+security/                 the enforced walls as data: bwrap profiles, seccomp notes, SELinux policy (CIL)
 Makefile                one target per workflow -- see TESTING.md
 TESTING.md              what each target verifies, and how to reproduce
 ```
@@ -259,11 +259,9 @@ filesystem driver. Any raw filesystem image works as a disk.
   argument filtering), installed before the run loop. Each entry
   carries its reason. The next tightening: filter `ioctl` to the
   exact KVM request codes.
-- **SELinux**: `selinux/cella.te.example` is a reference sketch, not
-  wired into the build.
-
-## Out of scope
-
+- **SELinux**: one domain per persona, MCS categories per machine
+  (`security/selinux/`, `security/profiles/*/selinux.cil`) -- enforced
+  at the shakedown's join, when `make install` labels the binaries
 - Multi-vCPU: needs real interrupt routing and the TSC-offset
   attribute API instead of direct MSR writes.
 - GPU/PCIe passthrough, live migration.
