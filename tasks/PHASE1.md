@@ -391,31 +391,57 @@ requires a decision, nothing stands, and the mouth closes.
             not dependency. Lane gate: a book with one edited
             entry fails verification loudly, and an intact book
             verifies end to end.
-      - [ ] 1.6.14e The rootless network (ruled 2026-09-02): the
-            file capability dies. A tap fd works regardless of
-            which namespace the tap lives in; privilege is only
-            needed to plant a tap in the host's netns, and cella
-            only does that because the pool predates the
-            question. The podman-rootless shape, done cella's
-            way: agent-side pairs and bridges become cella-network
-            pumping frames fd-to-fd between machines' taps -- a
-            userspace wire, zero privilege, membrane semantics
-            untouched (park, decide, release live in the VMM,
-            not the wire); the world-side tap sits in a
-            cella-owned netns and cella-network translates L4 to
-            ordinary sockets, pasta-shaped but written here, not
-            vendored (passt is ~20k lines; the TCB thesis does
-            not buy it). ARP terminates at the translator as the
-            neighbor pins already assume. Retires: setup/pair/own
-            as host-netns verbs, nftables NAT, ip_forward, the
-            setcap root moment at install -- no delegated
-            capability anywhere in the system, and cella-network
-            jails like everyone else. Runs after the four lanes
-            merge (it rewrites what lane b's allowlist must
-            cover for cella-network; the seccomp list re-shrinks
-            with it). Its own gates: the full network battery
-            over the userspace wire, and a getcap sweep proving
-            no file capability remains.
+      - [ ] 1.6.14e The rootless network (ruled 2026-09-02; final
+            shape groomed 2026-09-02, five rulings): the file
+            capability dies. One network peer per machine: every
+            nic's backend fd in the VMM is a socketpair to the
+            machine's own cella-network -- the per-machine,
+            machine-lifetime translator (spawned at start, dies
+            at destroy, survives freeze/thaw holding the
+            world-side sockets: the peer patience made a
+            process). The VMM never holds a tap, a socket, or a
+            wire; /dev/net/tun leaves its jail and its
+            pre-filter phase. The world edge speaks L4: decided
+            egress frames become sendto/connect on ordinary
+            unprivileged sockets, pasta-shaped but written here,
+            not vendored (passt is ~20k lines; the TCB thesis
+            does not buy it); responses cross back and park in
+            the ingress lane like any frame; ARP terminates at
+            the translator as the pins assumed. The translator
+            is not a resolver, not a cache, not a policy point:
+            a DNS packet is a UDP crossing like any other --
+            parked, held, released by the judge, only then
+            transported (no pasta-style automatic resolver
+            forward, ever). Pairs are translator-to-translator
+            unix connections: rendezvous by wire name under
+            $CELLA_HOME/wires/ (first listens, second connects;
+            default-ACL treatment like machine dirs); pairing IS
+            two manifests naming the same wire (--net wire:p0),
+            "world" is the reserved nic name for the internet
+            side, and the manifest is the entire topology -- no
+            host state anywhere. Freeze semantics: translators
+            hold wires and world sockets across a frozen peer;
+            the VMM-side socketpair drains at thaw, so "frames
+            that arrive during a freeze are lost at the edge"
+            stays true. Guest contract byte-identical: same
+            subnets, gateway IPs, and MACs, answered by the
+            translator -- no golden rebake; smoke-gateway
+            unmodified certifies the pair plane, the ear gates
+            the world plane. Retires: setup/pair/own, the pool,
+            NAT, ip_forward, the neighbor pins, the boot unit
+            and its linger interim, the tap-claim machinery of
+            1.6.14a, the setcap root moment -- no delegated
+            capability anywhere, cella-network jails like
+            everyone else (the tightest profile in the system),
+            and its seccomp list becomes socket verbs on
+            CLI_BASE (socket leaves its canary alone; the canary
+            stands everywhere else). Deferred, its own item
+            someday: the switch appliance (topologies richer
+            than pairs, priced in judged crossings).
+            Its own gates: the full network battery over the
+            userspace wire, a getcap sweep proving no file
+            capability remains, and the no-sudo claim (install's
+            package block is the only sudo in the story).
             - [ ] The pool's reboot story (observed 2026-09-02):
                   the tap pool evaporated across a host
                   sleep/reboot despite cella-network.service
