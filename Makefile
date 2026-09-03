@@ -260,17 +260,16 @@ test-machine: build
 ## delivery door)
 test-one-door:
 	$(LOG)
-	# With the pass table gone, the edge (a TAP or the translator
-	# socketpair -- 1.6.14e) is reachable from the decision delivery
-	# alone. A second door is a leak path, and it fails the battery
+	# With the pass table gone, the edge (the translator connection
+	# -- 1.6.14e) is reachable from the decision delivery alone. A second door is a leak path, and it fails the battery
 	# here, not a review.
 	doors=$$(grep -c 'edge.write_frame' crates/cella-vmm/src/devices/virtio/net.rs)
 	if [ "$$doors" -ne 1 ]; then
-		echo "FAIL: $$doors TX call sites write the TAP (exactly 1 allowed: write_egress)"
-		grep -n 'tap.write_frame' crates/cella-vmm/src/devices/virtio/net.rs
+		echo "FAIL: $$doors TX call sites write the edge (exactly 1 allowed: write_egress)"
+		grep -n 'edge.write_frame' crates/cella-vmm/src/devices/virtio/net.rs
 		exit 1
 	fi
-	echo "OK: one door -- a single TX call site writes the TAP"
+	echo "OK: one door -- a single TX call site writes the edge"
 
 ## Static gate: one witness door per persona binary (the one-door pattern
 ## applied to the audit)
@@ -397,8 +396,9 @@ smoke-machine: $(CELLA_DEV)
 	$(LOG)
 	$(CELLA_DEV) selftest
 
-## The gateway ladder: pair wiring (bridge + route), the appliance forwards
-## agent->world, and the pair freezes and thaws together
+## The gateway ladder: the appliance shape over wires -- the agent reaches
+## the world only through the gateway machine, and the pair freezes and
+## thaws together
 smoke-gateway: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/gateway.sh
@@ -427,8 +427,8 @@ smoke-translator-port-neg: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/translator-port-neg.sh
 
-## A machine takes N taps: two-tap boot, both nics in the guest, host pings
-## eth0, claims exclusive per tap
+## A machine takes N nics: a two-nic boot, both present in the guest,
+## every crossing decided per nic
 smoke-multinet: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/multinet.sh
@@ -473,8 +473,9 @@ smoke-ping: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/ping.sh
 
-## 1.3: close shuts the valve, show lists the hold, release/refuse decide by
-## id prefix, open refuses (docs/NETWORK-MODEL.md)
+## The gateway verbs: born closed asserted, open arms the membrane, show
+## lists the hold, release/refuse decide by id prefix, close returns the
+## dark (docs/NETWORK-MODEL.md)
 smoke-gateway-cli: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/gateway-cli.sh
@@ -550,9 +551,9 @@ device-state-ac1: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac1
 
-## AC2: the network survives the thaw -- the tap claim persists through the
-## manifest, the tap is recreated by convention, and the host pings the guest
-## after a thaw
+## AC2: the network survives the thaw -- the machine-lifetime translator
+## holds the flows across the freeze; the gate exercises the nic across
+## freeze and thaw, every answer decided
 device-state-ac2: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac2
@@ -595,8 +596,8 @@ smoke-clean:
 
 # --- Setup --------------------------------------------------------------
 
-## One-time host setup (Fedora): deps, toolbox, tap0, and every golden (needs
-## sudo)
+## One-time host setup (Fedora): deps, toolbox, the sub-id delegation,
+## and every golden (the one sudo moment)
 init:
 	$(LOG)
 	$(SCRIPTS)/setup/install.sh
@@ -665,7 +666,7 @@ clean:
 	$(LOG)
 	$(CARGO) clean
 
-## clean + remove built dist/ assets
+## clean + remove the built goldens' caches
 distclean: clean
 	$(LOG)
 

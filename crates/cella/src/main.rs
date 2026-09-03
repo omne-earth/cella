@@ -18,7 +18,7 @@ fn persona_for(verb: &str) -> Option<&'static str> {
         "branch" | "archive" | "inspect" => "cella-universe",
         "build" => "cella-build",
         "doctor" => "cella-doctor",
-        "setup" | "network" => "cella-network",
+        "network" => "cella-network",
         "probe" => "cella-probe",
         _ => return None,
     })
@@ -61,7 +61,6 @@ fn print_help() {
     println!("  cella branch|archive|inspect           machines as artifacts");
     println!("  cella doctor check|fix|verify|harvest  the host judged, repaired, audited");
     println!("  cella selftest                         run the lifecycle cycle end to end");
-    println!("  cella setup net --taps N               provision the tap pool (cella-network)");
     println!();
     println!("Each verb runs in its own persona binary; the shim only routes.");
 }
@@ -95,7 +94,6 @@ fn main() {
     // name); the machine and universe personas take the verb.
     let args: Vec<&String> = match first.as_str() {
         "gateway" | "build" | "doctor" | "probe" | "network" => argv[1..].iter().collect(),
-        "setup" => argv.iter().collect(),
         _ => argv.iter().collect(),
     };
     let err = std::process::Command::new(&bin).args(&args).exec();

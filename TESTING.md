@@ -1,110 +1,173 @@
 # Testing cella
 
-Two tiers, split by whether they need `/dev/kvm`:
+Everything runs through make targets. Never run a gate script or a
+cargo command directly: the targets set up logging, prerequisites,
+and the environment, and a result that did not come from a target
+is not a result. If a target is missing, add one.
 
-- **No KVM needed** (`make test`): `cargo test --lib`, `cargo test --tests`,
-  `make test-jail`, `make test-seccomp`. These run in this repo's own dev sandbox,
-  in CI, in a container -- anywhere. They're also where almost all the
-  *real* verification lives, because they exercise actual compiled code
-  (the virtio-mmio register protocol, the block device's descriptor-chain
-  walking, the freeze/thaw sidecar format, the installed BPF filter)
-  rather than describing it.
-- **Needs real KVM + a kernel/rootfs** (`make smoke-boot` / `make smoke-thaw` /
-  `make smoke-ping`): one target per feature that only exists once a guest can
-  actually run. These are the ones that touch the boot path (GDT, page
-  tables, bzImage loading) that nothing else in this repo tests -- see
-  the README's "What to check first."
+## The two tiers
 
-`make test-all` runs everything. The KVM-dependent targets `SKIP` (exit
-0) cleanly when `/dev/kvm`, the test assets, or the TAP device aren't
-present, so `make test-all` still passes in an environment without KVM;
-it just tells you what it couldn't check.
+Split by whether the check needs `/dev/kvm`:
 
-## Quick repro
+- **`make test` -- no KVM.** Build hygiene (check, lint, fmt), the
+  unit and integration tests, the jail gate, the per-binary seccomp
+  gates, the machine-registry gate, the one-door static gate, and
+  the witness-doors gate. Runs anywhere: CI, a container, a
+  sandbox. Takes seconds. Run it first, always.
+- **`make smoke` -- real KVM, a real guest.** One gate per
+  workflow, each booting real kernels under real KVM. Takes tens
+  of minutes. Every gate SKIPs cleanly (exit 0, with a reason)
+  when `/dev/kvm` or the goldens are absent.
+
+`make test-all` runs both tiers.
+
+## Quick start
+
+From nothing to a green battery:
 
 ```sh
 git clone <this repo> && cd cella
-make test          # ~2s, no KVM needed, this is the one to run first
+make test          # seconds, no KVM -- run this first
+make init          # once per host: deps, toolbox, sub-id delegation, goldens (the one sudo moment)
+make smoke         # the full battery
 ```
 
-Expected output ends with:
+`make test` must end with:
+
 ```
 === make test: all no-KVM checks passed ===
 ```
 
-To also exercise the boot path, on a real Linux machine with KVM:
+`make smoke` must end with:
 
-```sh
-make init          # once per host: deps, toolbox, tap0, goldens
-make golden        # the canonical goldens (no-op if init already did it)
-make smoke-boot    # boots a real kernel all the way to init
-make smoke-thaw    # boot -> freeze -> thaw -> verify
-make smoke-ping    # the valve end to end: closed, open, release, closed again
+```
+=== make smoke: done (see above for any SKIPs) ===
 ```
 
-Or all at once: `make smoke` -- it runs the no-KVM `make test` first,
-then every gate (or `make test-all` for everything).
+A SKIP is loud and named. If you did not read a SKIP reason, you
+do not know what was not checked.
 
-## What each target actually checks
+## The battery, one part per CLI
 
-| Target | Needs KVM? | What it verifies | Backing script |
-|---|---|---|---|
-| `make unit-test` | no | GDT/page-table bit-packing; freeze/thaw sidecar round-trip, corruption handling, one-shot enforcement; the BPF program's logic (every allowed syscall resolves to ALLOW, everything else to KILL) | inline `#[cfg(test)]` in `src/boot/x86_64.rs`, `src/freeze.rs`, `src/seccomp.rs` |
-| `make integration-test` | no | virtio-blk read/write/read-only-enforcement/capacity through **real descriptor chains** against a **real backing file**; the virtio-mmio v2 register protocol (magic/version/feature-negotiation/status-reset/queue-notify/config-space) against the **real `MmioTransport`**, with a mock `IrqLine` standing in for the one KVM ioctl this layer needs | `tests/virtio_block.rs`, `tests/virtio_mmio.rs` |
-| `make test-jail` | no | bwrap actually denies a path outside the bind set; `jail.sh` refuses to run without required args; no ambient `CAP_NET_ADMIN` inside the jail | `scripts/test/jail.sh` |
-| `make test-seccomp` | no | the **actual installed BPF filter** kills the process with `SIGSYS` on a disallowed syscall (not a simulation -- `install()` really runs, then a real forbidden syscall is really made) | `scripts/test/seccomp.sh`, hitting `cella --selftest-seccomp` |
-| `make smoke-boot` | **yes** | a real bzImage boots under real KVM all the way to a running init -- GDT/page-table/boot_params, virtio-mmio device negotiation, and a successful root mount; then the field flavor's negative: a release machine boots dark (no console byte, and enter refuses) | `scripts/test/boot.sh` |
-| `make smoke-thaw` | **yes** | full lifecycle through the verbs: create, start, freeze (sidecar present, no leftover `.tmp`), thaw, `state` gone afterward (one-shot enforcement); the clock probe follows | `scripts/test/thaw.sh` |
-| `make smoke-shell` | **yes** | the end-to-end story: a shell learns a value through `enter`, the machine freezes to files, thaws, and the same shell returns the value -- the one gate that drives the console interactively | `scripts/test/shell.sh` |
-| `make smoke-ping` | **yes** | the valve end to end under the total membrane, both lanes: born closed answers nothing; open holds the host's knock in the inbound lane with no freeze (the world's knock is not the machine's own action); the knock's live release lets the guest reply, and that park is the freeze; the pump lands further replies inside the ping's own wait window, moving mail live as it goes; close darkens; a reopened valve remembers nothing, in either direction | `scripts/test/ping.sh` |
-| `make smoke-udp` | **yes** | no frame crosses undecided in either direction, proven from within the guest and from the world's side: closed drops with no freeze; open parks the guest's ARP first at its L2 name (an unrefined ethertype never passes), its release lets the datagram park refined (proto and port in show), a refusal delivers nothing to the host listener, and the guest's own ICMP lapses the same way, in its own frame; the ear's own customs: a datagram from the host parks incoming and never freezes the machine, and a refusal there lapses it unseen | `scripts/test/udp.sh` |
-| `make smoke-device-state` | **yes** | the four device-state acceptance gates: the disk survives the thaw (rw root), the network survives the thaw, a parked egress request completes after the thaw, and the world-ratchet -- the verdict external, against real endpoints | `scripts/test/device-state.sh` |
-| `make smoke-witness` | **yes** | every verb is an event, show and inspect included: machine-scoped verbs land in machines/<vm>/audit and the placeless in the root book, each entry with uid, gid, and persona; a verb that only reads still writes (show twice makes two entries); the AVC harvest files the denial set beside the book and says so, honestly, when it cannot | `scripts/test/witness.sh` |
-| `make smoke-inspection` | **yes** | judgment requires sight, sight requires stillness: inspect renders a frozen hold's plaintext and refuses a running machine; the judge freezes first and the same hold renders; a high-entropy payload stays a sealed envelope; the look lands in the chronicle as an Inspected event and resolves nothing; a resolved id has nothing to see | `scripts/test/inspection.sh` |
-| `make smoke-collide` | **yes** | the matcher never guesses: a thaw over a colliding sidecar (two open chronicle operations under one key, planted by surgery) re-mints a fresh id, holds every ambiguous frame, delivers none; the refused stale ids lapse by the book -- refused, and held by nothing | `scripts/test/collide.sh` |
-| `make smoke-multinet` | **yes** | a machine takes N taps: both nics present in the guest, the pump lands a reply on eth0 (every frame decided), a claimed tap of the list is refused again, and a freeze and thaw carry two net transports in the sidecar -- everything re-decided after | `scripts/test/multinet.sh` |
-| `make smoke-ledger` | **yes** | the chronicle end to end: a fetch's ARP parks first at its L2 name with an id and both clocks, a thaw with no decision delivers nothing, the engine cycles the fetch to completion with no phantom, and two operations parked in order release strictly in park order | `scripts/test/ledger.sh` |
-| `make smoke-gateway-cli` | **yes** | the gateway verbs: the born-closed record asserted, open arms the membrane, show lists the hold, release by id prefix stages and the thaw applies, refuse lapses with its why, close returns the dark, and a reopened valve parks afresh -- nothing inherited | `scripts/test/gateway-cli.sh` |
-| `make smoke-gateway` | **yes** | the appliance between an agent and the world: pair wiring (an addressless bridge and the host route), the agent reaches the host only through the appliance, and the pair freezes together (agent first) and thaws together (appliance first) with the world still reachable | `scripts/test/gateway.sh` |
-| `make smoke-universe` | **yes** | the universe family end to end: a frozen branch yields twins that thaw to the same instant, a rock refuses start/thaw/enter, the inspect appliance mounts the evidence at /rock (must read back, a write must fail loudly), the inspector dies on detach, the evidence stays byte-identical, and a branched rock stays a rock | `scripts/test/universe.sh` |
-| `make doctor` | no | the host facts (one line each, nonzero on FAIL) and every golden digest against its manifest | `cella doctor check` + `cella doctor verify` |
-| `make probe-wallclock` / `probe-freeze-thaw-clock` / `probe-sregs` | **yes** (sregs: no guest) | the cryogenic clock gates, through the installable `cella-probe` binary -- no cargo at run time | `cella probe <name>` |
+`make smoke` chains six parts, one per binary. A red part names an
+accused binary -- the same granularity as the per-binary jail,
+seccomp list, and SELinux domain. Each part runs standalone.
 
-## Why the KVM-dependent tests are separate, not skipped-by-default unit tests
+| Part | Accused binary | Gates it runs |
+|---|---|---|
+| `make smoke-cella-doctor` | cella-doctor | rootless sweep, doctor check + verify |
+| `make smoke-cella-vmm` | cella-vmm | shell, boot, device-state (AC1-AC5) |
+| `make smoke-cella-machine` | cella-machine | thaw, machine (selftest), clean, nested-boot (3 variants) |
+| `make smoke-cella-gateway` | cella-gateway | ping, udp, collide, gateway, gateway-cli, inspection, ledger, chain |
+| `make smoke-cella-network` | cella-network | wire, world, multinet, translator-port-neg |
+| `make smoke-cella-probe` | cella-probe | witness, universe, probe-inception |
 
-`cargo test` has no built-in way to skip a test cleanly when a whole
-class of hardware access is unavailable, and a `#[test]` that panics
-with "no /dev/kvm" on every CI run is worse than useless -- it trains
-people to ignore red. Shelling out from `make` lets each script decide
-SKIP vs. FAIL for itself (missing `/dev/kvm` is a skip; a process that
-exited before printing anything is a fail) and print exactly why.
+The order is blame direction: ground first (doctor), then the VMM,
+then the verbs, then the border, then the wires, then the
+instruments. A broken earlier part makes later failures noise.
 
-## Adding a new feature test
+## What each gate proves
 
-Follow the `make smoke-thaw` / `scripts/test/thaw.sh` pattern:
+The one-line law of every target lives in the Makefile, above the
+target, and `make help` renders it. The map from gate to law:
 
-1. Write `scripts/<feature>.sh`: check preconditions and `SKIP` (exit 0)
-   if unmet, build what it needs via `$BIN`/`$SCRIPTS` variables (so it
-   works standalone or via `make`), do the real thing against the
-   compiled binary, assert on an observable outcome, clean up with a
-   `trap ... EXIT`.
-2. Add a `<feature>: build ## ...` target to the `Makefile` that just
-   calls the script.
-3. Add it to `smoke`'s prerequisite list if it's KVM-dependent, or to
-   `test`'s if it isn't.
-4. Add a row to the table above.
+| Gate | Proves | Law lives in |
+|---|---|---|
+| `test-jail` | bwrap actually confines: a path outside the bind set is denied | scripts/test/jail.sh |
+| `test-seccomp` + `test-seccomp-<persona>` | the installed BPF filter kills on a forbidden syscall, per binary, for real | scripts/test/seccomp.sh |
+| `test-machine` | the registry verbs against a sandboxed CELLA_HOME | scripts/test/machine.sh |
+| `test-one-door` | exactly one TX call site writes the edge -- the decision-delivery door, statically | inline in the Makefile |
+| `test-witness` | six witness doors, one per persona; the shim owns none | inline in the Makefile |
+| `smoke-boot` | a real bzImage to a running init; the release flavor boots dark | scripts/test/boot.sh |
+| `smoke-shell` | a shell learns a value, freezes to files, thaws, remembers | scripts/test/shell.sh |
+| `smoke-thaw` | create, start, freeze, thaw, the one-shot sidecar, then the clock probe | scripts/test/thaw.sh |
+| `smoke-ping` | the valve end to end, both lanes: closed dark, the knock parks without freezing, release is live, the reply's park is the freeze, reopened remembers nothing | scripts/test/ping.sh |
+| `smoke-udp` | no datagram crosses undecided, proven from inside the guest and from the world's side | scripts/test/udp.sh |
+| `smoke-collide` | the matcher never guesses: ambiguity holds everything, delivers nothing | scripts/test/collide.sh |
+| `smoke-inspection` | sight requires stillness: inspect renders frozen holds, seals the sealed, witnesses the look | scripts/test/inspection.sh |
+| `smoke-ledger` | the chronicle: parks with ids and both clocks, releases strictly in park order | scripts/test/ledger.sh |
+| `smoke-chain` | field 15 chains both books; a tampered book snaps loudly | scripts/test/chain.sh |
+| `smoke-gateway-cli` | the gateway verbs, one by one, against the record | scripts/test/gateway-cli.sh |
+| `smoke-gateway` | the appliance shape: an agent reaches the world only through its gateway machine, and the pair freezes and thaws together | scripts/test/gateway.sh |
+| `smoke-wire` | two machines, one wire, no host object; the frozen peer's mail discards and counts | scripts/test/wire.sh |
+| `smoke-world` | sockets instead of taps: ARP and the gateway echo answered at the edge, ICMP/UDP/TCP crossing decided both ways, the knock parks | scripts/test/world.sh |
+| `smoke-multinet` | N nics on one machine, every crossing decided per nic | scripts/test/multinet.sh |
+| `smoke-translator-port-neg` | the tether: an rm without destroy orphans no translator, and the knock port frees | scripts/test/translator-port-neg.sh |
+| `smoke-rootless` | no capability on any binary, no tap, bridge, nft table, or boot unit of cella's on the host | scripts/test/rootless.sh |
+| `smoke-device-state` | AC1-AC5: disk, network, exact in-flight state, external verdict, the true world | scripts/test/device-state.sh |
+| `smoke-nested-boot` | cella hosts cella, three network variants, at real nesting depth | scripts/test/nested-boot.sh |
+| `smoke-machine` | the lifecycle cycle end to end: cella selftest | via cella selftest |
+| `smoke-universe` | branch, archive, inspect: machines as artifacts, rocks stay rocks | scripts/test/universe.sh |
+| `smoke-witness` | every verb is an event, in the right book, with uid, gid, persona | scripts/test/witness.sh |
+| `probe-inception` | the cryogenic clock, one nesting level down | via cella probe |
+
+Design detail lives with the law: docs/NETWORK-MODEL.md (the
+membrane), docs/ROOTLESS-NETWORK.md (the translator),
+docs/FREEZE-THAW.md (time), docs/DEVICE-STATE.md (AC1-AC5),
+docs/NESTED-BOOT.md (the recursion), docs/EXAMPLES.md (the
+shapes, E1-E6).
+
+## Logs
+
+Every target tees its output to `.logs/<target>-<timestamp>.log`.
+When a battery fails:
+
+1. Do not rerun blindly. Read the newest log for the failing
+   target: the FAIL line names the step and the assertion.
+2. Rerun only the failing part (`make smoke-cella-network`), or
+   the single gate (`make smoke-wire`).
+3. Never edit source while a battery runs: the results after the
+   edit are tainted, and the battery restarts from clean.
+
+On a shared checkout (a bare-metal run), the same `.logs/`
+directory carries the results back; read them from there.
+
+## Knobs
+
+| Knob | Effect |
+|---|---|
+| `CELLA_KEEP_SANDBOX=1` | a gate keeps its temporary CELLA_HOME on exit and prints the path, instead of destroying it -- for post-mortem only |
+| `CELLA_THAW_PREFAULT=off\|ept\|deep` | the thaw prefill mode; `deep` is the default (docs/FREEZE-THAW.md) |
+| `WORLD_PORT` | chosen at random (1024-9999) by each gate, per run -- a leaked bind can never poison a later gate; do not pin it |
+
+## SKIP vs FAIL
+
+A script decides for itself, and says why:
+
+- **SKIP (exit 0)**: a precondition is absent -- no `/dev/kvm`, no
+  goldens, no built binary. The battery stays green and the reason
+  prints. `cargo test` cannot express this; the scripts can, which
+  is why the KVM tier is scripts behind make and not `#[test]`s
+  that panic red on every KVM-less CI run.
+- **FAIL (exit 1)**: a precondition held and an assertion broke.
+  A process that died before printing is a FAIL, never a SKIP.
+
+## Adding a gate
+
+Follow scripts/test/wire.sh as the template:
+
+1. Write `scripts/test/<feature>.sh`: check preconditions and SKIP
+   (exit 0) if unmet; work inside a temporary CELLA_HOME
+   (`mktemp -d`), honoring `CELLA_KEEP_SANDBOX`; pick
+   `WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))` if it knocks; assert
+   observable outcomes; tear down with `trap ... EXIT`, and
+   `destroy` every machine before any `rm` -- an rm alone would
+   orphan nothing since the tether, but destroy is the contract.
+2. Add the target to the Makefile: the `## law` line above it, the
+   `$(LOG)` first recipe line, the script call.
+3. Roster it: `SMOKE_TARGETS` (the log/help roster), the `.PHONY`
+   line, and the per-CLI part whose binary it accuses.
+4. Add its row to the table above.
 
 ## Line counts
 
-`make lines` (backed by `scripts/utils/count_lines.py`, which separates real
-source from inline `#[cfg(test)]` blocks rather than just running `wc
--l` over everything):
+`make lines` separates real source from test code
+(scripts/utils/count_lines.py). As of 2026-09-03:
 
 ```
-src/ (excluding inline #[cfg(test)] blocks)               2063
-src/ inline #[cfg(test)] test modules                      399
-tests/ (integration tests)                                 420
---------------------------------------------------------------
-SOURCE ONLY                                               2063
-SOURCE + ALL TESTS (inline + tests/)                      2882
+SOURCE ONLY (all crates)                  14281
+SOURCE + ALL TESTS (inline + tests/)      16018
 ```
+
+Ten crates; the largest is cella-vmm, the smallest is the shim
+(cella, ~100 lines: a routing table and one exec).

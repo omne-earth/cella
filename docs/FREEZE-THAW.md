@@ -56,15 +56,18 @@ Two qualifications:
 ## Architecture
 
 Guest RAM is one MAP_SHARED file (`ram.img`). The RAM file is the
-freeze image. A sidecar file (`state`, format v8) holds the vCPU
+freeze image. A sidecar file (`state`, format v9) holds the vCPU
 state, the irqchip and PIT state, the kvmclock value, the serial
 registers, one block per virtio transport (with any held egress
-frames), and the format version.
+frames, and the ingress lane's held and deliverable frames), and
+the format version.
 `finalize_thaw` deletes the sidecar after a successful thaw, thus a
 sidecar thaws one time only.
 
 ```mermaid
 stateDiagram-v2
+    state "L.S.2 running" as Running
+    state "L.S.3 frozen" as Frozen
     [*] --> Running: boot (cella with a kernel, RAM maps ram.img)
     Running --> Frozen: SIGUSR1, or a park under an open valve<br/>(msync ram.img, write the sidecar, process exit)
     Frozen --> Running: thaw (new process on the same state dir -- prefill, restore, delete the sidecar)
@@ -83,13 +86,13 @@ files are the complete guest.
 
 ```mermaid
 flowchart LR
-    C1["cella, first process<br/>(boot, then freeze, then exit)"] -->|"msync"| RAM
+    C1["N.M.1 cella-vmm, first process<br/>(boot, then freeze, then exit)"] -->|"msync"| RAM
     C1 -->|"write"| SC
     subgraph state["state dir"]
         RAM["ram.img (guest RAM, MAP_SHARED)"]
-        SC["state (sidecar, format v8)"]
+        SC["state (sidecar, format v9)"]
     end
-    RAM -->|"map"| C2["cella, second process<br/>(thaw, then continue)"]
+    RAM -->|"map"| C2["N.M.1 cella-vmm, second process<br/>(thaw, then continue)"]
     SC -->|"restore, then delete"| C2
 ```
 
@@ -99,15 +102,17 @@ The machine and its valve are two deterministic automata with two
 independent controllers (designed 2026-09-02 with the
 total-membrane ruling; the code converges on it).
 
-The machine automaton is time: running and frozen, driven by the
-machine controller (cella freeze, thaw, start, stop). The freeze
+The machine automaton is time: running (L.S.2) and frozen
+(L.S.3), driven by the machine controller (N.L.1 cella-machine:
+freeze, thaw, start, stop). The freeze
 verb works from every running state; against a frozen machine it
 refuses (the machine is already files).
 
-The valve automaton is the border: closed and open, driven by the
-gateway controller (cella gateway open, close, release, refuse,
-show). It is born closed at create, and it changes state on the
-gateway verbs alone: a machine state never opens it, never closes
+The valve automaton is the border: closed and open, one word in
+the valve record (N.F.1), driven by the gateway controller
+(N.X.1 cella-gateway: open, close, release, refuse). It is born
+closed at create, and it changes state on the gateway verbs
+alone: a machine state never opens it, never closes
 it, and never resets it. The verbs work in every machine state --
 frozen included -- because the border does not consult time. The
 posture holds until the opposite verb, across any number of
@@ -119,32 +124,38 @@ two points, one wire in each direction:
 1. **The park.** Valve open, an egress frame arrives: the valve
    emits one input -- freeze -- into the machine automaton. The
    only wire from the border to time.
-2. **The thaw apply.** The thaw edge executes the judgments the
-   gateway controller staged. The only wire from time to the
-   border, and the only place a decision ever moves anything: a
-   staged decision that cannot apply (its operation blocked,
-   unmatched, or unknown) stays staged and moves nothing. Every
-   failure of the apply is stillness -- delivery requires an
-   applied decision, and the only exit without delivery is an
-   explicit refusal.
+2. **The apply.** A decision moves mail at exactly two edges.
+   Against a running machine, an incoming release applies live
+   (the ear's wire, docs/NETWORK-MODEL.md, "The ingress lane").
+   Against a frozen machine, every staged decision applies at the
+   thaw edge, in park order. A staged decision that cannot apply
+   (its operation blocked, unmatched, or unknown) stays staged
+   and moves nothing. Every failure of the apply is stillness --
+   delivery requires an applied decision, and the only exit
+   without delivery is an explicit refusal.
+
+The machine automaton, driven by N.L.1 cella-machine:
 
 ```mermaid
 stateDiagram-v2
-    state "machine automaton (cella)" as M {
-        R: running
-        F: frozen
-        [*] --> R: start
-        R --> F: cella freeze, or the park
-        F --> R: cella thaw, applies what can apply
-        F --> F: cella gateway inspect -- the render,<br/>witnessed; nothing resolves
-    }
-    state "valve automaton (cella-gateway)" as V {
-        C: closed
-        O: open
-        [*] --> C: born closed at create
-        C --> O: cella gateway open
-        O --> C: cella gateway close
-    }
+    state "L.S.2 running" as R
+    state "L.S.3 frozen" as F
+    [*] --> R: start
+    R --> F: cella freeze, or the park
+    F --> R: cella thaw, applies what can apply
+    F --> F: cella gateway inspect, the render,<br/>witnessed, nothing resolves
+```
+
+The valve automaton, driven by N.X.1 cella-gateway, its record
+the valve file (N.F.1):
+
+```mermaid
+stateDiagram-v2
+    state "closed" as C
+    state "open" as O
+    [*] --> C: born closed at create
+    C --> O: cella gateway open
+    O --> C: cella gateway close
 ```
 
 The transition tables, with the outputs:
@@ -153,7 +164,8 @@ The transition tables, with the outputs:
 |---|---|---|---|
 | running | freeze | frozen | the sidecar |
 | running | park (from the valve) | frozen | ledger flush, then the sidecar -- the park is the freeze |
-| frozen | decision(id) | frozen | staged in the verdict file; nothing moves |
+| running | decision(id) | running | an incoming release applies live (the ear's wire); only incoming holds exist against a running machine, because an egress park froze it |
+| frozen | decision(id) | frozen | staged in the verdict file (N.F.2); nothing moves |
 | frozen | thaw | running | the staged decisions that can apply, apply in park order -- deliver or lapse; the rest stay staged, and their operations stay held |
 | frozen | freeze | frozen | refused: the machine is already files |
 | frozen | inspect(id) | frozen | the render, and an Inspected event in the chronicle -- the look resolves nothing |
@@ -165,16 +177,15 @@ The transition tables, with the outputs:
 | closed | ingress | closed | the frame discards |
 | closed | open | open | -- |
 | open | egress | open | park: one input crosses to the machine automaton -- the freeze |
-| open | ingress | open | deliver to the guest |
+| open | ingress | open | park in the ingress lane (N.M.2); the machine keeps running; release delivers, live |
 | open | close | closed | -- |
 
-Two arrivals the tables do not govern, stated rather than
-implied. Ingress under an open valve delivers freely: the hold
-covers egress alone, the accepted asymmetry of this phase, until
-the appliance owns the inbound side. And a frame that arrives
-while the machine is frozen is lost at the tap -- no process
-listens, the protocols above retransmit, and the appliance later
-holds such arrivals instead of losing them.
+One arrival the tables do not govern, stated rather than
+implied: a frame that arrives while the machine is frozen is
+lost at the edge -- the translator discards it and counts it
+(docs/ROOTLESS-NETWORK.md, "Frames lost at the edge"), the
+protocols above retransmit, and the first retransmitted frame
+parks like any frame.
 
 Why the posture persists across a thaw: the world answers at
 network speed, and a released request's response lands moments
@@ -187,7 +198,7 @@ was never permission: the next unjudged egress parks and freezes
 the machine exactly as before, whatever the posture's age.
 
 Everything else is independence. Undecided holds are carried
-state: no edge of either automaton consumes them except the thaw
+state: no edge of either automaton consumes them except the
 apply, thus they ride through any number of epochs, visible in
 show. Closed is closed at every age: the egress self-loop drops
 and completes identically at second zero and at hour nine, and
@@ -202,20 +213,27 @@ epoch.
 Two triggers reach the same freeze path:
 
 1. SIGUSR1 -- the freeze verb, from outside.
-2. A park under an open valve -- the one-shot rule of the network
-   model (docs/NETWORK-MODEL.md): the membrane parks the egress
-   frame, the run-loop pass completes, the ledger flushes, and the
-   machine stops before the guest runs again.
+2. A park under an open valve (docs/NETWORK-MODEL.md, "The
+   membrane": the park is the freeze): the membrane parks the
+   egress frame, the run-loop pass completes, the ledger flushes,
+   and the machine stops before the guest runs again.
 
-The sequence reads the TSC and the
-kvmclock as close together as possible, because the thaw writes them
-as close together as possible. A gap between the two reads becomes a
-step in the clock of the guest.
+The sequence reads the TSC and the kvmclock as close together as
+possible, because the thaw writes them as close together as
+possible. A gap between the two reads becomes a step in the clock
+of the guest. The walk:
+
+1. The vCPU stops (exit KVM_RUN).
+2. The registers save: regs, sregs, fpu, lapic, events, xsave,
+   xcrs, then the MSRs with the TSC last.
+3. The kvmclock reads, 1 us to 5 us after the TSC read.
+4. The irqchip and the PIT save.
+5. ram.img syncs, the sidecar writes, and the process exits.
 
 ```mermaid
 sequenceDiagram
-    participant S as SIGUSR1
-    participant V as vCPU
+    participant S as SIGUSR1 (sent by N.L.1)
+    participant V as vCPU (inside N.M.1)
     participant K as KVM
     participant F as state dir
     S->>V: request freeze
@@ -231,14 +249,24 @@ sequenceDiagram
 ## The thaw sequence
 
 A run against a state dir that holds a sidecar thaws instead of
-booting. The stage-2 prefill runs before the clock restore, thus its
-cost falls outside the clock window of the guest.
+booting. The walk:
+
+1. The new process creates the VM, maps ram.img, and creates the
+   vCPU.
+2. The stage-2 prefill fills the page tables -- ~20 ms of host
+   time, outside the clock window of the guest.
+3. The vCPU state restores (the MSR batch: TSC first, XSS
+   restored, TSC_DEADLINE last), then the kvmclock, 2 us after
+   the TSC write.
+4. The irqchip and the PIT restore.
+5. finalize_thaw deletes the sidecar, and the first KVM_RUN
+   follows (~200 us after the clock write).
 
 ```mermaid
 sequenceDiagram
-    participant C as cella (new process)
+    participant C as N.M.1 cella-vmm (new process)
     participant K as KVM (new VM)
-    participant G as guest
+    participant G as N.G.1 guest
     C->>K: create VM, map ram.img, create vCPU
     C->>K: KVM_PRE_FAULT_MEMORY (fill stage-2 tables)
     Note over C,K: ~20 ms of host time.<br/>The guest clock does not run.
@@ -334,8 +362,9 @@ its own tables. L0 builds that shadow on the first access of L2 to
 each page. The prefill cannot reach it: the L1 kernel performs the
 prefill as normal memory writes, and L0 sees those writes as L1
 activity, not as L2 accesses. The shadow of L0 stays cold. One thing
-does reach it: a real access by the guest. The warming stub of
-src/warm.rs performs those accesses before the clock restore, and
+does reach it: a real access by the guest. The warming stub
+(crates/cella-vmm/src/warm.rs) performs those accesses before the
+clock restore, and
 that is the fix (see docs/NESTED-BOOT.md, "The fix").
 
 In the first heartbeat cycle after the thaw, each page that the guest

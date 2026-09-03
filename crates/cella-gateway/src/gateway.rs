@@ -2,8 +2,9 @@
 //! "The control plane".
 //!
 //! show reads the chronicle; release and refuse append Decisions and
-//! kick a running machine (a frozen one applies them at thaw); close
-//! shuts the valve; open states the one-way rule and refuses. Every
+//! kick a running machine (a frozen one applies them at thaw; an
+//! incoming decision applies live); close shuts the valve; open
+//! opens into the membrane, never into a free flow. Every
 //! verb is unprivileged: files and signals on the machine's own
 //! directory, never a capability.
 

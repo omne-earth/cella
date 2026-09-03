@@ -12,12 +12,13 @@ artifacts, the boot path, the pass criteria, and the results.
    is our code. We can measure what a boot or a thaw costs an inner
    guest through cella, with instruments on both sides.
 2. **It is the strongest exercise of cella as a host.** A guest that
-   runs a VMM uses the CPUID filter (VMX must pass through), /dev/kvm,
-   and the interrupt paths harder than a plain Linux guest does.
+   runs a VMM uses the CPUID filter (the virtualization bit must
+   pass through), /dev/kvm, and the interrupt paths harder than a
+   plain Linux guest does.
 3. **It is the recursion primitive.** A world that can contain worlds
    is a required property for the larger goal. The boot was the
    first step; the freeze of a hypervisor guest is delivered too.
-   The sidecar (v8) carries the nested-virtualization state (see
+   The sidecar (v9) carries the nested-virtualization state (see
    docs/DEVICE-STATE.md), and the hybrid and www gates freeze the
    outer machine while its inner VM runs.
 
@@ -25,9 +26,9 @@ artifacts, the boot path, the pass criteria, and the results.
 
 ```mermaid
 flowchart TD
-    L0["bare metal (or the outer host)"] --> L1["host: cella runs here"]
-    L1 --> L2["outer guest: bzImage-nested + rootfs-nested.ext4<br/>init runs the verbs: cella create, cella start (jailed)"]
-    L2 --> L3["inner guest: canonical bzImage + rootfs.ext4<br/>init prints cella-rootfs lines"]
+    L0["bare metal (or the outer host)"] --> L1["host: cella runs here (N.L.1 drives the verbs, N.M.1 is the VMM)"]
+    L1 --> L2["N.G.1 outer guest: bzImage-nested + rootfs-nested.ext4<br/>init runs the verbs: cella create, cella start (jailed)"]
+    L2 --> L3["N.G.1 inner guest, one level down: canonical bzImage + rootfs.ext4<br/>init prints cella-rootfs lines"]
 ```
 
 On the nested development host the test adds one more layer below L0.
@@ -35,7 +36,8 @@ The test passes there at a depth of three hypervisor layers.
 
 ## Artifacts
 
-The canonical goldens under ~/.cella are proof artifacts, each sworn by its golden.json manifest.
+The canonical goldens under ~/.cella are proof artifacts, each
+sworn by its golden.json manifest.
 The nested feature does not change them: the inner guest boots them
 unmodified. The nested artifacts carry the -nested suffix, and their
 own targets build them.
@@ -54,21 +56,23 @@ syscalls, thus a static glibc binary has no dlopen or NSS problem.
 
 ## The boot path
 
-The inner cella runs without a TAP: no network exists on either
-layer, and --tap is optional for exactly this reason. The inner
-command line names one virtio_mmio device, the block device.
+In the airgapped variant no network exists on either layer:
+`--net none` is the default, and the inner command line names one
+virtio_mmio device, the block device. A networked layer runs the
+same rootless network as the host (docs/ROOTLESS-NETWORK.md): the
+layer's own translator (N.T.1), spawned by that layer's start.
 
 ```mermaid
 sequenceDiagram
     participant T as nested-boot.sh
-    participant O as outer cella (host)
-    participant G as outer guest
-    participant I as inner cella (jailed by bwrap)
-    participant N as inner guest
-    T->>O: boot bzImage-nested + rootfs-nested.ext4 (256 MB, no TAP)
+    participant O as outer cella, on the host (N.L.1 spawns N.M.1)
+    participant G as N.G.1 outer guest
+    participant I as inner cella, jailed by bwrap (in-guest N.L.1)
+    participant N as N.G.1 inner guest
+    T->>O: create + start (nested goldens, 768 MB)
     O->>G: first KVM_RUN
     G->>G: init mounts /proc /sys /tmp, checks /dev/kvm
-    G->>I: cella create + cella start (jailed, 64 MB, block only)
+    G->>I: cella create + cella start (jailed, 64 MB, block; www adds a nic)
     I->>N: first KVM_RUN
     N-->>T: "cella-rootfs: init running" over two serial layers
 ```
@@ -86,21 +90,28 @@ each layer that it networks.
 
 | Variant   | Outer guest        | Inner guest        | PASS needs |
 |-----------|--------------------|--------------------|------------|
-| airgapped | no TAP             | block device only  | the inner boot line |
-| hybrid    | TAP + in-kernel IP | block device only  | + an ICMP reply from the outer guest |
-| www       | TAP + in-kernel IP | TAP + in-kernel IP | + an ICMP reply from the inner guest |
+| airgapped | --net none         | --net none         | the inner boot line |
+| hybrid    | --net world + a knock port | --net none | + the outer guest answers the host's knock, decided |
+| www       | --net world + a knock port | --net world:1710/udp | + the inner guest answers ICMP inside the outer guest, decided |
 
 In the www variant the inner machine is born closed, and the outer
-init is its engine: it opens the inner valve, pings, and the inner
-guest's echo reply parks and freezes the inner machine. The init
-releases the held operation, thaws, and pings again -- the ratchet
-turns one level down. The packet path is: outer init -> the
-in-guest tap -> inner cella virtio-net -> inner guest kernel ->
-back through the inner membrane, decided.
+init is its engine:
+
+1. The init opens the inner valve and pings.
+2. The inner guest's echo reply parks and freezes the inner
+   machine.
+3. The init releases the held operation, thaws, and pings again
+   -- the ratchet turns one level down.
+
+The packet path is: outer init -> the inner machine's in-guest
+translator (N.T.1) -> inner virtio-net (N.M.1) -> inner guest
+kernel -> back through the inner membrane, decided. The layers
+share the outer machine's port space, thus the inner knock port
+is distinct (1710; docs/EXAMPLES.md, E2).
 
 - **SKIP**: the outer guest has no /dev/kvm (that host does not offer
-  virtualization one layer deeper), no host /dev/kvm access, no
-  nested artifacts, or no TAP for a networked variant.
+  virtualization one layer deeper), no host /dev/kvm access, or no
+  nested artifacts.
 - **FAIL**: an incomplete checklist within the timeout. The serial
   log and the stderr of the outer cella stay on disk.
 
@@ -137,23 +148,22 @@ PVCLOCK_TSC_STABLE_BIT.
 Measured difference of the thawed guest against its baseline mean, at
 every depth (2026-08-30, guest kernel 7.2.2). "Before" is the thaw
 with the ioctl prefill only; "after" adds the stage-2 warming stub
-(src/warm.rs), which reaches every layer below through real guest
-accesses. Depth counts the hypervisor layers between the metal and
-the thawed guest:
+(crates/cella-vmm/src/warm.rs), which reaches every layer below
+through real guest accesses.
 
 Depth counts the hypervisors between the metal and the thawed guest.
 A direct thaw and an inception differ by one: the KVM of the outer
 guest. The two machines differ by one as well: the nested KVM machine
 is itself a guest of its cloud host.
 
-Bare metal:
+### Bare metal
 
 | Depth | Experiment  | Before   | After    | Verdict |
 |-------|-------------|----------|----------|---------|
 | 1     | direct thaw | +0.33 ms | -1.17 ms | PASS    |
 | 2     | inception   | +4.4 ms  | +0.04 ms | PASS    |
 
-Nested KVM:
+### Nested KVM
 
 NOTE: this table starts at depth two. The machine is itself a guest
 of its cloud host, thus one hypervisor already sits between the metal
@@ -170,6 +180,8 @@ rigs, and they agree before the warming (+4.4 against +2.5..4.3 ms)
 and after it (+0.04 against +0.15 ms). That agreement is the
 cross-validation of the whole measurement.
 
+### The trend across depths
+
 The trend before the warming: near zero at depth one, ~4 ms at depth
 two, and a multiplicative jump at depth three. After the warming and
 with memory headroom: zero within the interval at every depth, on
@@ -180,9 +192,11 @@ outer guest starves, its own reclaim evicts the warmed mappings
 between the warming and the first heartbeat, and +30 ms remained.
 With headroom the gate passes (-6.5 ms to +11 ms across runs at 512,
 768, and 1024 MB, inside the interval; the baseline jitter at this
-depth widens the interval to ~+/-20 ms). Warming builds the mappings; headroom keeps them.
-Every depth now passes on both machines, without a kernel change at
-any layer.
+depth widens the interval to ~+/-20 ms). Warming builds the
+mappings; headroom keeps them. Every depth now passes on both
+machines, without a kernel change at any layer.
+
+### The inner prefill
 
 The inner prefill works one layer down (KVM_PRE_FAULT_MEMORY through
 the guest kernel, ~3 ms). The remaining +4.4 ms on bare metal has the
@@ -219,20 +233,25 @@ falls back to the real syscall, and the inner cella died with SIGSYS
 in do_freeze. probe-inception found this on its first run. Every
 deeper measurement depended on this entry.
 
-### 3. The warming stub (src/warm.rs)
+### 3. The warming stub (crates/cella-vmm/src/warm.rs)
 
 The remainder after the prefill (~4 ms per nesting level) came from
 the layers below the direct host: each one builds its combined
 mapping on the first guest access, and no ioctl at any layer reaches
 them. A real guest access does: the architecture forces every layer
-to resolve the translation. The thaw therefore runs a throwaway stub
-on the fresh vCPU, before the restore of the state and of the clock:
-one byte read and written back per page (the read path and the write
-path both warm), code and page tables in a scratch memslot, exit
-through an OUT instruction (HLT blocks inside KVM with the in-kernel
-irqchip). This works under hypervisors that we do not own, and it
-composes recursively: each layer of a cella stack warms its own view,
-and the touches cascade to the metal.
+to resolve the translation. The thaw therefore runs a throwaway
+stub on the fresh vCPU, before the restore of the state and of
+the clock:
+
+1. The stub reads one byte per page and writes it back (the read
+   path and the write path both warm).
+2. Its code and page tables live in a scratch memslot.
+3. It exits through an OUT instruction (HLT blocks inside KVM
+   with the in-kernel irqchip).
+
+This works under hypervisors that we do not own, and it composes
+recursively: each layer of a cella stack warms its own view, and
+the touches cascade to the metal.
 
 ### 4. Keep the scratch memslot
 
@@ -264,7 +283,9 @@ keeps them.
 
 ## Next steps
 
-- Freeze the outer guest while the inner guest runs, and thaw it: the
-  cryogenic principle applied to a hypervisor.
 - Offer the kernel-side prefill propagation upstream, so that the
   warming cost disappears for every user of the kernel.
+
+Delivered since this document's first writing: the freeze of the
+outer guest while its inner VM runs (the sidecar's
+nested-virtualization block; the hybrid and www gates prove it).
