@@ -48,7 +48,7 @@
 //!
 //! Run: make probe-freeze-thaw-clock
 //! (needs the canonical goldens -- `make golden` -- and a
-//! configured tap0 -- `make setup-tap`)
+//! netless guest)
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -316,11 +316,6 @@ pub fn run() {
     // probe then names one virtio_mmio device on the command line, not
     // two. probe-inception uses this mode: inside a guest no TAP
     // exists, and the clock measurement needs no network.
-    let tap = match std::env::var("CELLA_TEST_TAP") {
-        Ok(v) if v == "none" => None,
-        Ok(v) => Some(v),
-        Err(_) => Some("tap0".to_string()),
-    };
 
     if !bin.is_file() {
         fail(&format!("{} not built -- run: make build", bin.display()));
@@ -332,7 +327,8 @@ pub fn run() {
     // Skip, and do not fail, when this machine cannot run a guest. This
     // probe is part of `make smoke-thaw`, and the smoke tests skip in the
     // same conditions, so that `make smoke` passes on a machine with no
-    // KVM and no tap device.
+    // KVM. The probe's guest is netless (1.6.14e): the clock
+    // measurement needs no network.
     let kvm_ok = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -341,12 +337,6 @@ pub fn run() {
     if !kvm_ok {
         println!("SKIP: no read and write access to /dev/kvm on this machine");
         std::process::exit(0);
-    }
-    if let Some(tap) = &tap {
-        if !std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
-            println!("SKIP: {tap} does not exist -- run: make setup-tap");
-            std::process::exit(0);
-        }
     }
 
     let tmp = std::env::temp_dir().join(format!(
@@ -374,11 +364,8 @@ pub fn run() {
         _ => default_time_args(&bin),
     };
     let base = default_base_args(&bin);
-    let devices = if tap.is_some() {
-        "virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
-    } else {
-        "virtio_mmio.device=4K@0xd0000000:5"
-    };
+    // The block device alone: the probe's guest is netless (1.6.14e).
+    let devices = "virtio_mmio.device=4K@0xd0000000:5";
     let cmdline = format!("{base} {time_args} root=/dev/vda rw {devices} {extra}");
     println!(
         "time arguments: {}",
@@ -403,10 +390,6 @@ pub fn run() {
         .arg(&kernel)
         .arg("--disk")
         .arg(&disk_copy)
-        .args(tap.iter().flat_map(|t| {
-            crate::claim_tap(t);
-            ["--tap".to_string(), t.clone()]
-        }))
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")
@@ -507,10 +490,6 @@ pub fn run() {
         .arg(&state_dir)
         .arg("--disk")
         .arg(&disk_copy)
-        .args(tap.iter().flat_map(|t| {
-            crate::claim_tap(t);
-            ["--tap".to_string(), t.clone()]
-        }))
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")

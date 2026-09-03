@@ -139,12 +139,20 @@ pub fn run(vm: &str) -> Result<(), String> {
                     peer: None,
                     listener: None,
                 }
-            } else if n == "world" {
+            } else if n == "world" || n.starts_with("world:") {
                 // The guest MAC convention of main.rs: base MAC,
-                // last byte + nic index.
+                // last byte + nic index. "world:PORTS" carries the
+                // knock's port map (create validated it).
                 let mut mac: [u8; 6] = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
                 mac[5] = mac[5].wrapping_add(i as u8);
-                Kind::World(world::World::new(mac))
+                let ports = n
+                    .strip_prefix("world:")
+                    .map(world::parse_ports)
+                    .transpose()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                Kind::World(world::World::new(mac, &ports))
             } else {
                 return None;
             };

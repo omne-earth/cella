@@ -96,6 +96,42 @@ capability and no file descriptor of an other machine. At the
 last rung it gets the smallest jail in the system: no /dev/kvm,
 no machine data, only its own file descriptors and sockets.
 
+### The translator's TCP
+
+The world side of the translator keeps one TCP flow per (guest
+port, peer address, peer port). The flow is a small state machine
+between a guest segment stream and one host socket. The guest's
+own stack retransmits in its direction. The translator
+retransmits in the other direction from an unacknowledged buffer
+on a timer, because a frozen machine loses frames at the edge and
+the translator carries that patience, not the world's peer. Every
+segment the translator emits carries a pseudo-header checksum.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Connecting: guest SYN\n(parked, released)\nconnect() in flight
+    Connecting --> SynAckSent: socket writable,\nSO_ERROR 0\n-> SYN-ACK to guest
+    Connecting --> [*]: SO_ERROR set,\nor 20 s\n-> RST to guest
+    SynAckSent --> Established: guest ACK
+    [*] --> SynToGuest: knock on a mapped port\naccept() -> SYN to guest\n(parks in the ingress lane)
+    SynToGuest --> Established: guest SYN-ACK\n-> ACK to guest
+    Established --> Established: guest data in order\n-> write(), ACK\n\nsocket bytes\n-> PSH|ACK to guest\n(within the guest window)\n\nunacked past RTO\n-> retransmit
+    Established --> Closing: guest FIN\n-> ACK, shutdown(WR)\n\nsocket EOF\n-> FIN to guest
+    Closing --> [*]: both FINs seen and\nunacked buffer empty\n-> close()
+    Established --> [*]: RST either way,\nwrite error,\nor 30 retransmits\n-> close()
+```
+
+Two facts hold in every state. First, a segment that reaches
+this machine only reaches the guest after it parks in the
+ingress lane and a judge releases it; the state machine sees the
+guest's answer only after the answer parks and is released on
+the way out. Second, the translator holds the socket across a
+freeze: the flow's world side does not close because the guest
+sleeps, and the retransmit timer feeds the new epoch until the
+guest acknowledges again.
+
+
 ## The edge (the VMM side)
 
 A nic's backend in the VMM is an Edge: a file descriptor that

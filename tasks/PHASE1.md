@@ -461,7 +461,9 @@ requires a decision, nothing stands, and the mouth closes.
             world/wire: with no choreography change.
             The last rung also cleans what the pool left behind
             (ruled 2026-09-03), on BOTH hosts -- the VM host and
-            the bare-metal host: the pre-existing taps and pair
+            the bare-metal host -- by hand, a one-off, never from
+            make install (a name is not ownership; deleting host
+            objects by name is docker's mistake): the pre-existing taps and pair
             taps, the brp bridges, the cella_nat nft table, the
             firewalld zone bindings and DOCKER-USER rules, the
             user boot unit and its linger, and every make target
@@ -975,3 +977,18 @@ and the join should each read this list before building.
   concurrent battery (2026-09-02). On a shared host, ANY
   KVM-touching or process-killing step waits for a quiet host --
   the serialization clause covers hygiene, not just batteries.
+- The in-guest static cella (glibc crt-static, baked into the
+  nested and inception images) installs no seccomp filter
+  (2026-09-03): lane b's tables were strace-derived on the host
+  against dynamic binaries, and the static build on the guest
+  kernel makes a different syscall set -- the inner `create` died
+  by SIGSYS silently the first time the images were rebaked with
+  a post-lane-b cella. The gate is cfg(target_feature =
+  "crt-static") in cella_libs::seccomp::install. The join traces
+  the in-guest lists on the guest kernel and removes the gate.
+- The knock from the host's loopback is shown to the guest as
+  coming from the gateway address (192.168.210.1), pasta's rule
+  (2026-09-03): a guest answering 127.0.0.1 answers itself and no
+  reply ever leaves eth0. The flow remembers the real peer. Gates
+  that look for the knock in `show incoming` grep the gateway
+  address, not the host's.

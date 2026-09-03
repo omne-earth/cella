@@ -18,7 +18,6 @@ fi
 
 # rust/cargo/rustfmt/clippy: make build/debug/check/lint/fmt
 # bubblewrap: scripts/jail.sh
-# nftables/iproute: scripts/setup/tap.sh
 # curl: scripts/build/assets.sh (kernel/busybox source fetch)
 # iputils: scripts/test/net.sh (ping)
 # python3: make lines, scripts/build/assets.sh (kernel.org releases.json)
@@ -28,7 +27,7 @@ fi
 PACKAGES=(
     rust cargo rustfmt clippy
     bubblewrap
-    nftables iproute protobuf-compiler
+    iproute protobuf-compiler
     curl
     iputils
     python3
@@ -64,38 +63,21 @@ else
          "-- check its owner/permissions manually" >&2
 fi
 
-# Docker hooks the forward chain with policy drop, and DOCKER-USER is
-# its extension point. Without these rules a host with docker drops
-# every forwarded guest packet, whatever the firewall zone says. A
-# host without docker needs nothing here.
-if sudo nft list chain ip filter DOCKER-USER &>/dev/null; then
-    if [ "$(sudo nft list chain ip filter DOCKER-USER | grep -c 'tap\*')" = "0" ]; then
-        sudo nft insert rule ip filter DOCKER-USER iifname '"tap*"' accept
-        sudo nft insert rule ip filter DOCKER-USER oifname '"tap*"' accept
-        echo "cella: tap forwarding allowed through DOCKER-USER"
-    else
-        echo "cella: DOCKER-USER already forwards the taps"
-    fi
-fi
 
 cat <<'EOT'
 cella: install done.
 
 Next, from any directory (no make needed from here on):
 
-  1. The network, once per host boot -- no sudo: cella-network
-     carries cap_net_admin from this install (the pool feeds
-     `cella create --net auto`, and the manifests are the
-     allocation record):
-       cella-network setup --taps 4
-
-  2. Prove the lifecycle end to end:
+  1. Prove the lifecycle end to end:
        cella selftest
 
-  3. A machine of your own:
-       cella create m1 --net tap0
+  2. A machine of your own -- the network is rootless (no setup,
+     no capability; the machine's own translator carries it):
+       cella create m1 --net world
        cella start m1
-       cella enter m1        (Ctrl-] detaches; cella freeze / thaw / destroy m1)
+       cella gateway m1 open   (then judge: cella gateway m1 show / release <id>)
+       cella enter m1          (the lab flavor only; Ctrl-] detaches)
 EOT
 
 # The binary. A release build lands in ~/.local/bin, and PATH gains
@@ -103,48 +85,14 @@ EOT
 cargo build --release
 # Every persona is its own binary since the split (1.6.13): the
 # shim routes, the personas own their verbs, and the shakedown
-# confines each inode. cella-network is the one CAP_NET_ADMIN
-# holder -- the file capability makes every later invocation
-# sudo-free; that setcap is the root moment, once, below.
-for name in cella cella-machine cella-vmm cella-gateway cella-universe cella-build cella-doctor cella-network cella-probe; do
-    install -D -m 0755 "target/release/$name" "$HOME/.local/bin/$name"
-done
-echo "cella: nine persona binaries installed (the shim routes; each owns its verbs)"
-sudo setcap 'cap_net_admin+eip' "$HOME/.local/bin/cella-network"
-echo "cella: cella-network installed with cap_net_admin"
-sudo setcap 'cap_net_admin+eip' target/release/cella-network 2>/dev/null || true
+# confines each inode. No binary carries a capability (1.6.14e).
 
-# The tap pool at boot: TUNSETPERSIST is kernel-lifetime, thus a
-# reboot deletes the pool. This oneshot recreates it. The unit runs
-# as root at boot (file capabilities matter only for the runtime
-# path); SUDO_UID pins the tap owner to the installing user.
-# The pool at boot: a systemd USER unit with linger, not a system
-# unit. A system service runs in init_t with no exec type on the
-# installed binary, and SELinux denies both the exec from the
-# user's home and the witness's append on the root book -- the
-# fail-closed witness then kills the pool at every boot (the AVCs
-# of 2026-09-02). The user manager runs the unit as the operator
-# in the operator's own domain: the exec, the witness, and the
-# file capability all hold. The shakedown's join revisits this
-# when the installed binaries gain their SELinux types.
-mkdir -p "$HOME/.config/systemd/user"
-tee "$HOME/.config/systemd/user/cella-network.service" >/dev/null <<UNIT
-[Unit]
-Description=cella tap pool (cella-network setup)
-After=network-online.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=%h/.local/bin/cella-network setup --taps 4
-
-[Install]
-WantedBy=default.target
-UNIT
-systemctl --user daemon-reload
-systemctl --user enable cella-network.service >/dev/null 2>&1
-sudo loginctl enable-linger "$USER"
-echo "cella: cella-network.service enabled -- the pool survives a reboot"
+# The network is rootless (1.6.14e): no capability, no unit, no
+# host object -- this install creates none. It also removes none:
+# a tap or table left by an older install is removed by hand, by
+# the one who knows it is cella's (ruled 2026-09-03; a name is not
+# ownership, and deleting by name is what docker does to others).
+echo "cella: the network is rootless -- no capability, no unit, no host object"
 case ":$PATH:" in
 *":$HOME/.local/bin:"*) echo "cella: ~/.local/bin is already on PATH" ;;
 *)

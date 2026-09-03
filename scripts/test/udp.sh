@@ -13,14 +13,11 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
-TAP="${CELLA_TEST_TAP:-tap0}"
-HOST_IP="${CELLA_TAP_CIDR:-192.168.200.1/24}"; HOST_IP="${HOST_IP%%/*}"
-GUEST_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 UDP_PORT=9053
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
-ip link show "$TAP" >/dev/null 2>&1 || { echo "SKIP: $TAP missing -- run: cella doctor fix"; exit 0; }
 command -v nc >/dev/null || { echo "SKIP: nc missing -- run: make install"; exit 0; }
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
@@ -104,8 +101,8 @@ wait_con() {
 nc -u -l "$HOST_IP" "$UDP_PORT" > "$CAPTURE" 2>/dev/null &
 LISTEN_PID=$!
 
-say "step 1: born closed -- the guest's own datagram dies at the tap (negative)"
-"$BIN" create "$VM" --net "$TAP" >/dev/null
+say "step 1: born closed -- the guest's own datagram dies at the (negative)"
+"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
 [ "$(cat "$CELLA_HOME/machines/$VM/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 "$BIN" start "$VM" >/dev/null
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
@@ -171,10 +168,12 @@ echo "  the echo request lapsed; the guest timed out in its own frame"
 say "step 5: the ear -- the world's datagram parks incoming, and a refusal drops it unseen"
 if [ -f "$STATE" ]; then "$BIN" thaw "$VM" >/dev/null; sleep 1; fi
 pump_mail
-echo knock | timeout 2 nc -u -w 1 "$GUEST_IP" 9099 2>/dev/null || true
+printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true
 sleep 2
 [ -f "$STATE" ] && { echo "FAIL: the machine froze on inbound -- the knock is not its deed"; exit 1; }
-ID_IN=$("$BIN" gateway "$VM" show incoming | grep "$HOST_IP:9099\|$HOST_IP" | awk '{print $1}' | tail -1)
+# The knock came from the host's loopback, which the translator
+# shows to the guest as the gateway address (1.6.14e).
+ID_IN=$("$BIN" gateway "$VM" show incoming | grep "192.168.210.1" | awk '{print $1}' | tail -1)
 [ -n "$ID_IN" ] || { echo "FAIL: show incoming lists no held datagram from the host"; exit 1; }
 # The lane pops front first: refuse everything held, oldest
 # included, or the datagram's refusal waits behind an undecided

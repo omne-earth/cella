@@ -214,66 +214,6 @@ pub fn read_manifest(name: &str) -> Result<Manifest, String> {
     Manifest::from_json(&s)
 }
 
-/// The tap devices that the existing machines claim. The manifest is
-/// the record of an allocation: one tap belongs to one machine, from
-/// create to destroy.
-pub fn claimed_taps() -> Vec<String> {
-    let Ok(entries) = fs::read_dir(home().join("machines")) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|e| {
-            let s = fs::read_to_string(e.path().join("manifest.json")).ok()?;
-            let net = json_field(&s, "net")?.to_string();
-            (net != "none").then_some(net)
-        })
-        .flat_map(|net| {
-            net.split(',')
-                .map(|t| t.trim().to_string())
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-/// Allocate the lowest free tap: present on the host, and claimed by
-/// no machine.
-fn allocate_tap() -> Result<String, String> {
-    let claimed = claimed_taps();
-    let mut taps: Vec<(u32, String)> = fs::read_dir("/sys/class/net")
-        .map_err(|e| format!("listing /sys/class/net: {e}"))?
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            let n: u32 = name.strip_prefix("tap")?.parse().ok()?;
-            Some((n, name))
-        })
-        .collect();
-    taps.sort();
-    taps.into_iter()
-        .map(|(_, name)| name)
-        .find(|t| !claimed.contains(t))
-        .ok_or_else(|| {
-            "no free tap in the pool -- run: make setup-tap (or free one with destroy)".to_string()
-        })
-}
-
-/// The subnet of one pool tap: tap<n> serves 192.168.<200+n>.0/24,
-/// the host at .1 and the guest at .2. A tap without a numeric
-/// suffix falls back to the configured defaults.
-fn tap_addresses(tap: &str) -> (String, String) {
-    if let Some(n) = tap.strip_prefix("tap").and_then(|s| s.parse::<u32>().ok()) {
-        let net = 200 + n;
-        if net <= 254 {
-            return (format!("192.168.{net}.2"), format!("192.168.{net}.1"));
-        }
-    }
-    (
-        crate::config::DEFAULT_GUEST_IP.to_string(),
-        crate::config::DEFAULT_HOST_IP.to_string(),
-    )
-}
-
 /// The privileged setup: provision a pool of persistent taps and the
 /// NAT, once. This is the one verb that needs root; everything else
 /// runs rootless, and create allocates from this pool (--net auto).
@@ -289,93 +229,6 @@ fn find_program(name: &str) -> String {
         }
     }
     name.to_string()
-}
-
-/// Create one persistent TAP through the tun ioctls: busybox `ip` has
-/// no tuntap subcommand, thus the shell path would not work inside a
-/// guest. Persistence is the point: a jailed VMM in a user namespace
-/// has no CAP_NET_ADMIN, and it can only open a device that already
-/// exists and that its user owns.
-fn create_persistent_tap(name: &str, owner: libc::uid_t) -> Result<(), String> {
-    const TUNSETIFF: libc::c_ulong = 0x4004_54ca;
-    const TUNSETPERSIST: libc::c_ulong = 0x4004_54cb;
-    const TUNSETOWNER: libc::c_ulong = 0x4004_54cc;
-    const IFF_TAP: libc::c_short = 0x0002;
-    const IFF_NO_PI: libc::c_short = 0x1000;
-    #[repr(C)]
-    struct Ifreq {
-        name: [u8; 16],
-        flags: libc::c_short,
-        _pad: [u8; 22],
-    }
-    let f = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/net/tun")
-        .map_err(|e| format!("opening /dev/net/tun: {e}"))?;
-    let mut req = Ifreq {
-        name: [0; 16],
-        flags: IFF_TAP | IFF_NO_PI,
-        _pad: [0; 22],
-    };
-    req.name[..name.len()].copy_from_slice(name.as_bytes());
-    use std::os::fd::AsRawFd;
-    // SAFETY: req is a valid ifreq, and the fd is /dev/net/tun.
-    unsafe {
-        for (ioc, arg, what) in [
-            (
-                TUNSETIFF,
-                &req as *const Ifreq as libc::c_ulong,
-                "TUNSETIFF",
-            ),
-            (TUNSETOWNER, owner as libc::c_ulong, "TUNSETOWNER"),
-            (TUNSETPERSIST, 1, "TUNSETPERSIST"),
-        ] {
-            if libc::ioctl(f.as_raw_fd(), ioc, arg) < 0 {
-                return Err(format!(
-                    "{what} on {name}: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Re-own one persistent tap to a machine's sub-uid (1.6.14a). The
-/// pool creates taps owned by the invoking user; machines each run
-/// as their own sub-user, and only the tap's owner may attach it.
-/// The spawn calls `cella-network own <tap> <uid>` at start, so the
-/// ownership follows the machine. The ioctls are the creation set
-/// minus nothing: TUNSETIFF on an existing persistent tap attaches
-/// it, TUNSETOWNER moves it, TUNSETPERSIST keeps it -- all under
-/// this binary's file capability.
-pub fn own_tap(tap: &str, uid: u32) -> Result<(), String> {
-    // SAFETY: geteuid has no failure mode.
-    let root = unsafe { libc::geteuid() } == 0;
-    if !root && !have_net_admin() {
-        return Err(
-            "re-owning a tap needs CAP_NET_ADMIN -- run: cella-network own (make install \
-             grants the capability), or run as root"
-                .into(),
-        );
-    }
-    create_persistent_tap(tap, uid as libc::uid_t)
-}
-
-/// True when the effective capability set carries CAP_NET_ADMIN
-/// (bit 12 of CapEff in /proc/self/status). Root always does; the
-/// cella-network binary does through its file capability.
-fn have_net_admin() -> bool {
-    let Ok(status) = fs::read_to_string("/proc/self/status") else {
-        return false;
-    };
-    status
-        .lines()
-        .find_map(|l| l.strip_prefix("CapEff:"))
-        .and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
-        .map(|caps| caps & (1 << 12) != 0)
-        .unwrap_or(false)
 }
 
 /// The translator's lifecycle, spawn side (1.6.14e rung 2): a
@@ -464,292 +317,6 @@ pub fn connect_edge_nic(
     }
 }
 
-/// Give the spawned ip and nft CAP_NET_ADMIN. The file capability
-/// puts it in the permitted set only; an ambient raise also demands
-/// it in the process inheritable set, which the invoking shell never
-/// carries. Therefore: capset the inheritable bit first (legal, the
-/// bit is in permitted), then raise it into the ambient set. Root
-/// needs none of this; a failure surfaces when the tools then fail.
-fn raise_ambient_net_admin() {
-    const PR_CAP_AMBIENT: libc::c_int = 47;
-    const PR_CAP_AMBIENT_RAISE: libc::c_ulong = 2;
-    const CAP_NET_ADMIN: u32 = 12;
-    const V3: u32 = 0x2008_0522; // _LINUX_CAPABILITY_VERSION_3
-
-    #[repr(C)]
-    struct CapHeader {
-        version: u32,
-        pid: libc::c_int,
-    }
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct CapData {
-        effective: u32,
-        permitted: u32,
-        inheritable: u32,
-    }
-
-    let mut hdr = CapHeader {
-        version: V3,
-        pid: 0,
-    };
-    let mut data = [CapData::default(); 2];
-    // SAFETY: valid pointers to the V3 header and its two data slots.
-    unsafe {
-        if libc::syscall(libc::SYS_capget, &mut hdr, data.as_mut_ptr()) != 0 {
-            return;
-        }
-        data[0].inheritable |= 1 << CAP_NET_ADMIN;
-        if libc::syscall(libc::SYS_capset, &hdr, data.as_ptr()) != 0 {
-            return;
-        }
-        libc::prctl(
-            PR_CAP_AMBIENT,
-            PR_CAP_AMBIENT_RAISE,
-            CAP_NET_ADMIN as libc::c_ulong,
-            0,
-            0,
-        );
-    }
-}
-
-/// The pair wiring of the gateway ladder: a host bridge with no
-/// address (pure L2) joins the agent tap pair<n>a and the gateway
-/// tap pair<n>g, and a host route sends the agent subnet
-/// (10.77.<n>.0/24) toward the world side of the gateway on the
-/// pool tap named by --via. The host NAT already masquerades every
-/// forwarded subnet on its way out.
-pub fn setup_pair(id: u32, via: &str) -> Result<(), String> {
-    // SAFETY: geteuid has no failure mode.
-    let root = unsafe { libc::geteuid() } == 0;
-    if !root && !have_net_admin() {
-        return Err(
-            "pair wiring needs CAP_NET_ADMIN -- run: cella-network pair (make install grants \
-             the capability), or run as root"
-                .into(),
-        );
-    }
-    if !root {
-        raise_ambient_net_admin();
-    }
-    let owner: libc::uid_t = std::env::var("SUDO_UID")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        // SAFETY: getuid has no failure mode.
-        .unwrap_or_else(|| unsafe { libc::getuid() });
-    let n: u32 = via
-        .strip_prefix("tap")
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| format!("--via wants a pool tap (tap<n>), not {via:?}"))?;
-    let ip_bin = find_program("ip");
-    let ip = |args: &[&str]| -> Result<(), String> {
-        let out = std::process::Command::new(&ip_bin)
-            .args(args)
-            .output()
-            .map_err(|e| format!("running ip: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "ip {} failed: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-        Ok(())
-    };
-    let br = format!("brp{id}");
-    if !std::path::Path::new(&format!("/sys/class/net/{br}")).exists() {
-        ip(&["link", "add", "name", &br, "type", "bridge"])?;
-    }
-    for suffix in ["a", "g"] {
-        let tap = format!("pair{id}{suffix}");
-        if !std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
-            create_persistent_tap(&tap, owner)?;
-        }
-        ip(&["link", "set", &tap, "master", &br])?;
-        ip(&["link", "set", &tap, "up"])?;
-        // IPv4 alone, like the pool: the host's IPv6 chatter on a
-        // pair leg is mail no engine asked for.
-        let _ = std::fs::write(format!("/proc/sys/net/ipv6/conf/{tap}/disable_ipv6"), "1");
-    }
-    ip(&["link", "set", &br, "up"])?;
-    let _ = std::fs::write(format!("/proc/sys/net/ipv6/conf/{br}/disable_ipv6"), "1");
-    // The route to the agent subnet goes through the world side of
-    // the gateway: the guest address of the via tap, by convention.
-    let gw_world = format!("192.168.{}.2", 200 + n);
-    ip(&[
-        "route",
-        "replace",
-        &format!("10.77.{id}.0/24"),
-        "via",
-        &gw_world,
-    ])?;
-    println!(
-        "cella: pair {id}: brp{id} joins pair{id}a and pair{id}g; 10.77.{id}.0/24 via {gw_world} ({via})"
-    );
-    Ok(())
-}
-
-pub fn setup_net(taps: u32, first: u32) -> Result<(), String> {
-    // SAFETY: geteuid has no failure mode.
-    let root = unsafe { libc::geteuid() } == 0;
-    if !root && !have_net_admin() {
-        return Err(
-            "setup net creates TAP devices and needs CAP_NET_ADMIN -- run: cella-network setup \
-             (make install grants it the capability), or run this verb as root"
-                .into(),
-        );
-    }
-    if !root {
-        raise_ambient_net_admin();
-    }
-    let owner: libc::uid_t = std::env::var("SUDO_UID")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        // SAFETY: getuid has no failure mode. The real uid is the
-        // invoking user under the file-capability path.
-        .unwrap_or_else(|| unsafe { libc::getuid() });
-    let ip_bin = find_program("ip");
-    let ip = |args: &[&str]| -> Result<(), String> {
-        let out = std::process::Command::new(&ip_bin)
-            .args(args)
-            .output()
-            .map_err(|e| format!("running ip: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "ip {} failed: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-        Ok(())
-    };
-    for n in first..first + taps {
-        let tap = format!("tap{n}");
-        let (guest, host) = tap_addresses(&tap);
-        // The pool knows its guest by convention: the guest's eth0
-        // MAC is the VMM default, deterministic like the tap's own.
-        // The permanent neighbor entry frees the host from ARP
-        // toward a machine that freezes on its every egress: under
-        // the total membrane the guest's ARP reply parks, and by
-        // its release the host's probe window has closed
-        // (arp_accept=0 drops the late reply). The host must not
-        // need to ask.
-        // The pool speaks IPv4 alone. The host's own stacks emit
-        // IPv6 multicast and IGMP onto every up interface, and
-        // under the ear each emission parks as mail that some
-        // engine must decide -- chatter with no purpose on a tap
-        // whose guests carry ipv6.disable=1 themselves. Silence
-        // the source (CAP_NET_ADMIN owns the net sysctls).
-        let quiet = |t: &str| {
-            let _ = std::fs::write(format!("/proc/sys/net/ipv6/conf/{t}/disable_ipv6"), "1");
-        };
-        let neigh = |t: &str, g: &str| {
-            let _ = ip(&[
-                "neigh",
-                "replace",
-                g,
-                "lladdr",
-                "02:fc:00:00:00:01",
-                "dev",
-                t,
-                "nud",
-                "permanent",
-            ]);
-        };
-        if std::path::Path::new(&format!("/sys/class/net/{tap}")).exists() {
-            // Converge, do not skip: an interrupted setup leaves a tap
-            // without its address or MAC, and a second run must heal
-            // it. Every call below is idempotent ("File exists" on the
-            // address is success).
-            let _ = ip(&["link", "set", &tap, "down"]);
-            let _ = ip(&[
-                "link",
-                "set",
-                &tap,
-                "address",
-                &format!("02:ce:11:a0:00:{n:02x}"),
-            ]);
-            let _ = ip(&["addr", "replace", &format!("{host}/24"), "dev", &tap]);
-            ip(&["link", "set", &tap, "up"])?;
-            quiet(&tap);
-            neigh(&tap, &guest);
-            println!("cella: {tap} already exists, converged ({host}/24)");
-            continue;
-        }
-        create_persistent_tap(&tap, owner)?;
-        // A deterministic MAC, by convention. A recreated tap then
-        // carries the same address, and a thawed guest with a cached
-        // neighbor entry sees no change: the recreation is
-        // indistinguishable from the tap that froze.
-        ip(&[
-            "link",
-            "set",
-            &tap,
-            "address",
-            &format!("02:ce:11:a0:00:{n:02x}"),
-        ])?;
-        ip(&["addr", "add", &format!("{host}/24"), "dev", &tap])?;
-        ip(&["link", "set", &tap, "up"])?;
-        quiet(&tap);
-        neigh(&tap, &guest);
-        println!("cella: created {tap} owned by uid {owner}, host side {host}/24");
-    }
-    // Guest egress needs forwarding on, and a forward path past the
-    // host firewall. The taps go to the trusted zone where firewalld
-    // runs; the nft accept below covers hosts without it.
-    let _ = std::fs::write("/proc/sys/net/ipv4/ip_forward", "1");
-    let fw = find_program("firewall-cmd");
-    if root && Path::new(&fw).is_absolute() {
-        for n in first..first + taps {
-            let tap = format!("tap{n}");
-            let _ = std::process::Command::new(&fw)
-                .args(["--zone=trusted", "--change-interface", &tap])
-                .output();
-            let _ = std::process::Command::new(&fw)
-                .args(["--permanent", "--zone=trusted", "--change-interface", &tap])
-                .output();
-        }
-        println!("cella: taps in the trusted firewalld zone");
-    }
-    // NAT once: one table, one masquerade rule on the default egress.
-    let sh_bin = find_program("sh");
-    let egress = std::process::Command::new(&sh_bin)
-        .args([
-            "-c",
-            "ip route show default | awk '/default/ {print $5; exit}'",
-        ])
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-    if egress.is_empty() {
-        println!("cella: no default route found, skipping the NAT");
-        return Ok(());
-    }
-    let nft = |cmd: &str| {
-        let _ = std::process::Command::new(&sh_bin)
-            .args(["-c", cmd])
-            .status();
-    };
-    nft("nft list table inet cella_nat >/dev/null 2>&1 || nft add table inet cella_nat");
-    nft("nft list chain inet cella_nat postrouting >/dev/null 2>&1 || nft add chain inet cella_nat postrouting '{ type nat hook postrouting priority 100; }'");
-    let have = std::process::Command::new(&sh_bin)
-        .args([
-            "-c",
-            "nft list chain inet cella_nat postrouting 2>/dev/null | grep -c masquerade",
-        ])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-    if have == "0" {
-        nft(&format!(
-            "nft add rule inet cella_nat postrouting oifname \"{egress}\" masquerade"
-        ));
-    }
-    println!("cella: NAT via {egress} (nft table inet cella_nat)");
-    Ok(())
-}
-
 /// Stage a machine: verify the goldens, resolve the network claim,
 /// copy the rootfs flavor to the machine's own disk, and write the
 /// manifest. No process starts. The manifest records the resolved tap
@@ -768,21 +335,28 @@ pub fn create(m: &Manifest) -> Result<(), String> {
             m.name
         ));
     }
-    let mut m = m.clone();
-    if m.net == "auto" {
-        m.net = allocate_tap()?;
-    } else if m.net != "none" {
-        let claimed = claimed_taps();
+    let m = m.clone();
+    if m.net != "none" {
+        // Every nic is the translator's (1.6.14e): a wire or the
+        // world. There is no host object to claim, and no "auto".
         for nic in m.net.split(',') {
             let nic = nic.trim();
-            // A wire nic (1.6.14e): no host object, no claim -- two
-            // manifests naming the same wire ARE the pairing.
-            if nic == "world" {
-                // The world nic (1.6.14e rung 3): the machine's own
-                // translator is the far side; nothing to claim.
-                continue;
-            }
-            if let Some(w) = nic.strip_prefix("wire:") {
+            if let Some(spec) = nic.strip_prefix("world:") {
+                for item in spec.split('+').filter(|s| !s.is_empty()) {
+                    let ok = item
+                        .split_once('/')
+                        .map(|(p, proto)| {
+                            p.parse::<u16>().is_ok() && (proto == "tcp" || proto == "udp")
+                        })
+                        .unwrap_or(false);
+                    if !ok {
+                        return Err(format!(
+                            "port map {item:?} in {nic:?} -- want PORT/tcp or PORT/udp, \
+                             joined by '+'"
+                        ));
+                    }
+                }
+            } else if let Some(w) = nic.strip_prefix("wire:") {
                 let ok = !w.is_empty()
                     && w.bytes()
                         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
@@ -791,10 +365,10 @@ pub fn create(m: &Manifest) -> Result<(), String> {
                         "wire name {w:?} -- lowercase letters, digits, and '-' only"
                     ));
                 }
-                continue;
-            }
-            if claimed.contains(&nic.to_string()) {
-                return Err(format!("tap {nic:?} is already claimed by another machine"));
+            } else if nic != "world" {
+                return Err(format!(
+                    "nic {nic:?} -- want world, world:PORT/tcp+..., wire:NAME, or none"
+                ));
             }
         }
     }
@@ -912,16 +486,16 @@ fn cmdline_for(m: &Manifest) -> String {
             m.root
         );
     }
-    // One device entry per tap: eth<i> at base + i*0x2000, IRQ
+    // One device entry per nic: eth<i> at base + i*0x2000, IRQ
     // 6 + 2*i (the attach slot between them never moves). The ip=
     // parameter configures eth0 only; the init of a multi-net image
     // (the gateway flavor) configures the rest.
-    let taps: Vec<&str> = m.net.split(',').map(str::trim).collect();
+    let nics: Vec<&str> = m.net.split(',').map(str::trim).collect();
     let mut line = format!(
         "{base} root=/dev/vda {} virtio_mmio.device=4K@0xd0000000:5",
         m.root
     );
-    for (i, _) in taps.iter().enumerate() {
+    for (i, _) in nics.iter().enumerate() {
         line.push_str(&format!(
             " virtio_mmio.device=4K@{:#x}:{}",
             0xd000_1000u64 + (i as u64) * 0x2000,
@@ -931,8 +505,8 @@ fn cmdline_for(m: &Manifest) -> String {
     // The first tap configures eth0. A pool tap uses the pool
     // convention; an agent-side pair tap (pair<n>a) uses the pair
     // convention, with the gateway as the route to everything.
-    let first = taps[0];
-    if first == "world" {
+    let first = nics[0];
+    if first.starts_with("world") {
         // The world nic's contract (1.6.14e rung 3): the pool
         // convention on the translator's own subnet -- see
         // config::WORLD_GUEST_IP.
@@ -944,36 +518,9 @@ fn cmdline_for(m: &Manifest) -> String {
         ));
         return line;
     }
-    if first.starts_with("wire:") {
-        // A wire nic carries no host addressing convention: the
-        // guest (or the gate driving its console) configures eth0
-        // itself (1.6.14e rung 2).
-        return line;
-    }
-    if let Some(n) = pair_id(first, 'a') {
-        line.push_str(&format!(
-            " ip=10.77.{n}.2::10.77.{n}.1:255.255.255.0::eth0:off"
-        ));
-    } else {
-        line.push_str(&format!(
-            " ip={}::{}:255.255.255.0::eth0:off",
-            tap_addresses(first).0,
-            tap_addresses(first).1
-        ));
-    }
-    // A gateway machine carries a pair<n>g tap: hand the id to the
-    // image init, which addresses eth1 and turns forwarding on.
-    for tap in &taps {
-        if let Some(n) = pair_id(tap, 'g') {
-            line.push_str(&format!(" cella_pair={n}"));
-        }
-    }
+    // A wire nic carries no host addressing convention: the guest
+    // (or the gate driving its console) configures eth0 itself.
     line
-}
-
-/// The id of a pair tap (pair<n>a or pair<n>g), by side.
-fn pair_id(tap: &str, side: char) -> Option<u32> {
-    tap.strip_prefix("pair")?.strip_suffix(side)?.parse().ok()
 }
 
 /// Start the machine: a fresh boot. Refuses a frozen machine, so
@@ -1250,7 +797,17 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     // the child resume and exec bwrap: from here on, every file the
     // VMM creates is owned, on the host, by this machine's own uid,
     // not the invoking user's.
-    let (host_uid, host_gid) = machine_identity(name, &dir)?;
+    // A root operator (a guest's init running cella one layer down)
+    // needs no delegated range and no ACL: root writes the maps
+    // itself and bypasses DAC. The identity boundary is the
+    // unprivileged host's; in a throwaway guest, root maps 0 -> 0.
+    // SAFETY: getuid has no failure mode.
+    let root = unsafe { libc::getuid() } == 0;
+    let (host_uid, host_gid) = if root {
+        (0, 0)
+    } else {
+        machine_identity(name, &dir)?
+    };
     // The state directory is owned by the invoking user (create()'s
     // mkdir), and every verb process still needs to read and write
     // it as that user (the pid file, the valve record, vmm.log).
@@ -1281,7 +838,11 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     // only); grant execute-only there, one level at a time, so a
     // different machine's directory still refuses this uid (no entry
     // widens anything below the two ancestors this loop touches).
-    for ancestor in [home(), home().join("machines")] {
+    for ancestor in if root {
+        vec![]
+    } else {
+        vec![home(), home().join("machines")]
+    } {
         let status = std::process::Command::new(find_program("setfacl"))
             .args(["-m", &format!("u:{host_uid}:x"), ancestor.to_str().unwrap()])
             .status();
@@ -1299,8 +860,12 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     // sub-uid owns need no grant; files the invoker owns get one.
     // SAFETY: getuid has no failure mode.
     let my_uid = unsafe { libc::getuid() };
-    let mut targets = vec![dir.clone()];
-    if let Ok(entries) = fs::read_dir(&dir) {
+    let mut targets = if root { vec![] } else { vec![dir.clone()] };
+    if let Ok(entries) = if root {
+        Err(std::io::Error::other("root: no ACLs"))
+    } else {
+        fs::read_dir(&dir)
+    } {
         for e in entries.flatten() {
             use std::os::unix::fs::MetadataExt;
             if e.metadata().map(|md| md.uid()).ok() == Some(my_uid) {
@@ -1337,42 +902,6 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
                 target.display(),
                 dir.display()
             ));
-        }
-    }
-    // The tap follows the claim (1.6.14a), and ONLY the claim: the
-    // pool created its taps owned by the invoking user, and only a
-    // tap's owner may attach it -- re-own each of this machine's
-    // taps to its sub-uid before the VMM (running as that sub-uid)
-    // opens them. The one CAP_NET_ADMIN holder does it; this verb
-    // process holds no capability of its own. There is deliberately
-    // no handback at stop or destroy: a handback would run from a
-    // seccomp-confined verb, and no_new_privs (mandatory for an
-    // unprivileged filter) strips file capabilities on exec -- the
-    // handback child would arrive capless. Every claimant re-owns
-    // at its own claim instead: the next start does, and the probe
-    // does the same before it spawns its VMM (1.6.14b).
-    if m.net != "none" {
-        let net_bin = std::env::var("HOME")
-            .map(|h| PathBuf::from(h).join(".local/bin/cella-network"))
-            .ok()
-            .filter(|p| p.is_file())
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| find_program("cella-network"));
-        for tap in m.net.split(',') {
-            // Wires and the world have no tap to own (1.6.14e).
-            let nic = tap.trim();
-            if nic.starts_with("wire:") || nic == "world" {
-                continue;
-            }
-            let status = std::process::Command::new(&net_bin)
-                .args(["own", tap, &host_uid.to_string()])
-                .status();
-            if !matches!(status, Ok(s) if s.success()) {
-                return Err(format!(
-                    "re-owning tap {tap:?} to machine {name:?}'s sub-user failed ({status:?}) -- \
-                     is cella-network installed with its file capability (make install)?"
-                ));
-            }
         }
     }
     let mut rfds = [0i32; 2]; // child -> parent: "I am uid/gid 0, map me"
@@ -1428,14 +957,6 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         }
     }
     for dev in &profile.dev_binds {
-        // The tap device is the one profile entry the manifest can
-        // still turn off: a machine with no tap nics (netless, or
-        // wired through its translator alone -- 1.6.14e) gets no
-        // /dev/net/tun.
-        let has_tap = m.net != "none" && m.net.split(',').any(|n| !n.trim().starts_with("wire:"));
-        if dev == "/dev/net/tun" && !has_tap {
-            continue;
-        }
         if Path::new(dev).exists() {
             cmd.args(["--dev-bind", dev, dev]);
         }
@@ -1462,20 +983,14 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     cmd.args(["--disk", dir.join("disk.img").to_str().unwrap()]);
     let mut edge_fds: Vec<i32> = Vec::new();
     if m.net != "none" {
-        for (i, nic) in m.net.split(',').enumerate() {
-            let nic = nic.trim();
-            if nic.starts_with("wire:") || nic == "world" {
-                // The translator's planes (1.6.14e): wires at rung 2,
-                // the world at rung 3. Spawn the translator if it does
-                // not stand, connect this nic to edge.sock, and hand
-                // the VMM the connected fd.
-                ensure_translator(name, &dir)?;
-                let fd = connect_edge_nic(&dir, i as u8, std::time::Duration::from_secs(5))?;
-                edge_fds.push(fd);
-                cmd.args(["--edge-fd", &fd.to_string()]);
-            } else {
-                cmd.args(["--tap", nic]);
-            }
+        // Every nic is the translator's (1.6.14e): spawn the
+        // translator if it does not stand, connect each nic to
+        // edge.sock, and hand the VMM the connected fd.
+        ensure_translator(name, &dir)?;
+        for (i, _nic) in m.net.split(',').enumerate() {
+            let fd = connect_edge_nic(&dir, i as u8, std::time::Duration::from_secs(5))?;
+            edge_fds.push(fd);
+            cmd.args(["--edge-fd", &fd.to_string()]);
         }
     }
     if m.attach != "none" {
@@ -1622,7 +1137,27 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         ));
     }
     let child_pid = pid.to_string();
-    for (tool, target) in [("newuidmap", host_uid), ("newgidmap", host_gid)] {
+    if root {
+        // Root maps the namespace itself: deny setgroups, then the
+        // one-line gid and uid maps, 0 -> 0.
+        for (file, content) in [
+            ("setgroups", "deny\n".to_string()),
+            ("gid_map", format!("0 {host_gid} 1\n")),
+            ("uid_map", format!("0 {host_uid} 1\n")),
+        ] {
+            if let Err(e) = fs::write(format!("/proc/{child_pid}/{file}"), content) {
+                // SAFETY: go_write is this process's own fd.
+                unsafe { libc::close(go_write) };
+                reap();
+                return Err(format!("writing the child's {file} as root: {e}"));
+            }
+        }
+    }
+    for (tool, target) in if root {
+        vec![]
+    } else {
+        vec![("newuidmap", host_uid), ("newgidmap", host_gid)]
+    } {
         let status = std::process::Command::new(find_program(tool))
             .args([&child_pid, "0", &target.to_string(), "1"])
             .status();
@@ -2112,23 +1647,36 @@ mod tests {
     }
 
     #[test]
-    fn a_tap_claim_is_exclusive() {
+    fn the_net_grammar_refuses_what_it_does_not_name() {
         with_temp_home(|| {
             for p in [kernel_path("canonical"), rootfs_path("canonical")] {
                 fs::create_dir_all(p.parent().unwrap()).unwrap();
                 fs::write(&p, b"fake").unwrap();
             }
-            let mut a = sample();
-            a.net = "tap7".into();
-            create(&a).unwrap();
-            let mut b = sample();
-            b.name = "m2".into();
-            b.net = "tap7".into();
-            let err = create(&b).unwrap_err();
-            assert!(err.contains("already claimed"), "{err}");
-            destroy("m1").unwrap();
-            create(&b).unwrap(); // the destroy freed the claim
-            destroy("m2").unwrap();
+            for (net, want) in [
+                ("tap0", "want world"),
+                ("auto", "want world"),
+                ("wire:Bad_Name", "lowercase"),
+                ("world:80/tls", "PORT/tcp or PORT/udp"),
+                ("world:notaport/tcp", "PORT/tcp or PORT/udp"),
+            ] {
+                let mut m = sample();
+                m.net = net.into();
+                let err = create(&m).unwrap_err();
+                assert!(err.contains(want), "{net}: {err}");
+            }
+            for net in [
+                "none",
+                "world",
+                "world:1709/tcp+53/udp",
+                "wire:ab",
+                "world,wire:ab",
+            ] {
+                let mut m = sample();
+                m.net = net.into();
+                create(&m).unwrap_or_else(|e| panic!("{net}: {e}"));
+                destroy("m1").unwrap();
+            }
         });
     }
 

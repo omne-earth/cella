@@ -48,7 +48,7 @@ extern "C" fn on_sigwinch(_: libc::c_int) {
     VALVE_KICKED.store(true, Ordering::SeqCst);
 }
 
-// SIGIO from the TAP fd (see tap.rs). The handler's only job is to exist
+// SIGIO from the edge fd (see edge.rs). The handler's only job is to exist
 // without SA_RESTART so KVM_RUN returns EINTR; the run loop drains RX on
 // every pass, so there is no flag to set here.
 extern "C" fn on_sigio(_: libc::c_int) {}
@@ -60,11 +60,10 @@ struct Args {
     /// A second disk, read-only at the device, always: the rock of
     /// the inspect verb. No flag makes it writable.
     attach_ro: Option<PathBuf>,
-    /// The nics, in order: eth0 is the first. --tap NAME attaches a
-    /// host TAP; --edge-fd N wraps an inherited backend fd (the
-    /// rootless wire to the machine's own translator, 1.6.14e).
-    /// The two repeat and mix; order is the interface order.
-    nics: Vec<NicSpec>,
+    /// The nics, in order: eth0 is the first. --edge-fd N wraps an
+    /// inherited backend fd -- the connection to the machine's own
+    /// translator (1.6.14e). It repeats; order is interface order.
+    nics: Vec<i32>,
     mac: [u8; 6],
     kernel: Option<PathBuf>,
     cmdline: String,
@@ -72,29 +71,12 @@ struct Args {
     console: Option<PathBuf>,
 }
 
-/// One nic's backend, as named on the command line.
-enum NicSpec {
-    /// A host TAP by interface name (the pre-rootless plumbing).
-    Tap(String),
-    /// An inherited fd: one end of the translator socketpair.
-    Fd(i32),
-}
-
-impl NicSpec {
-    fn label(&self) -> String {
-        match self {
-            NicSpec::Tap(name) => name.clone(),
-            NicSpec::Fd(n) => format!("edge-fd {n}"),
-        }
-    }
-}
-
 fn parse_args() -> Args {
     let mut state_dir = None;
     let mut disk = None;
     let mut disk_ro = false;
     let mut attach_ro = None;
-    let mut nics: Vec<NicSpec> = Vec::new();
+    let mut nics: Vec<i32> = Vec::new();
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
     let mut console = None;
@@ -113,12 +95,11 @@ fn parse_args() -> Args {
             "--disk" => disk = Some(PathBuf::from(next())),
             "--disk-ro" => disk_ro = true,
             "--attach-ro" => attach_ro = Some(PathBuf::from(next())),
-            "--tap" => nics.push(NicSpec::Tap(next())),
-            "--edge-fd" => nics.push(NicSpec::Fd(
+            "--edge-fd" => nics.push(
                 next()
                     .parse()
                     .unwrap_or_else(|_| usage_error("--edge-fd must be a file descriptor number")),
-            )),
+            ),
             "--mac" => mac = parse_mac(&next()),
             "--kernel" => kernel = Some(PathBuf::from(next())),
             "--console" => {
@@ -137,7 +118,7 @@ fn parse_args() -> Args {
                     .unwrap_or_else(|_| usage_error("--mem-mb must be a number"))
             }
             "-h" | "--help" => usage_error(
-                "cella --state-dir DIR --disk PATH [--attach-ro PATH] [--tap NAME | --edge-fd N] [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
+                "cella --state-dir DIR --disk PATH [--attach-ro PATH] [--edge-fd N] [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
             ),
             other => usage_error(&format!("unknown argument: {other}")),
         }
@@ -307,7 +288,7 @@ fn main() {
         ));
     }
     // The network is optional, and a machine takes N nics: eth<i>
-    // is the i-th --tap/--edge-fd, in command-line order. net0
+    // is the i-th --edge-fd, in command-line order. net0
     // keeps its address and IRQ; each later nic takes base +
     // i*0x2000 and IRQ 6 + 2*i, thus the attach slot between them
     // (0xd0002000:7) never moves -- the ABI of every existing
@@ -315,20 +296,17 @@ fn main() {
     // only.
     let mut net_poll: Vec<(usize, i32)> = Vec::new();
     for (i, nic) in args.nics.iter().enumerate() {
-        // Must precede the edge's arming (inside Edge::tap/from_fd):
+        // Must precede the edge's arming (inside Edge::from_fd):
         // the backend fd is O_ASYNC, and SIGIO's default action is
         // to terminate the process. A frame can arrive the instant
         // the fd exists.
         install_sigio_handler();
         let mut mac = args.mac;
         mac[5] = mac[5].wrapping_add(i as u8);
-        let edge = match nic {
-            NicSpec::Tap(name) => devices::virtio::tap::Edge::tap(name),
-            NicSpec::Fd(n) => devices::virtio::tap::Edge::from_fd(*n),
-        }
-        .unwrap_or_else(|e| fatal(&format!("open edge {:?}: {e}", nic.label())));
+        let edge = devices::virtio::edge::Edge::from_fd(*nic)
+            .unwrap_or_else(|e| fatal(&format!("open edge fd {nic}: {e}")));
         let net = Net::new(edge, mac, guest_clock.clone())
-            .unwrap_or_else(|e| fatal(&format!("nic {:?}: {e}", nic.label())));
+            .unwrap_or_else(|e| fatal(&format!("nic on fd {nic}: {e}")));
         let net_fd = net.edge_fd();
         mmio_devices.push((
             NET_MMIO_BASE + (i as u64) * 0x2000,
@@ -645,7 +623,7 @@ fn run_loop(
 
         // Drain host->guest frames on every pass. With the in-kernel
         // irqchip an idle vCPU blocks *inside* KVM_RUN (HLT never
-        // reaches userspace), so the TAP fd's SIGIO (see tap.rs) is
+        // reaches userspace), so the TAP fd's SIGIO (see edge.rs) is
         // what forces the EINTR that lands us here; safe to call
         // unconditionally -- a no-op if nothing is pending or no RX
         // buffers are posted (see mmio.rs::poll_queue and net.rs).
@@ -732,7 +710,7 @@ fn poll_stdin_rx(serial: &mut SerialDevice) {
 }
 
 /// Give stdin O_ASYNC and O_NONBLOCK, so that a keystroke interrupts
-/// KVM_RUN the same way a TAP frame does (see tap.rs), and so that the
+/// KVM_RUN the same way a TAP frame does (see edge.rs), and so that the
 /// run-loop read never blocks. Runs before the seccomp filter.
 fn setup_stdin_async() {
     // SAFETY: fcntl on fd 0 with valid commands.
@@ -789,7 +767,7 @@ fn poll_console(
 }
 
 /// Give a socket O_ASYNC with this process as the owner, so that its
-/// readiness raises SIGIO and interrupts KVM_RUN (see tap.rs for the
+/// readiness raises SIGIO and interrupts KVM_RUN (see edge.rs for the
 /// same pattern).
 fn set_async<F: std::os::fd::AsRawFd>(f: &F) {
     let fd = f.as_raw_fd();

@@ -24,17 +24,13 @@ ln -s /root/.cella/rootfs /tmp/cella/rootfs
 export CELLA_HOME=/tmp/cella
 
 if grep -q cella_nested_mode=www /proc/cmdline || [ -f /etc/cella-www ]; then
-    # tap1, not tap0: the pool convention gives tap1 the 192.168.201
-    # subnet, and the outer guest's own eth0 already uses 192.168.200.
-    # tap1 must exist before the jailed start: the inner VMM runs in a
-    # user namespace with no CAP_NET_ADMIN, and it can only open a
-    # persistent tap. setup net creates and addresses it (this init is
-    # root in the guest, thus no sudo).
-    cella setup net --taps 1 --from 1 || echo "cella-nested: FAIL: setup net failed"
-    echo 1 > /proc/sys/net/ipv4/ip_forward
+    # The inner network is rootless (1.6.14e): the inner machine's
+    # own translator, spawned by its start, carries its world --
+    # which is this outer guest -- over plain sockets. No tap, no
+    # capability, no setup. The knock arrives on the mapped port.
     echo "cella-nested: creating the inner machine (www: block + net)"
     cella create inner --kernel canonical --rootfs canonical \
-        --mem-mb 64 --net tap1 || echo "cella-nested: FAIL: create failed"
+        --mem-mb 64 --net world:1710/udp || echo "cella-nested: FAIL: create failed"
     echo "cella-nested: starting the inner machine (jailed)"
     cella start inner || echo "cella-nested: FAIL: start failed"
     # Relay the inner console now, in the background: the ear's ratchet
@@ -52,7 +48,10 @@ if grep -q cella_nested_mode=www /proc/cmdline || [ -f /etc/cella-www ]; then
     # the next ping is then one cycle behind forever. The pump below
     # decides without regard to any one attempt.
     cella gateway inner open
-    ping -c 20 -i 1 -W 10 192.168.201.2 >/dev/null 2>&1 &
+    # The knock: a datagram on the inner machine's mapped port; the
+    # inner guest answers with ICMP unreachable, an egress frame
+    # that parks -- the reply the pump decides.
+    (end=$(( $(cut -d. -f1 /proc/uptime) + 40 )); while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do printf 'knock\n' > /dev/udp/127.0.0.1/1710 2>/dev/null || true; sleep 1; done) &
     PPID_ICMP=$!
     n=0
     while kill -0 "$PPID_ICMP" 2>/dev/null; do

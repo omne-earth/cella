@@ -23,12 +23,12 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 
 .PHONY: help build build-smoke install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
-        init golden golden-nested setup-tap \
+        init golden golden-nested  \
         boot enter freeze thaw remove doctor \
         smoke smoke-shell smoke-boot smoke-thaw \
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
-        smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire smoke-world \
+        smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire smoke-world smoke-rootless \
         smoke-ping smoke-udp smoke-collide smoke-inspection \
         smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
@@ -74,7 +74,7 @@ SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
         smoke-udp smoke-collide smoke-inspection smoke-witness smoke-nested-boot \
         smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
         smoke-nested-boot-www smoke-machine smoke-clean \
-        smoke-gateway smoke-gateway-cli smoke-wire smoke-world smoke-multinet smoke-universe smoke-ledger smoke-chain \
+        smoke-gateway smoke-gateway-cli smoke-wire smoke-world smoke-rootless smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5
 empty :=
@@ -333,6 +333,10 @@ smoke-world: build-smoke golden ## The world plane, stateless half (1.6.14e): --
 	$(LOG)
 	$(SCRIPTS)/test/world.sh
 
+smoke-rootless: build ## The rootless sweep (1.6.14e): no capability on any cella binary, no tap, bridge, or nft table of cella's on the host, no boot unit
+	$(LOG)
+	$(SCRIPTS)/test/rootless.sh
+
 smoke-multinet: build-smoke golden ## A machine takes N taps: two-tap boot, both nics in the guest, host pings eth0, claims exclusive per tap
 	$(LOG)
 	$(SCRIPTS)/test/multinet.sh
@@ -431,7 +435,7 @@ smoke-clean: ## Kill any stray cella process left running by an interrupted smok
 init: ## One-time host setup (Fedora): deps, toolbox, tap0, and every golden (needs sudo)
 	$(LOG)
 	$(SCRIPTS)/setup/install.sh
-	$(MAKE) setup-tap
+	$(MAKE) 
 	$(MAKE) golden
 	$(MAKE) golden-nested
 
@@ -451,10 +455,6 @@ golden-nested: build ## Build the nested-family goldens natively: kernel nested,
 kernel-config-check: ## Resolve kernel-fragment.config against defconfig and report any line kconfig silently overruled (seconds, no compile)
 	$(LOG)
 	$(SCRIPTS)/build/kernel-config-check.sh
-
-setup-tap: build ## Provision the tap pool + NAT via cella-network (no sudo; make install granted the capability)
-	$(LOG)
-	target/release/cella-network setup --taps $(TAPS)
 
 # --- Everything -----------------------------------------------------
 
@@ -563,7 +563,7 @@ probe-sregs: build ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA s
 	$(LOG)
 	target/smoke/cella-probe sregs
 
-probe-wallclock: build-smoke golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm + tap0; see src/bin/cella-probe/wallclock.rs)
+probe-wallclock: build-smoke golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm; see src/bin/cella-probe/wallclock.rs)
 	$(LOG)
 	target/smoke/cella-probe wallclock
 

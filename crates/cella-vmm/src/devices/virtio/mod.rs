@@ -1,7 +1,7 @@
 pub mod block;
+pub mod edge;
 pub mod mmio;
 pub mod net;
-pub mod tap;
 
 use virtio_queue::Queue;
 use vm_memory::GuestMemoryMmap;

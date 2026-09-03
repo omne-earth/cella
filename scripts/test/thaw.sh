@@ -10,7 +10,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/../.."
 BIN="${CELLA_BIN:-$ROOT/target/smoke/cella}"
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
-TAP="${CELLA_TEST_TAP:-tap0}"
 BOOT_WAIT_SECS="${CELLA_BOOT_WAIT:-8}"
 
 if [ ! -x "$BIN" ]; then
@@ -18,10 +17,6 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 "$BIN" doctor gate kvm golden:kernel:canonical golden:rootfs:canonical || exit 0
-if ! ip link show "$TAP" &>/dev/null; then
-    echo "SKIP: $TAP does not exist -- run: cella doctor fix"
-    exit 0
-fi
 
 # A sandbox home: the smoke must not touch the real machines.
 export CELLA_HOME=$(mktemp -d /tmp/cella-thaw.XXXXXX)
@@ -48,7 +43,7 @@ fail() {
 }
 
 echo "--- step 1: create and start ---"
-"$BIN" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net "$TAP" >/dev/null || fail "create failed"
+"$BIN" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net world:1709/tcp+1709/udp >/dev/null || fail "create failed"
 "$BIN" start "$VM" >/dev/null || fail "start failed"
 sleep "$BOOT_WAIT_SECS"
 kill -0 "$(cat "$M/pid")" 2>/dev/null || fail "the VMM exited during boot"

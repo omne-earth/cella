@@ -4,7 +4,7 @@
 //! repairs what the current uid can, and prints the exact command
 //! for the rest. verify recomputes golden digests against their
 //! manifests -- build makes, doctor judges. Facts that need root to
-//! inspect (nft tables) degrade to a note instead of a guess.
+//! inspect degrade to a note instead of a guess.
 //! Becomes its own thin CLI at the split (see tasks/PHASE1.md).
 
 use std::fs;
@@ -38,7 +38,7 @@ fn run_out(cmd: &str, args: &[&str]) -> Option<String> {
 
 /// The gate for the test scripts: quiet, one SKIP line on the
 /// first unmet need, exit through the caller. Needs: kvm, bwrap,
-/// tap, golden:<axis>:<flavor>. The scripts stop re-implementing
+/// golden:<axis>:<flavor>. The scripts stop re-implementing
 /// the checks that doctor owns; a script with its own asset
 /// overrides (CELLA_TEST_*) keeps those checks local.
 pub fn gate(needs: &[String]) -> u32 {
@@ -55,15 +55,6 @@ pub fn gate(needs: &[String]) -> u32 {
             "bwrap" => {
                 if run_out("bwrap", &["--version"]).is_none() {
                     println!("SKIP: bwrap not found -- run: make install");
-                    return 3;
-                }
-            }
-            "tap" => {
-                let ok = run_out("ip", &["-br", "addr", "show", "tap0"])
-                    .map(|s| s.contains("192.168.200.1"))
-                    .unwrap_or(false);
-                if !ok {
-                    println!("SKIP: tap0 is not configured -- run: cella doctor fix");
                     return 3;
                 }
             }
@@ -182,56 +173,9 @@ pub fn check() -> u32 {
         );
     }
 
-    // The tap pool: existence, address, and the deterministic MAC.
-    let mut taps = 0u32;
-    if let Ok(entries) = fs::read_dir("/sys/class/net") {
-        let mut names: Vec<String> = entries
-            .flatten()
-            .filter_map(|e| {
-                let n = e.file_name().to_string_lossy().to_string();
-                n.strip_prefix("tap")
-                    .and_then(|s| s.parse::<u32>().ok())
-                    .map(|_| n)
-            })
-            .collect();
-        names.sort();
-        for tap in names {
-            taps += 1;
-            let n: u32 = tap.strip_prefix("tap").unwrap().parse().unwrap();
-            let mac = fs::read_to_string(format!("/sys/class/net/{tap}/address"))
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            let want_mac = format!("02:ce:11:a0:00:{n:02x}");
-            let host_ip = format!("192.168.{}.1", 200 + n);
-            let addressed = run_out("ip", &["-br", "addr", "show", &tap])
-                .map(|s| s.contains(&host_ip))
-                .unwrap_or(false);
-            match (mac == want_mac, addressed) {
-                (true, true) => r.ok(&tap, &format!("{host_ip}/24, mac {mac}")),
-                (_, false) => r.fail(&tap, &format!("missing {host_ip} -- run: cella doctor fix")),
-                (false, true) => r.note(&tap, &format!("mac {mac}, not the convention {want_mac} (predates it, or hand-made); a recreation will differ")),
-            }
-        }
-    }
-    if taps == 0 {
-        r.fail("tap pool", "no taps -- run: cella doctor fix (a reboot clears the pool; make install enables cella-network.service to recreate it at boot)");
-    }
-
-    // The boot unit: without it a reboot silently eats the pool.
-    // A USER unit with linger since 2026-09-02 (a system service
-    // runs in init_t and SELinux denies the witness -- see
-    // tasks/PHASE1.md #NOTES); the whole fact retires with the
-    // pool at the rootless network's last rung.
-    match run_out("systemctl", &["--user", "is-enabled", "cella-network.service"]) {
-        Some(v) if v.trim() == "enabled" => {
-            r.ok("boot unit", "cella-network.service enabled (user unit, linger)")
-        }
-        _ => r.fail(
-            "boot unit",
-            "cella-network.service (user) not enabled -- run: make install (a reboot then keeps the pool)",
-        ),
-    }
+    // The network (1.6.14e): no host state exists to check. Each
+    // machine's translator is spawned by its start and dies at
+    // its destroy; there is no pool, no unit, and no capability.
 
     // Forwarding: guest egress dies without it.
     match fs::read_to_string("/proc/sys/net/ipv4/ip_forward") {

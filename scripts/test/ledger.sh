@@ -19,12 +19,7 @@ cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
-TAP="${CELLA_TEST_TAP:-tap0}"
-HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
-if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-    echo "SKIP: $TAP is not configured with $HOST_IP -- run: cella doctor fix"
-    exit 0
-fi
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoints)"; exit 0; }
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
@@ -70,8 +65,8 @@ id_of() { # dump destination-substring -- the last matching parked id
     echo "$1" | grep "^parked .*$2" | tail -1 | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p'
 }
 
-say "step 1: create and start a machine on $TAP"
-"$BIN" create "$VM" --net "$TAP" >/dev/null
+say "step 1: create and start a machine on --net world"
+"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
 "$BIN" start "$VM" >/dev/null
 sleep 6
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")

@@ -41,7 +41,7 @@
 //!
 //! Run: make probe-wallclock
 //! (needs the canonical goldens -- `make golden` -- and a
-//! configured tap0 -- `make setup-tap`)
+//! netless guest)
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -280,7 +280,6 @@ pub fn run() {
         "CELLA_TEST_DISK",
         golden("rootfs", "canonical", "rootfs.ext4"),
     );
-    let tap = std::env::var("CELLA_TEST_TAP").unwrap_or_else(|_| "tap0".to_string());
 
     if !bin.is_file() {
         fail(&format!("{} not built -- run: make build", bin.display()));
@@ -329,11 +328,6 @@ pub fn run() {
         .arg(&kernel)
         .arg("--disk")
         .arg(&disk_copy)
-        .arg("--tap")
-        .arg({
-            crate::claim_tap(&tap);
-            &tap
-        })
         .arg("--mem-mb")
         .arg("128")
         .arg("--cmdline")

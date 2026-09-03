@@ -13,12 +13,7 @@ cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
-TAP="${CELLA_TEST_TAP:-tap0}"
-HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
-if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-    echo "SKIP: $TAP is not configured with $HOST_IP -- run: cella doctor fix"
-    exit 0
-fi
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 export CELLA_HOME=$(mktemp -d /tmp/cella-inspection.XXXXXX)
@@ -58,7 +53,7 @@ wait_frozen() {
 type_in() { (printf '%s\n' "$1"; sleep 3) | timeout 15 "$BIN" enter "$VM" >/dev/null 2>&1 || true; }
 
 say "step 1: a plaintext datagram parks, and the ARP before it is decided"
-"$BIN" create "$VM" --net "$TAP" >/dev/null
+"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
 "$BIN" start "$VM" >/dev/null
 sleep 4
 "$BIN" gateway "$VM" open >/dev/null

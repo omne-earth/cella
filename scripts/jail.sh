@@ -48,7 +48,6 @@ BIND_ARGS=(
     --ro-bind /lib /lib
     --ro-bind /usr/lib /usr/lib
     --dev-bind /dev/kvm /dev/kvm
-    --dev-bind /dev/net/tun /dev/net/tun
     --bind "$STATE_DIR" "$STATE_DIR"
     --bind "$(dirname "$DISK")" "$(dirname "$DISK")"
 )

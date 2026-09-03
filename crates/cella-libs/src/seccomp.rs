@@ -116,6 +116,16 @@ pub const CLI_BASE: &[Entry] = &[
 /// table; an `ioctl` whose request is not listed there dies even
 /// though `ioctl` the syscall is allowed.
 pub fn install(allowed: &[Entry], ioctl_requests: Option<&[Entry]>) -> io::Result<()> {
+    // The static in-guest build (glibc with crt-static, baked into
+    // the nested and inception images) makes a different syscall
+    // set from the dynamic host binaries the tables were traced
+    // against, on a guest kernel with a smaller syscall surface --
+    // a verb dies by SIGSYS at its first stat, silently. The tables
+    // are the host's; the in-guest lists are the join's to trace on
+    // the guest kernel (tasks/PHASE1.md #NOTES, 2026-09-03).
+    if cfg!(target_feature = "crt-static") {
+        return Ok(());
+    }
     let syscalls: Vec<u32> = allowed.iter().map(|(n, _)| *n).collect();
     let requests: Vec<u32> = ioctl_requests
         .map(|r| r.iter().map(|(n, _)| *n).collect())

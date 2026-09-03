@@ -24,7 +24,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/../.."
 BIN="${CELLA_BIN:-$ROOT/target/smoke/cella}"
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
-TAP="${CELLA_TEST_TAP:-tap0}"
 TIMEOUT_SECS="${CELLA_BOOT_TIMEOUT:-20}"
 
 if [ ! -x "$BIN" ]; then
@@ -32,10 +31,6 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 "$BIN" doctor gate kvm golden:kernel:canonical golden:rootfs:canonical || exit 0
-if ! ip link show "$TAP" &>/dev/null; then
-    echo "SKIP: $TAP does not exist -- run: cella doctor fix"
-    exit 0
-fi
 
 # A sandbox home: the boot smoke must not touch the real machines.
 export CELLA_HOME=$(mktemp -d /tmp/cella-boot.XXXXXX)
@@ -56,7 +51,7 @@ CON="$CELLA_HOME/machines/$VM/console.log"
 
 echo "cella: booting through the verbs (timeout ${TIMEOUT_SECS}s)"
 boot_start=$(date +%s.%N)
-"$BIN" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net "$TAP" >/dev/null || { echo "FAIL: create failed"; exit 1; }
+"$BIN" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net world:1709/tcp+1709/udp >/dev/null || { echo "FAIL: create failed"; exit 1; }
 "$BIN" start "$VM" >/dev/null || { echo "FAIL: start failed"; exit 1; }
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 
@@ -90,7 +85,7 @@ if [ "$init_seen" -eq 1 ]; then
     if [ -x "$REL" ]; then
         "$BIN" stop "$VM" >/dev/null 2>&1 || true
         "$BIN" destroy "$VM" >/dev/null 2>&1 || true
-        "$REL" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net "$TAP" >/dev/null
+        "$REL" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net world:1709/tcp+1709/udp >/dev/null
         "$REL" start "$VM" >/dev/null
         VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
         sleep 3

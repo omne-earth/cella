@@ -14,12 +14,9 @@ unshare-ipc
 unshare-uts
 unshare-cgroup
 
-# The run loop's two devices. /dev/net/tun is added by the spawn
-# only when the manifest asks for a tap (m.net != "none"); it is
-# named here for jail.sh's stand-alone invocations, which bind it
-# unconditionally.
+# The run loop's one device. The nics are edge fds handed in by
+# the spawn (1.6.14e): no tap, no /dev/net/tun.
 dev-bind /dev/kvm
-dev-bind /dev/net/tun
 
 # Dynamic linking needs these at the same host paths; a busybox
 # guest has none of them, and apply() skips a bind whose host path

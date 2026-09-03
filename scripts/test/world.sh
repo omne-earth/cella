@@ -22,7 +22,7 @@ cp "$REAL_HOME/rootfs/cella/rootfs.ext4" "$CELLA_HOME/rootfs/cella/"
 
 NC_PID=""
 teardown() {
-    [ -n "$NC_PID" ] && kill "$NC_PID" 2>/dev/null || true
+    for p in "${NC_PID:-}" "${TCP_PID:-}" "${KNOCK_PID:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done
     "$BIN" stop wo >/dev/null 2>&1 || true
     if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then
         p=$(cat "$CELLA_HOME/machines/wo/edge.pid" 2>/dev/null || true)
@@ -59,7 +59,7 @@ pump() { # marker budget
 }
 
 say "step 1: a machine on --net world -- no tap, no host interface, a translator"
-"$BIN" create wo --net world >/dev/null
+"$BIN" create wo --net world:1709/tcp >/dev/null
 "$BIN" start wo >/dev/null
 [ -f "$CELLA_HOME/machines/wo/edge.pid" ] || { echo "FAIL: no translator"; exit 1; }
 ip -br link | grep -qE "tap.*wo|wo.*tap" && { echo "FAIL: a host interface appeared"; exit 1; }
@@ -130,5 +130,61 @@ until "$BIN" --dump-ledger "$LEDGER" 2>/dev/null | grep -q "dir=incoming ip=$HOS
 done
 echo "  the world's answer parked in the ingress lane -- the chronicle carries it"
 
+say "step 6: TCP out -- the guest's SYN becomes a connect, bytes cross, every segment decided"
+TCP_PORT=1710
+TCP_OUT="$CELLA_HOME/tcp.out"
+python3 - "$TCP_PORT" "$TCP_OUT" <<'PY' &
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("0.0.0.0", int(sys.argv[1]))); s.listen(4); s.settimeout(180)
+try:
+    c, peer = s.accept(); c.settimeout(60)
+    data = c.recv(4096)
+    with open(sys.argv[2], "w") as f:
+        f.write(data.decode(errors="replace").strip())
+    c.sendall(b"tcp-answer\n"); c.close()
+except Exception as e:
+    with open(sys.argv[2] + ".err", "w") as f:
+        f.write(str(e))
+PY
+TCP_PID=$!
+sleep 1
+type_in wo "printf 'tcp-hello\\n' | nc $HOST_IP $TCP_PORT; echo tcp-don\"e\""
+pump "tcp-done" 200 || { echo "FAIL: the TCP exchange did not complete"; exit 1; }
+deadline=$((SECONDS + 30))
+until [ -s "$TCP_OUT" ]; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the host socket never received the guest's bytes"; exit 1; }
+    sleep 1
+done
+echo "  the guest's bytes crossed a real TCP socket: $(cat "$TCP_OUT")"
+grep -aq "tcp-answer" "$CELLA_HOME/machines/wo/console.log" || { echo "FAIL: the host's answer never reached the guest"; exit 1; }
+echo "  the answer crossed back, parked, released, and landed in the guest"
+kill "$TCP_PID" 2>/dev/null || true
+
+say "step 7: the knock -- a connection on the mapped port parks incoming, no freeze (negative)"
+KNOCK_OUT="$CELLA_HOME/knock.out"
+python3 - "$HOST_IP" "$KNOCK_OUT" <<'PY' &
+import socket, sys, time
+try:
+    c = socket.create_connection((sys.argv[1], 1709), timeout=60)
+    c.sendall(b"knock\n")
+    with open(sys.argv[2], "w") as f:
+        f.write("connected")
+    time.sleep(20); c.close()
+except Exception as e:
+    with open(sys.argv[2], "w") as f:
+        f.write("error: " + str(e))
+PY
+KNOCK_PID=$!
+deadline=$((SECONDS + 30))
+until "$BIN" --dump-ledger "$LEDGER" 2>/dev/null | grep -q "dir=incoming ip=$HOST_IP port=1709\|dir=incoming.*port=1709"; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the knock never parked incoming"; exit 1; }
+    sleep 1
+done
+[ -f "$CELLA_HOME/machines/wo/state" ] && { echo "FAIL: the machine froze on a knock -- the world's knock is not the resident's deed"; exit 1; }
+echo "  the knock stands in the ingress lane; the machine keeps running"
+kill "$KNOCK_PID" 2>/dev/null || true
+
 echo
-echo "PASS: the world plane, stateless half -- sockets instead of taps, decided both ways"
+echo "PASS: the world plane -- sockets instead of taps, ICMP/UDP/TCP decided both ways, the knock parks"

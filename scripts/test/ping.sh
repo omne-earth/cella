@@ -16,13 +16,7 @@ cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
-TAP="${CELLA_TEST_TAP:-tap0}"
-HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
-GUEST_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
-if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-    echo "SKIP: $TAP is not configured with $HOST_IP -- run: cella doctor fix"
-    exit 0
-fi
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 export CELLA_HOME=$(mktemp -d /tmp/cella-ping.XXXXXX)
@@ -41,6 +35,22 @@ teardown() {
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
 STATE="$M/state"
+# The knock (1.6.14e): a datagram on the machine's mapped port
+# 1709, from the host. The guest has no listener there, so an
+# answered knock is the guest's ICMP port-unreachable reply -- an
+# egress frame that parks outgoing. "answered" therefore means an
+# outgoing park appeared after the knock; a closed valve shows none.
+knock() { printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; }
+outgoing_parks() { "$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true; }
+answered() { # <parks-before>
+    sleep 3
+    [ "$(outgoing_parks)" -gt "$1" ]
+}
+knock_loop() { # seconds -- keep knocking while the pump decides
+    local end=$((SECONDS + $1))
+    while [ $SECONDS -lt $end ]; do knock; sleep 1; done
+}
+
 wait_frozen() {
     local deadline=$((SECONDS + 20))
     until [ -f "$STATE" ]; do
@@ -78,12 +88,13 @@ pump_while() { # pid
 }
 
 say "step 1: born closed -- the machine answers nothing"
-"$BIN" create "$VM" --net "$TAP" >/dev/null
+"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
 [ "$(cat "$M/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 "$BIN" start "$VM" >/dev/null
 sleep 4
 VMM_PID=$(cat "$M/pid")
-ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a closed machine answered a ping"; exit 1; }
+B=$(outgoing_parks); knock; knock
+answered "$B" && { echo "FAIL: a closed machine answered a knock"; exit 1; }
 [ -f "$STATE" ] && { echo "FAIL: a closed machine froze on inbound traffic"; exit 1; }
 [ -f "$M/network/ledger" ] && { echo "FAIL: a closed machine wrote a chronicle"; exit 1; }
 echo "  no reply, no freeze, no ledger: dark"
@@ -96,7 +107,8 @@ say "step 1b: the never-opened machine stays dark across freeze and thaw (negati
 "$BIN" freeze "$VM" >/dev/null
 "$BIN" thaw "$VM" >/dev/null
 sleep 2
-ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a thawed never-opened machine answered a ping"; exit 1; }
+B=$(outgoing_parks); knock; knock
+answered "$B" && { echo "FAIL: a thawed never-opened machine answered a knock"; exit 1; }
 [ -f "$STATE" ] && { echo "FAIL: a thawed never-opened machine froze on traffic"; exit 1; }
 [ -f "$M/network/ledger" ] && { echo "FAIL: a thawed never-opened machine wrote a chronicle"; exit 1; }
 echo "  dark through the whole life: nothing answered, nothing parked, nothing froze"
@@ -118,7 +130,8 @@ sleep 1
 # Three requests, not one: the live kick applies on the next
 # run-loop pass, and a request that races it meets the closed
 # drain and parks nothing.
-ping -c 3 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
+B=$(outgoing_parks); knock; knock
+answered "$B" && { echo "FAIL: an open machine answered without a decision"; exit 1; }
 [ -f "$STATE" ] && { echo "FAIL: the machine froze on inbound -- the world's knock is not the resident's deed"; exit 1; }
 SHOW=$("$BIN" gateway "$VM" show incoming)
 echo "$SHOW" | sed "s/^/  /"
@@ -134,10 +147,11 @@ wait_frozen || { echo "FAIL: the guest's reply did not park and freeze"; exit 1;
 echo "  mail moved live; the resident's own deed froze the machine"
 
 say "step 3: the engine decides, and a reply lands inside the ping's window"
-ping -c 20 -i 1 -W 25 "$GUEST_IP" >/dev/null 2>&1 &
+knock_loop 25 &
 PING_PID=$!
 pump_while "$PING_PID"
-wait "$PING_PID" || { echo "FAIL: no reply landed while the engine decided"; exit 1; }
+wait "$PING_PID" || true
+"$BIN" --dump-ledger "$M/network/ledger" | grep -q "released id=.*bytes_out=[1-9]" || { echo "FAIL: no reply landed while the engine decided"; exit 1; }
 echo "  parked, frozen, decided, delivered -- the ratchet turned"
 
 say "step 4: close -- the machine is dark again (negative)"
@@ -146,14 +160,16 @@ say "step 4: close -- the machine is dark again (negative)"
 if [ -f "$STATE" ]; then "$BIN" thaw "$VM" >/dev/null; sleep 1; fi
 "$BIN" gateway "$VM" close >/dev/null
 sleep 1
-ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a closed machine answered a ping"; exit 1; }
+B=$(outgoing_parks); knock; knock
+answered "$B" && { echo "FAIL: a closed machine answered a knock"; exit 1; }
 [ "$(cat "$M/valve")" = "closed" ] || { echo "FAIL: the valve record did not close"; exit 1; }
 echo "  dark: close blocks even the previously decided path"
 
 say "step 5: reopened, the valve remembers nothing, in either direction (negative)"
 "$BIN" gateway "$VM" open >/dev/null
 sleep 1
-ping -c 2 -W 2 "$GUEST_IP" >/dev/null 2>&1 && { echo "FAIL: a reopened machine answered without a fresh decision"; exit 1; }
+B=$(outgoing_parks); knock; knock
+answered "$B" && { echo "FAIL: a reopened machine answered without a fresh decision"; exit 1; }
 [ -f "$STATE" ] && { echo "FAIL: a reopened machine froze on inbound"; exit 1; }
 "$BIN" gateway "$VM" show incoming | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: the reopened knock did not park afresh"; exit 1; }
 echo "  reopened: the knock parked afresh, undelivered -- nothing was inherited"

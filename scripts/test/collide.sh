@@ -14,13 +14,7 @@ cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
-TAP="${CELLA_TEST_TAP:-tap0}"
-HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
-GUEST_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
-if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-    echo "SKIP: $TAP is not configured with $HOST_IP -- run: cella doctor fix"
-    exit 0
-fi
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 command -v python3 >/dev/null || { echo "SKIP: python3 not found (the surgeon)"; exit 0; }
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
@@ -66,7 +60,7 @@ pump_mail() {
 }
 
 say "step 1: one real operation parks and freezes"
-"$BIN" create "$VM" --net "$TAP" >/dev/null
+"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
 "$BIN" start "$VM" >/dev/null
 sleep 4
 "$BIN" gateway "$VM" open >/dev/null
@@ -75,7 +69,7 @@ sleep 1
 # world's knock is not the resident's deed). Release it live, and
 # the guest's own reply parks in the egress lane -- that park is the
 # freeze.
-ping -c 3 -W 2 "$GUEST_IP" >/dev/null 2>&1 || true
+for _ in 1 2 3; do printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; sleep 1; done
 pump_mail
 wait_frozen || { echo "FAIL: nothing parked and froze"; exit 1; }
 ID_REAL=$("$BIN" --dump-ledger "$LEDGER" | grep '^parked .*dir=outgoing' | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p' | tail -1)

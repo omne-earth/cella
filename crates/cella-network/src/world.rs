@@ -26,6 +26,8 @@ use std::time::{Duration, Instant};
 
 use cella_libs::config;
 
+use crate::tcp;
+
 /// The 12-byte virtio_net_hdr both edge directions carry.
 const VNET: usize = 12;
 const ETH: usize = 14;
@@ -50,6 +52,62 @@ fn close_fd(fd: i32) {
 struct Flow {
     fd: i32,
     last: Instant,
+    /// The guest-side address that opened the flow: the reply goes
+    /// back to it. A gateway guest forwards its agent's frames with
+    /// the agent's own address and no NAT, so this is not always
+    /// WORLD_GUEST_IP -- the edge is an honest next hop.
+    guest_ip: [u8; 4],
+    /// For a knock flow: the peer's real address, when the guest
+    /// was shown the gateway's instead (a loopback peer). The
+    /// guest's answer goes here.
+    real_peer: Option<([u8; 4], u16)>,
+}
+
+/// The address the guest is shown as a knock's source. A peer on the
+/// host's loopback would make the guest answer its own loopback, so
+/// the knock appears to come from the gateway -- pasta's rule --
+/// and the flow remembers where the answer really goes.
+fn apparent_peer(ip: [u8; 4]) -> [u8; 4] {
+    if ip[0] == 127 {
+        config::WORLD_GW_IP
+    } else {
+        ip
+    }
+}
+
+/// A mapped host port (the knock, ruled option a): the translator
+/// listens here as the invoking user, and an arrival becomes a
+/// frame that parks in the guest's ingress lane.
+pub struct PortMap {
+    pub port: u16,
+    pub tcp: bool,
+}
+
+/// Parse the port map of a world nic: "1709/tcp+1709/udp" after
+/// "world:". Unknown text is an error at create.
+pub fn parse_ports(spec: &str) -> Result<Vec<PortMap>, String> {
+    let mut v = Vec::new();
+    for item in spec.split('+').filter(|s| !s.is_empty()) {
+        let (p, proto) = item
+            .split_once('/')
+            .ok_or_else(|| format!("port map {item:?} -- want PORT/tcp or PORT/udp"))?;
+        let port: u16 = p
+            .parse()
+            .map_err(|_| format!("port map {item:?} -- {p:?} is not a port"))?;
+        let tcp = match proto {
+            "tcp" => true,
+            "udp" => false,
+            other => return Err(format!("port map {item:?} -- {other:?} is not tcp or udp")),
+        };
+        v.push(PortMap { port, tcp });
+    }
+    Ok(v)
+}
+
+struct Listener {
+    fd: i32,
+    port: u16,
+    tcp: bool,
 }
 
 /// One world nic's translation state.
@@ -59,15 +117,83 @@ pub struct World {
     icmp: HashMap<u16, Flow>,
     /// UDP flows, by (guest port, peer ip, peer port).
     udp: HashMap<(u16, [u8; 4], u16), Flow>,
+    tcp: tcp::Tcp,
+    listeners: Vec<Listener>,
+    /// Frames toward the guest produced outside a poll (TCP
+    /// answers to guest segments); the next from_guest or poll
+    /// drains them.
+    pending: Vec<Vec<u8>>,
     swept: Instant,
 }
 
+fn listen_on(port: u16, tcp: bool) -> Option<i32> {
+    let ty = if tcp {
+        libc::SOCK_STREAM
+    } else {
+        libc::SOCK_DGRAM
+    };
+    // SAFETY: plain socket(2); checked below.
+    let fd = unsafe { libc::socket(libc::AF_INET, ty, 0) };
+    if fd < 0 {
+        return None;
+    }
+    let one: libc::c_int = 1;
+    // SAFETY: setsockopt with a valid int option on our fd.
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            &one as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+    let addr = sockaddr_in([0, 0, 0, 0], port);
+    // SAFETY: addr is a valid sockaddr_in; fd is ours.
+    if unsafe {
+        libc::bind(
+            fd,
+            &addr as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    } < 0
+    {
+        close_fd(fd);
+        return None;
+    }
+    // SAFETY: listen on our bound stream socket.
+    if tcp && unsafe { libc::listen(fd, 16) } < 0 {
+        close_fd(fd);
+        return None;
+    }
+    set_nonblocking(fd);
+    Some(fd)
+}
+
 impl World {
-    pub fn new(guest_mac: [u8; 6]) -> Self {
+    pub fn new(guest_mac: [u8; 6], ports: &[PortMap]) -> Self {
+        let mut listeners = Vec::new();
+        for p in ports {
+            match listen_on(p.port, p.tcp) {
+                Some(fd) => listeners.push(Listener {
+                    fd,
+                    port: p.port,
+                    tcp: p.tcp,
+                }),
+                None => eprintln!(
+                    "cella-network: cannot listen on {}/{} -- the knock has no door here",
+                    p.port,
+                    if p.tcp { "tcp" } else { "udp" }
+                ),
+            }
+        }
         World {
             guest_mac,
             icmp: HashMap::new(),
             udp: HashMap::new(),
+            tcp: tcp::Tcp::new(),
+            listeners,
+            pending: Vec::new(),
             swept: Instant::now(),
         }
     }
@@ -96,6 +222,7 @@ impl World {
             }
             _ => {}
         }
+        out.append(&mut self.pending);
         out
     }
 
@@ -144,6 +271,23 @@ impl World {
                 self.udp_from_guest(src, dst, payload);
                 None
             }
+            6 => {
+                // TCP (rung 4): the state machine answers with zero
+                // or more segments; the first is returned here and
+                // the rest ride the next poll.
+                let outs = self.tcp.from_guest(src, dst, payload);
+                for o in outs {
+                    let seg = tcp::segment(o.peer_ip, o.guest_ip, &o);
+                    self.pending.push(build_ipv4_frame(
+                        &self.guest_mac,
+                        o.peer_ip,
+                        o.guest_ip,
+                        6,
+                        &seg,
+                    ));
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -171,8 +315,11 @@ impl World {
             Flow {
                 fd,
                 last: Instant::now(),
+                guest_ip: src,
+                real_peer: None,
             }
         });
+        flow.guest_ip = src;
         if flow.fd < 0 {
             return None;
         }
@@ -199,7 +346,6 @@ impl World {
         let sport = u16::from_be_bytes([udp[0], udp[1]]);
         let dport = u16::from_be_bytes([udp[2], udp[3]]);
         let payload = &udp[8..];
-        let _ = src;
         let key = (sport, dst, dport);
         let flow = self.udp.entry(key).or_insert_with(|| {
             // SAFETY: plain socket(2); checked below.
@@ -210,13 +356,17 @@ impl World {
             Flow {
                 fd,
                 last: Instant::now(),
+                guest_ip: src,
+                real_peer: None,
             }
         });
+        flow.guest_ip = src;
         if flow.fd < 0 {
             return;
         }
         flow.last = Instant::now();
-        let addr = sockaddr_in(dst, dport);
+        let (to_ip, to_port) = flow.real_peer.unwrap_or((dst, dport));
+        let addr = sockaddr_in(to_ip, to_port);
         // SAFETY: payload is valid; addr is a valid sockaddr_in.
         unsafe {
             libc::sendto(
@@ -234,7 +384,105 @@ impl World {
     /// VMM (which parks them in the ingress lane, like any frame).
     pub fn poll(&mut self) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
+        out.append(&mut self.pending);
         let mut buf = vec![0u8; 65536];
+        // The knock: arrivals on mapped ports. TCP accepts open a
+        // handshake toward the guest; UDP datagrams become frames
+        // to the mapped guest port, and the listener socket is the
+        // flow's socket for the answer.
+        let mut inbound_tcp: Vec<(i32, [u8; 4], u16, u16)> = Vec::new();
+        for l in &self.listeners {
+            if l.tcp {
+                loop {
+                    // SAFETY: zeroed sockaddr_in and a valid len out-param.
+                    let mut peer: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                    let mut len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+                    // SAFETY: accept on our listening fd with valid out-params.
+                    let fd = unsafe {
+                        libc::accept(l.fd, &mut peer as *mut _ as *mut libc::sockaddr, &mut len)
+                    };
+                    if fd < 0 {
+                        break;
+                    }
+                    let ip = apparent_peer(u32::from_be(peer.sin_addr.s_addr).to_be_bytes());
+                    let port = u16::from_be(peer.sin_port);
+                    inbound_tcp.push((fd, ip, port, l.port));
+                }
+            } else {
+                loop {
+                    // SAFETY: zeroed sockaddr_in and a valid len out-param.
+                    let mut peer: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                    let mut len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+                    // SAFETY: recvfrom into a valid buffer with valid out-params.
+                    let n = unsafe {
+                        libc::recvfrom(
+                            l.fd,
+                            buf.as_mut_ptr() as *mut libc::c_void,
+                            buf.len(),
+                            0,
+                            &mut peer as *mut _ as *mut libc::sockaddr,
+                            &mut len,
+                        )
+                    };
+                    if n <= 0 {
+                        break;
+                    }
+                    let real_ip = u32::from_be(peer.sin_addr.s_addr).to_be_bytes();
+                    let port = u16::from_be(peer.sin_port);
+                    let ip = apparent_peer(real_ip);
+                    // The answer path: the flow keyed by the guest's
+                    // mapped port and the apparent peer sends on the
+                    // listener, to the real peer.
+                    let fl = self.udp.entry((l.port, ip, port)).or_insert(Flow {
+                        fd: l.fd,
+                        last: Instant::now(),
+                        guest_ip: config::WORLD_GUEST_IP,
+                        real_peer: None,
+                    });
+                    fl.last = Instant::now();
+                    fl.real_peer = Some((real_ip, port));
+                    let mut udp = Vec::with_capacity(8 + n as usize);
+                    udp.extend_from_slice(&port.to_be_bytes());
+                    udp.extend_from_slice(&l.port.to_be_bytes());
+                    udp.extend_from_slice(&(((8 + n) as u16).to_be_bytes()));
+                    udp.extend_from_slice(&[0, 0]);
+                    udp.extend_from_slice(&buf[..n as usize]);
+                    fix_udp_checksum(&mut udp, ip, config::WORLD_GUEST_IP);
+                    out.push(build_ipv4_frame(
+                        &self.guest_mac,
+                        ip,
+                        config::WORLD_GUEST_IP,
+                        17,
+                        &udp,
+                    ));
+                }
+            }
+        }
+        for (fd, ip, port, guest_port) in inbound_tcp {
+            for o in self
+                .tcp
+                .accept_inbound(fd, ip, port, guest_port, config::WORLD_GUEST_IP)
+            {
+                let seg = tcp::segment(o.peer_ip, o.guest_ip, &o);
+                out.push(build_ipv4_frame(
+                    &self.guest_mac,
+                    o.peer_ip,
+                    o.guest_ip,
+                    6,
+                    &seg,
+                ));
+            }
+        }
+        for o in self.tcp.poll() {
+            let seg = tcp::segment(o.peer_ip, o.guest_ip, &o);
+            out.push(build_ipv4_frame(
+                &self.guest_mac,
+                o.peer_ip,
+                o.guest_ip,
+                6,
+                &seg,
+            ));
+        }
         for (id, flow) in self.icmp.iter_mut() {
             loop {
                 // SAFETY: buf is valid; fd is this flow's own.
@@ -254,7 +502,7 @@ impl World {
                     out.push(build_ipv4_frame(
                         &self.guest_mac,
                         config::WORLD_GW_IP,
-                        config::WORLD_GUEST_IP,
+                        flow.guest_ip,
                         1,
                         &icmp,
                     ));
@@ -277,11 +525,11 @@ impl World {
                 udp.extend_from_slice(&(((8 + n) as u16).to_be_bytes()));
                 udp.extend_from_slice(&[0, 0]);
                 udp.extend_from_slice(&buf[..n as usize]);
-                fix_udp_checksum(&mut udp, *peer_ip, config::WORLD_GUEST_IP);
+                fix_udp_checksum(&mut udp, *peer_ip, flow.guest_ip);
                 out.push(build_ipv4_frame(
                     &self.guest_mac,
                     *peer_ip,
-                    config::WORLD_GUEST_IP,
+                    flow.guest_ip,
                     17,
                     &udp,
                 ));
@@ -302,9 +550,10 @@ impl World {
             }
             live
         });
+        let listener_fds: Vec<i32> = self.listeners.iter().map(|l| l.fd).collect();
         self.udp.retain(|_, f| {
             let live = f.last.elapsed() < FLOW_IDLE;
-            if !live {
+            if !live && !listener_fds.contains(&f.fd) {
                 close_fd(f.fd);
             }
             live

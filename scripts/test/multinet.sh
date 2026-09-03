@@ -9,9 +9,6 @@ cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
-for t in tap1 tap2; do
-    ip link show $t >/dev/null 2>&1 || { echo "SKIP: $t missing -- run: cella doctor fix"; exit 0; }
-done
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 export CELLA_HOME=$(mktemp -d /tmp/cella-multinet.XXXXXX)
@@ -26,6 +23,9 @@ teardown() {
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
 CON="$CELLA_HOME/machines/mn/console.log"
+M="$CELLA_HOME/machines/mn"
+knock() { printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; }
+knock_loop() { local end=$((SECONDS + $1)); while [ $SECONDS -lt $end ]; do knock; sleep 1; done; }
 type_in() { (printf '%s\n' "$1"; sleep 2) | timeout 20 "$BIN" enter mn >/dev/null; }
 wait_for() {
     local marker="$1" deadline=$((SECONDS + 15))
@@ -64,8 +64,8 @@ pump_while() { # pid
     echo "  ($cycles engine cycles)"
 }
 
-say "step 1: create and start a machine on two taps"
-"$BIN" create mn --net tap1,tap2 >/dev/null
+say "step 1: create and start a machine on two nics: the world, and a wire"
+"$BIN" create mn --net world:1709/tcp+1709/udp,wire:mn-w >/dev/null
 "$BIN" start mn >/dev/null
 sleep 5
 
@@ -78,7 +78,8 @@ echo "  eth0 and eth1 present"
 say "step 3: open -- every egress parks, and the engine lands a reply on eth0"
 "$BIN" gateway mn open >/dev/null
 sleep 1
-ping -c 1 -W 3 192.168.201.2 >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
+B=$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true); knock; knock; sleep 3
+[ "$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true)" -gt "$B" ] && { echo "FAIL: an open machine answered without a decision"; exit 1; }
 # The knock parks incoming and never freezes the machine (the
 # world's knock is not the resident's deed); release it live, and
 # the guest's own reply parks in the egress lane -- that park is the
@@ -89,10 +90,11 @@ until [ -f "$M/state" ]; do
     pump_mail
     sleep 0.5
 done
-ping -c 20 -i 1 -W 25 192.168.201.2 >/dev/null 2>&1 & P3=$!
+knock_loop 25 & P3=$!
 pump_while "$P3"
-wait "$P3" || { echo "FAIL: no reply landed on the first tap while the engine decided"; exit 1; }
-echo "  192.168.201.2 answers over tap1, every frame decided"
+wait "$P3" || { echo "FAIL: no reply landed on the first while the engine decided"; exit 1; }
+"$BIN" --dump-ledger "$M/network/ledger" | grep -q "released id=.*bytes_out=[1-9]" || { echo "FAIL: no reply crossed on eth0"; exit 1; }
+echo "  the knock is answered over eth0, every frame decided"
 
 say "step 4: one valve spans all transports -- egress on eth1 parks too"
 # The second nic belongs to the image init in the gateway flavor;
@@ -115,9 +117,9 @@ done
 "$BIN" thaw mn >/dev/null
 sleep 2
 
-say "step 5: the tap claims are exclusive per tap"
-"$BIN" create mn2 --net tap2 >/dev/null 2>&1 && { echo "FAIL: a claimed tap was granted again"; exit 1; }
-echo "  tap2 refused: the list claims each tap"
+say "step 5: the grammar refuses a host object (negative)"
+"$BIN" create mn2 --net tap2 >/dev/null 2>&1 && { echo "FAIL: a tap was granted -- the pool is gone"; exit 1; }
+echo "  tap2 refused: there is no pool to claim from"
 
 say "step 6: freeze and thaw with two transports in the sidecar"
 if [ -f "$M/state" ]; then "$BIN" thaw mn >/dev/null; sleep 1; fi
@@ -125,7 +127,7 @@ if [ -f "$M/state" ]; then "$BIN" thaw mn >/dev/null; sleep 1; fi
 "$BIN" thaw mn >/dev/null
 sleep 2
 # Nothing is inherited: every frame is decided again after the thaw.
-ping -c 20 -i 1 -W 25 192.168.201.2 >/dev/null 2>&1 & P5=$!
+knock_loop 25 & P5=$!
 pump_while "$P5"
 wait "$P5" || { echo "FAIL: no reply landed after the thaw while the engine decided"; exit 1; }
 if [ -f "$M/state" ]; then "$BIN" thaw mn >/dev/null; sleep 1; fi

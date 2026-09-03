@@ -24,16 +24,10 @@ case "$MODE" in airgapped|hybrid|www) ;; *) echo "usage: $0 airgapped|hybrid|www
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
-TAP="${CELLA_TEST_TAP:-tap0}"
-HOST_IP="${CELLA_TAP_CIDR:-192.168.200.1/24}"; HOST_IP="${HOST_IP%%/*}"
-OUTER_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm golden:kernel:nested golden:rootfs:nested || exit 0
-if [ "$MODE" != airgapped ] && [ ! -e "/sys/class/net/$TAP" ]; then
-    echo "SKIP: $TAP does not exist -- run: cella doctor fix"
-    exit 0
-fi
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 export CELLA_HOME=$(mktemp -d /tmp/cella-nested.XXXXXX)
@@ -51,6 +45,9 @@ teardown() {
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
+knock() { printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; }
+knock_loop() { local end=$((SECONDS + $1)); while [ $SECONDS -lt $end ]; do knock; sleep 1; done; }
+
 CON="$CELLA_HOME/machines/$VM/console.log"
 STATE="$CELLA_HOME/machines/$VM/state"
 wait_con() {
@@ -94,7 +91,7 @@ pump_while() { # pid
 }
 
 say "step 1: create the outer machine through the verbs"
-NET_FLAG="--net none"; [ "$MODE" != airgapped ] && NET_FLAG="--net $TAP"
+NET_FLAG="--net none"; [ "$MODE" != airgapped ] && NET_FLAG="--net world:1709/tcp+1709/udp"
 "$BIN" create "$VM" --kernel nested --rootfs nested --mem-mb 768 $NET_FLAG >/dev/null
 [ "$(cat "$CELLA_HOME/machines/$VM/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 if [ "$MODE" = www ]; then
@@ -126,14 +123,16 @@ echo "  the inner guest booted, one level down"
 
 if [ "$MODE" != airgapped ]; then
     say "step 3: born closed -- the outer machine answers nothing (negative)"
-    ping -c 2 -W 2 "$OUTER_IP" >/dev/null 2>&1 && { echo "FAIL: a closed machine answered a ping"; exit 1; }
+    B=$("$BIN" --dump-ledger "$CELLA_HOME/machines/outer/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true); knock; knock; sleep 3
+    [ "$("$BIN" --dump-ledger "$CELLA_HOME/machines/outer/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true)" -gt "$B" ] && { echo "FAIL: a closed machine answered a knock"; exit 1; }
     [ -f "$STATE" ] && { echo "FAIL: a closed machine froze on inbound traffic"; exit 1; }
     echo "  no reply, no freeze: dark"
 
     say "step 4: open -- the knock parks in the inbound lane, and the outer machine keeps running"
     "$BIN" gateway "$VM" open >/dev/null
     sleep 1
-    ping -c 1 -W 3 "$OUTER_IP" >/dev/null 2>&1 && { echo "FAIL: an open machine answered without a decision"; exit 1; }
+    B=$("$BIN" --dump-ledger "$CELLA_HOME/machines/outer/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true); knock; knock; sleep 3
+    [ "$("$BIN" --dump-ledger "$CELLA_HOME/machines/outer/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true)" -gt "$B" ] && { echo "FAIL: an open machine answered without a decision"; exit 1; }
     [ -f "$STATE" ] && { echo "FAIL: the outer machine froze on inbound -- the world's knock is not the resident's deed"; exit 1; }
     "$BIN" gateway "$VM" show incoming | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show incoming lists no held knock"; exit 1; }
     echo "  the knock is held incoming; no freeze"
@@ -144,7 +143,7 @@ if [ "$MODE" != airgapped ]; then
     wait_frozen || { echo "FAIL: the guest's reply did not park and freeze"; exit 1; }
     "$BIN" gateway "$VM" show outgoing | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: show outgoing lists no held reply"; exit 1; }
     echo "  mail moved live; the resident's own deed froze the machine"
-    ping -c 20 -i 1 -W 30 "$OUTER_IP" >/dev/null 2>&1 & P4=$!
+    knock_loop 30 & P4=$!
     pump_while "$P4"
     wait "$P4" || { echo "FAIL: no ICMP reply landed while the engine decided"; exit 1; }
     if [ -f "$STATE" ]; then "$BIN" thaw "$VM" >/dev/null; sleep 1; fi

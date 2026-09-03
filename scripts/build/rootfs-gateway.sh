@@ -12,6 +12,9 @@ mount -t tmpfs tmpfs /tmp
 echo "cella-gateway: init running (pid $$)"
 
 PAIR=$(sed -n 's/.*cella_pair=\([0-9]*\).*/\1/p' /proc/cmdline)
+# A wire carries no convention on the command line (1.6.14e): an
+# eth1 with no cella_pair is the agent side of wire 0.
+[ -z "$PAIR" ] && [ -e /sys/class/net/eth1 ] && PAIR=0
 if [ -n "$PAIR" ]; then
     ip addr add "10.77.$PAIR.1/24" dev eth1
     ip link set eth1 up

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use virtio_queue::{Queue, QueueT};
 use vm_memory::{Bytes, GuestMemoryMmap};
 
-use super::tap::Edge;
+use super::edge::Edge;
 use super::{ValveState, VirtioDevice, VIRTIO_F_VERSION_1};
 use cella_libs::ledger::{self, Dest, GuestClock, OpenOperation};
 use cella_libs::proto;

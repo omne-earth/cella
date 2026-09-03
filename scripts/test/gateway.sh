@@ -8,18 +8,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
-NET_BIN="$HOME/.local/bin/cella-network"
-[ -x "$NET_BIN" ] || NET_BIN=target/release/cella-network
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella golden:rootfs:gateway || exit 0
-ip link show tap1 >/dev/null 2>&1 || { echo "SKIP: tap1 missing -- run: cella doctor fix"; exit 0; }
 
 say() { echo; echo "==> $1"; }
 
-say "step 1: wire the pair (bridge, two taps, the route to the agent subnet)"
-if ! "$NET_BIN" pair --id 0 --via tap1; then
-    echo "SKIP: pair wiring failed (cap_net_admin -- run: make install)"; exit 0
-fi
+say "step 1: the pair is two manifests naming one wire -- no host object"
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 export CELLA_HOME=$(mktemp -d /tmp/cella-gateway.XXXXXX)
@@ -43,16 +37,18 @@ wait_con() {
     return 1
 }
 
-say "step 2: the gateway appliance, world side tap1, agent side pair0g"
-"$BIN" create gw --net tap1,pair0g --rootfs gateway >/dev/null
+say "step 2: the gateway appliance, world side eth0, agent side the wire"
+"$BIN" create gw --net world,wire:ag-gw --rootfs gateway >/dev/null
 "$BIN" start gw >/dev/null
 wait_con gw "forwarding on" || { echo "FAIL: the gateway did not bring its agent side up"; exit 1; }
 echo "  gateway up: 10.77.0.1 on the agent side, forwarding on"
 
 say "step 3: the agent, behind the gateway only -- both machines open, the pump decides"
-"$BIN" create ag --net pair0a >/dev/null
+"$BIN" create ag --net wire:ag-gw >/dev/null
 "$BIN" start ag >/dev/null
 sleep 4
+type_in ag 'ip addr add 10.77.0.2/24 dev eth0 && ip link set eth0 up && ip route add default via 10.77.0.1 && echo ag-addresse"d"'
+wait_con ag "ag-addressed" || { echo "FAIL: the agent did not address its wire"; exit 1; }
 "$BIN" gateway gw open >/dev/null
 "$BIN" gateway ag open >/dev/null
 sleep 1
@@ -89,10 +85,10 @@ pump() { # marker cycles
 }
 type_in ag 'ping -c20 -W60 10.77.0.1 >/dev/null && echo pair-o"k"'
 pump "pair-ok" 180 || { echo "FAIL: the agent cannot reach the gateway over the pair"; exit 1; }
-echo "  agent -> gateway over the L2 pair, one decision at a time"
+echo "  agent -> gateway over the wire, one decision at a time"
 
 say "step 4: the agent reaches the host, through the gateway"
-type_in ag 'ping -c20 -W60 192.168.201.1 >/dev/null && echo world-o"k"'
+type_in ag 'ping -c20 -W60 192.168.210.1 >/dev/null && echo world-o"k"'
 pump "world-ok" 180 || { echo "FAIL: the gateway does not forward to the world"; exit 1; }
 echo "  agent -> gateway -> host: the appliance forwards, every hop decided"
 
@@ -119,12 +115,12 @@ sleep 2
 # ICMP never retransmits on its own, and a reply that lands while
 # a member is frozen is lost at the tap: the repeating ping gives
 # the chain fresh echoes until one crossing survives every hop.
-type_in ag 'ping -c20 -W60 192.168.201.1 >/dev/null && echo world-agai"n"'
+type_in ag 'ping -c20 -W60 192.168.210.1 >/dev/null && echo world-agai"n"'
 pump "world-again" 180 || { echo "FAIL: the pair did not survive the freeze"; exit 1; }
 echo "  the pair froze and thawed; the agent reaches the world again, re-decided"
 
 echo
-echo "PASS: the gateway ladder -- pair wiring, forwarding, pair freeze"
+echo "PASS: the gateway ladder -- the wire, forwarding to the world, pair freeze"
 # Take each machine as the ladder left it: a member may stand
 # re-frozen on a post-PASS park (stop refuses frozen; destroy
 # takes any still machine).

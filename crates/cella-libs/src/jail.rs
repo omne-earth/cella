@@ -72,12 +72,25 @@ pub fn profiles_root() -> PathBuf {
 /// narrowed or widened.
 pub fn load(persona: &str) -> Result<Profile, String> {
     let path = profiles_root().join(persona).join("bwrap.txt");
-    let text = fs::read_to_string(&path).map_err(|e| {
-        format!(
-            "reading the {persona} jail profile ({}): {e}",
-            path.display()
-        )
-    })?;
+    // The file is the source of truth; the same text is embedded at
+    // compile time as the last resort for a binary that runs where
+    // no checkout exists -- the static cella inside a nested guest,
+    // or an install without the repository. Only the VMM's profile
+    // is consumed at run time today.
+    let text = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => match persona {
+            "cella-vmm" => {
+                include_str!("../../../security/profiles/cella-vmm/bwrap.txt").to_string()
+            }
+            _ => {
+                return Err(format!(
+                    "reading the {persona} jail profile ({}): {e}",
+                    path.display()
+                ))
+            }
+        },
+    };
     let mut p = Profile::default();
     for (n, line) in text.lines().enumerate() {
         let line = line.trim();

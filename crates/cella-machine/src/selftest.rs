@@ -144,38 +144,38 @@ fn selftest_cycle() -> Result<(), String> {
     step("restart", start("m1"))?;
     step("stop again", stop("m1"))?;
     step("destroy", destroy("m1"))?;
-    // The installed world's negative, when the pool offers a free
-    // tap: a machine is born closed, a ping gets nothing, and no
-    // freeze happens on inbound traffic.
-    if std::path::Path::new("/sys/class/net/tap0").exists()
-        && !claimed_taps().contains(&"tap0".to_string())
+    // The installed world's negative (1.6.14e): a machine is born
+    // closed, a knock on its mapped port gets nothing, and no
+    // freeze happens on inbound traffic -- the world's knock is not
+    // the resident's deed.
     {
         let mut n = defaults();
         n.name = "m2".into();
-        n.net = "tap0".into();
-        step("create (closed, tap)", create(&n))?;
-        step("start (closed, tap)", start("m2"))?;
+        n.net = "world:1709/udp".into();
+        step("create (closed, world)", create(&n))?;
+        step("start (closed, world)", start("m2"))?;
         std::thread::sleep(std::time::Duration::from_secs(2));
-        let answered = std::process::Command::new("ping")
-            .args(["-c", "1", "-W", "2", "192.168.200.2"])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        let answered = (|| -> std::io::Result<bool> {
+            let s = std::net::UdpSocket::bind("127.0.0.1:0")?;
+            s.send_to(b"knock", "127.0.0.1:1709")?;
+            s.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+            let mut buf = [0u8; 64];
+            Ok(s.recv_from(&mut buf).is_ok())
+        })()
+        .unwrap_or(false);
         if answered {
             let _ = stop("m2");
             let _ = destroy("m2");
-            return Err("a closed machine answered a ping".to_string());
+            return Err("a closed machine answered a knock".to_string());
         }
         if is_frozen("m2") {
             let _ = stop("m2");
             let _ = destroy("m2");
             return Err("a closed machine froze on inbound traffic".to_string());
         }
-        step("stop (closed, tap)", stop("m2"))?;
-        step("destroy (closed, tap)", destroy("m2"))?;
+        step("stop (closed, world)", stop("m2"))?;
+        step("destroy (closed, world)", destroy("m2"))?;
         println!("  the closed machine answered nothing, and never froze");
-    } else {
-        println!("  (no free tap0 -- the born-closed negative did not run)");
     }
     Ok(())
 }

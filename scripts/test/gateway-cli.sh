@@ -11,12 +11,7 @@ cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
-TAP="${CELLA_TEST_TAP:-tap0}"
-HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
-if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-    echo "SKIP: $TAP is not configured with $HOST_IP -- run: cella doctor fix"
-    exit 0
-fi
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoints)"; exit 0; }
 
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
@@ -92,7 +87,7 @@ wait_frozen_mail() {
 }
 
 say "step 1: create (born closed), start, open the valve through the verb"
-"$BIN" create "$VM" --net "$TAP" >/dev/null
+"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
 [ "$(cat "$CELLA_HOME/machines/$VM/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 "$BIN" start "$VM" >/dev/null
 sleep 5

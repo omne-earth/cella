@@ -33,6 +33,9 @@ teardown() {
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
+knock() { printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; }
+knock_loop() { local end=$((SECONDS + $1)); while [ $SECONDS -lt $end ]; do knock; sleep 1; done; }
+
 type_in() { (printf '%s\n' "$1"; sleep 2) | timeout 20 "$BIN" enter "$VM" >/dev/null; }
 CON="$CELLA_HOME/machines/$VM/console.log"
 
@@ -106,39 +109,34 @@ ac1)
 	;;
 ac2)
 	echo "AC2: the network survives the thaw (ping, freeze, thaw, ping again)."
-	TAP="${CELLA_TEST_TAP:-tap0}"
-	HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
-	GUEST_IP="${CELLA_TEST_GUEST_IP:-192.168.200.2}"
-	if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-		echo "SKIP: $TAP is not configured with $HOST_IP -- run: sudo cella setup net"
-		exit 0
-	fi
+	HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 
-	say "step 1: create and start a machine on $TAP"
-	"$BIN" create "$VM" --net "$TAP" >/dev/null
+	say "step 1: create and start a machine on --net world"
+	"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 
 	say "step 2: open -- every egress parks, and the engine lands a reply"
 	"$BIN" gateway "$VM" open >/dev/null
 	sleep 1
-	ping -c 20 -i 1 -W 25 "$GUEST_IP" >/dev/null 2>&1 & P2=$!
+	knock_loop 25 & P2=$!
 	pump_while "$P2"
 	wait "$P2" || { echo "FAIL: no reply landed while the engine decided"; exit 1; }
-	echo "  $GUEST_IP answers over $TAP, every frame decided"
+	"$BIN" --dump-ledger "$CELLA_HOME/machines/$VM/network/ledger" | grep -q "released id=.*bytes_out=[1-9]" || { echo "FAIL: no reply crossed while the engine decided"; exit 1; }
+	echo "  the knock was answered through the membrane, every frame decided"
 
-	say "step 3: freeze, then thaw (the tap claim rides the manifest)"
+	say "step 3: freeze, then thaw (the claim rides the manifest)"
 	if [ -f "$STATE" ]; then "$BIN" thaw "$VM" >/dev/null; sleep 1; fi
 	"$BIN" freeze "$VM" >/dev/null
-	grep -q "$TAP" "$CELLA_HOME/machines/$VM/manifest.json" || { echo "FAIL: the manifest lost the tap claim"; exit 1; }
+	grep -q "world" "$CELLA_HOME/machines/$VM/manifest.json" || { echo "FAIL: the manifest lost its nic"; exit 1; }
 	"$BIN" thaw "$VM" >/dev/null
 	sleep 2
 
 	say "step 4: the host pings again through the thawed transport, re-decided"
-	ping -c 20 -i 1 -W 25 "$GUEST_IP" >/dev/null 2>&1 & P4=$!
+	knock_loop 25 & P4=$!
 	pump_while "$P4"
 	wait "$P4" || { echo "FAIL: no reply landed after the thaw (see docs/DEVICE-STATE.md)"; exit 1; }
-	echo "  $GUEST_IP answers over $TAP"
+	echo "  the knock is answered again after the thaw"
 
 	echo
 	echo "PASS: AC2 -- the network survived the thaw"
@@ -148,12 +146,7 @@ ac2)
 ac3)
 	echo "AC3: the in-flight layer is exact (a parked egress request is delivered"
 	echo "and completed after the thaw; the same request works, no retransmission)."
-	TAP="${CELLA_TEST_TAP:-tap0}"
-	HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
-	if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-		echo "SKIP: $TAP is not configured with $HOST_IP -- run: sudo cella setup net"
-		exit 0
-	fi
+	HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 
 	command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoint)"; exit 0; }
 	pkill -f "http.server 8080 --bind $HOST_IP" 2>/dev/null || true
@@ -162,8 +155,8 @@ ac3)
 	trap 'kill $SRV1 2>/dev/null; rm -rf "$WWW"; "$BIN" stop "$VM" >/dev/null 2>&1 || true
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true; rm -rf "$CELLA_HOME"' EXIT
 
-	say "step 1: create and start a machine on $TAP"
-	"$BIN" create "$VM" --net "$TAP" >/dev/null
+	say "step 1: create and start a machine on --net world"
+	"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
@@ -248,12 +241,7 @@ ac3)
 ac4)
 	echo "AC4: the verdict is external (the world-ratchet gate). Every egress"
 	echo "frame parks; the test, as the stand-in engine, renders the verdicts."
-	TAP="${CELLA_TEST_TAP:-tap0}"
-	HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
-	if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-		echo "SKIP: $TAP is not configured with $HOST_IP -- run: sudo cella setup net"
-		exit 0
-	fi
+	HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 	command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoints)"; exit 0; }
 	# A stand-in endpoint leaked by an interrupted run squats its port
 	# and serves a deleted directory; sweep them first.
@@ -265,8 +253,8 @@ ac4)
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true; rm -rf "$CELLA_HOME"' EXIT
 	VMM="$CELLA_HOME/machines/$VM/vmm.log"
 
-	say "step 1: create and start a machine on $TAP"
-	"$BIN" create "$VM" --net "$TAP" >/dev/null
+	say "step 1: create and start a machine on --net world"
+	"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
@@ -332,22 +320,16 @@ ac5)
 	echo "one decision per frame. It skips when the host is offline, and it"
 	echo "rides the peer-patience bound: the far end must retransmit into"
 	echo "the aperture."
-	TAP="${CELLA_TEST_TAP:-tap0}"
-	HOST_IP="${CELLA_TEST_HOST_IP:-192.168.200.1}"
-	if ! ip addr show "$TAP" 2>/dev/null | grep -q "$HOST_IP"; then
-		echo "SKIP: $TAP is not configured with $HOST_IP -- run: cella doctor fix"
-		exit 0
-	fi
 	# A real internet endpoint that answers small, over plain HTTP:
 	# a TLS burst spans many segments, and a segment that lands on
-	# a frozen tap is lost -- the peer-patience bound. The claim
+	# a frozen is lost -- the peer-patience bound. The claim
 	# here is the true world, not the biggest possible page.
 	AC5_URL="${CELLA_AC5_URL:-http://example.com}"
 	curl -s --max-time 8 -o /dev/null "$AC5_URL" || {
 		echo "SKIP: this host has no route to the www"; exit 0; }
 
-	say "step 1: create and start a machine on $TAP"
-	"$BIN" create "$VM" --net "$TAP" >/dev/null
+	say "step 1: create and start a machine on --net world (no tap, no host address)"
+	"$BIN" create "$VM" --net world >/dev/null
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
