@@ -6,6 +6,10 @@ set -ueo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 ac="${1:-}"
 
 case "$ac" in
@@ -33,7 +37,7 @@ teardown() {
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
-knock() { printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; }
+knock() { printf 'knock\n' > /dev/udp/127.0.0.1/$WORLD_PORT 2>/dev/null || true; }
 knock_loop() { local end=$((SECONDS + $1)); while [ $SECONDS -lt $end ]; do knock; sleep 1; done; }
 
 type_in() { (printf '%s\n' "$1"; sleep 2) | timeout 20 "$BIN" enter "$VM" >/dev/null; }
@@ -112,7 +116,7 @@ ac2)
 	HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 
 	say "step 1: create and start a machine on --net world"
-	"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
+	"$BIN" create "$VM" --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 
@@ -156,7 +160,7 @@ ac3)
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true; rm -rf "$CELLA_HOME"' EXIT
 
 	say "step 1: create and start a machine on --net world"
-	"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
+	"$BIN" create "$VM" --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
@@ -254,7 +258,7 @@ ac4)
 	VMM="$CELLA_HOME/machines/$VM/vmm.log"
 
 	say "step 1: create and start a machine on --net world"
-	"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
+	"$BIN" create "$VM" --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null
 	"$BIN" start "$VM" >/dev/null
 	sleep 6
 	VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")

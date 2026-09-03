@@ -8,6 +8,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 
@@ -59,7 +63,7 @@ pump() { # marker budget
 }
 
 say "step 1: a machine on --net world -- no tap, no host interface, a translator"
-"$BIN" create wo --net world:1709/tcp >/dev/null
+"$BIN" create wo --net world:$WORLD_PORT/tcp >/dev/null
 "$BIN" start wo >/dev/null
 [ -f "$CELLA_HOME/machines/wo/edge.pid" ] || { echo "FAIL: no translator"; exit 1; }
 ip -br link | grep -qE "tap.*wo|wo.*tap" && { echo "FAIL: a host interface appeared"; exit 1; }
@@ -84,7 +88,7 @@ pump "gw-ok" 120 || { echo "FAIL: the gateway echo did not cross"; exit 1; }
 echo "  ARP answered at the edge, the echo answered at the edge, every hop decided"
 
 say "step 4: UDP to the real host through a socket, the reply parks incoming"
-UDP_PORT=1709
+UDP_PORT=$WORLD_PORT
 LISTENER_OUT="$CELLA_HOME/listener.out"
 # A python listener, not nc: it binds fresh (no stale-port flake),
 # records the knock to a file, and repeats the reply -- the judged
@@ -131,7 +135,7 @@ done
 echo "  the world's answer parked in the ingress lane -- the chronicle carries it"
 
 say "step 6: TCP out -- the guest's SYN becomes a connect, bytes cross, every segment decided"
-TCP_PORT=1710
+TCP_PORT=$((WORLD_PORT + 1))
 TCP_OUT="$CELLA_HOME/tcp.out"
 python3 - "$TCP_PORT" "$TCP_OUT" <<'PY' &
 import socket, sys
@@ -164,10 +168,10 @@ kill "$TCP_PID" 2>/dev/null || true
 
 say "step 7: the knock -- a connection on the mapped port parks incoming, no freeze (negative)"
 KNOCK_OUT="$CELLA_HOME/knock.out"
-python3 - "$HOST_IP" "$KNOCK_OUT" <<'PY' &
+python3 - "$HOST_IP" "$KNOCK_OUT" "$WORLD_PORT" <<'PY' &
 import socket, sys, time
 try:
-    c = socket.create_connection((sys.argv[1], 1709), timeout=60)
+    c = socket.create_connection((sys.argv[1], int(sys.argv[3])), timeout=60)
     c.sendall(b"knock\n")
     with open(sys.argv[2], "w") as f:
         f.write("connected")
@@ -178,7 +182,7 @@ except Exception as e:
 PY
 KNOCK_PID=$!
 deadline=$((SECONDS + 30))
-until "$BIN" --dump-ledger "$LEDGER" 2>/dev/null | grep -q "dir=incoming ip=$HOST_IP port=1709\|dir=incoming.*port=1709"; do
+until "$BIN" --dump-ledger "$LEDGER" 2>/dev/null | grep -q "dir=incoming ip=$HOST_IP port=$WORLD_PORT\|dir=incoming.*port=$WORLD_PORT"; do
     [ $SECONDS -lt $deadline ] || { echo "FAIL: the knock never parked incoming"; exit 1; }
     sleep 1
 done

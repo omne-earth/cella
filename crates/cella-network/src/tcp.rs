@@ -169,7 +169,7 @@ impl Tcp {
 
     /// A TCP segment from the guest (the IP payload). `src`/`dst`
     /// are the IP addresses. Returns segments for the guest.
-    pub fn from_guest(&mut self, src: [u8; 4], dst: [u8; 4], seg: &[u8]) -> Vec<Out> {
+    pub fn guest_segment(&mut self, src: [u8; 4], dst: [u8; 4], seg: &[u8]) -> Vec<Out> {
         let mut out = Vec::new();
         if seg.len() < 20 {
             return out;
@@ -380,10 +380,9 @@ impl Tcp {
             world_eof: false,
             last: Instant::now(),
         };
-        let mut out = Vec::new();
         // A bare SYN (no ACK flag): push() ORs in ACK, so build it
         // by hand.
-        out.push(Out {
+        let out = vec![Out {
             peer_ip,
             peer_port,
             guest_port,
@@ -392,7 +391,7 @@ impl Tcp {
             ack: 0,
             flags: FLAG_SYN,
             data: Vec::new(),
-        });
+        }];
         flow.unacked.push_back(Unacked {
             seq: my_isn,
             data: Vec::new(),

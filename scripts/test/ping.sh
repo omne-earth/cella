@@ -14,6 +14,10 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
@@ -30,17 +34,21 @@ teardown() {
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
     VMM_PID=$(cat "$M/pid" 2>/dev/null || true)
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
+    # destroy before rm: the translator is machine-lifetime, and an
+    # rm alone orphans it -- a dead process holding the knock port
+    # swallows the next gate's knocks.
+    "$BIN" destroy "$VM" >/dev/null 2>&1 || true
     rm -rf "$CELLA_HOME"
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
 STATE="$M/state"
 # The knock (1.6.14e): a datagram on the machine's mapped port
-# 1709, from the host. The guest has no listener there, so an
+# $WORLD_PORT, from the host. The guest has no listener there, so an
 # answered knock is the guest's ICMP port-unreachable reply -- an
 # egress frame that parks outgoing. "answered" therefore means an
 # outgoing park appeared after the knock; a closed valve shows none.
-knock() { printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; }
+knock() { printf 'knock\n' > /dev/udp/127.0.0.1/$WORLD_PORT 2>/dev/null || true; }
 outgoing_parks() { "$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "dir=outgoing" || true; }
 answered() { # <parks-before>
     sleep 3
@@ -88,7 +96,7 @@ pump_while() { # pid
 }
 
 say "step 1: born closed -- the machine answers nothing"
-"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
+"$BIN" create "$VM" --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null
 [ "$(cat "$M/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 "$BIN" start "$VM" >/dev/null
 sleep 4

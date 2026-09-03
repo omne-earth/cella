@@ -473,19 +473,17 @@ requires a decision, nothing stands, and the mouth closes.
             or on a host: the getcap sweep gains a sibling that
             asserts no tap, bridge, or nft table of cella's
             exists after make install.
-            - [ ] The pool's reboot story (observed 2026-09-02):
-                  the tap pool evaporated across a host
-                  sleep/reboot despite cella-network.service
-                  standing enabled -- a whole battery SKIPped on
-                  the missing taps before anyone noticed. A
-                  doctor-level look lands with e: under the
-                  rootless network the pool becomes process-owned
-                  fds, "survives reboot" becomes "restarts with
-                  the first verb," and this class of environment
-                  rot dies entirely; the service retires with the
-                  host-netns pool. Until e lands, doctor check
-                  already names the missing taps -- the gap is
-                  that nothing re-runs it after a boot.
+            - ~~The pool's reboot story (observed 2026-09-02):
+              the tap pool evaporated across a host sleep/reboot
+              despite cella-network.service standing enabled -- a
+              whole battery SKIPped on the missing taps before
+              anyone noticed.~~ Superseded by 1.6.14e
+              (2026-09-03): the pool, the boot unit, and the tap
+              census retired with the host-netns network. The
+              translator is a per-machine process that start
+              spawns, so "survives reboot" became "the next start
+              spawns a fresh one" -- this class of environment
+              rot has no subject left.
             LOAD-BEARING (ruled 2026-09-02): this task carries
             the one-root-moment claim -- after it, cella grants
             itself nothing (no capability, no setuid, no

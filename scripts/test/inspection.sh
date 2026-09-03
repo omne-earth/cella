@@ -11,6 +11,10 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
@@ -53,7 +57,7 @@ wait_frozen() {
 type_in() { (printf '%s\n' "$1"; sleep 3) | timeout 15 "$BIN" enter "$VM" >/dev/null 2>&1 || true; }
 
 say "step 1: a plaintext datagram parks, and the ARP before it is decided"
-"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
+"$BIN" create "$VM" --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null
 "$BIN" start "$VM" >/dev/null
 sleep 4
 "$BIN" gateway "$VM" open >/dev/null

@@ -26,9 +26,12 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         init golden golden-nested  \
         boot enter freeze thaw remove doctor \
         smoke smoke-shell smoke-boot smoke-thaw \
+        smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
+        smoke-cella-gateway smoke-cella-network smoke-cella-probe \
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
-        smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire smoke-world smoke-rootless \
+        smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire \
+        smoke-world smoke-rootless smoke-translator-port-neg \
         smoke-ping smoke-udp smoke-collide smoke-inspection \
         smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
@@ -39,42 +42,55 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         test-seccomp-machine \
         test-machine test-one-door test-witness \
         clean distclean logs-clean lines \
-        probe-sregs probe-wallclock probe-freeze-thaw-clock probe-prefault-ept probe-thaw-gate probe-inception \
+        probe-sregs probe-wallclock probe-freeze-thaw-clock \
+        probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
 
-help: ## Show this help
+# Help rendering: a target's description sits on the line ABOVE it
+# as a "## " comment; this awk pairs the two, filtered by a name
+# alternation.
+define help_section
+awk -v pat='$(1)' 'substr($$0,1,3)=="## "{t=substr($$0,4);c=(c=="")?t:c" "t;next} $$0~/^[A-Za-z0-9_.\-]+:/{n=$$0;sub(/:.*/,"",n);if(c!=""&&n~"^("pat")$$")printf "%s\t%s\n",n,c} {c=""}' $(MAKEFILE_LIST) | sort | column -t -s $$'\t' || true
+endef
+
+## Show this help
+help:
 	$(LOG)
 	echo "cella -- build, lint, and test targets"
 	echo ""
 	echo "Build:"
-	grep -hE '^(build|build-smoke|install|debug|check|lint|fmt|fmt-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	$(call help_section,build|build-smoke|install|debug|check|lint|fmt|fmt-check)
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
-	grep -hE '^(unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-seccomp-vmm-kvm|test-seccomp-personas|test-seccomp-gateway|test-seccomp-universe|test-seccomp-build|test-seccomp-doctor|test-seccomp-network|test-seccomp-probe|test-seccomp-machine|test-machine|test-one-door|test-witness):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	$(call help_section,unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-seccomp-vmm-kvm|test-seccomp-personas|test-seccomp-gateway|test-seccomp-universe|test-seccomp-build|test-seccomp-doctor|test-seccomp-network|test-seccomp-probe|test-seccomp-machine|test-machine|test-one-door|test-witness)
 	echo ""
 	echo "Run: a real jailed guest, interactively:"
-	grep -hE '^(boot|enter|freeze|thaw|remove):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	$(call help_section,boot|enter|freeze|thaw|remove)
 	echo ""
 	echo "Smoke tests: real KVM, a real guest (one target per workflow):"
-	grep -hE '^($(SMOKE_ALTERNATION)):.*##' $(MAKEFILE_LIST) \
-	    | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	$(call help_section,$(SMOKE_ALTERNATION))
 	echo ""
 	echo "Setup:"
-	grep -hE '^(init|golden|golden-nested|setup-tap|doctor|kernel-config-check):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	$(call help_section,init|golden|golden-nested|setup-tap|doctor|kernel-config-check)
 	echo ""
 	echo "Everything:"
-	grep -hE '^(test-all|clean|distclean|logs-clean|lines):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	$(call help_section,test-all|clean|distclean|logs-clean|lines)
 	echo ""
 	echo "Probes: diagnostics, run by hand (smoke-thaw runs the freeze/thaw one):"
-	grep -hE '^(probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept|probe-thaw-gate|probe-inception):.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | sort | column -t -s $$'\t' || true
+	$(call help_section,probe-sregs|probe-wallclock|probe-freeze-thaw-clock|probe-prefault-ept|probe-thaw-gate|probe-inception)
 
 # The smoke roster, one list: the help section renders it, and the
 # alternation below is generated -- a new gate is added here once.
 SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
-        smoke-udp smoke-collide smoke-inspection smoke-witness smoke-nested-boot \
+        smoke-udp smoke-collide smoke-inspection smoke-witness \
+        smoke-nested-boot \
         smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
         smoke-nested-boot-www smoke-machine smoke-clean \
-        smoke-gateway smoke-gateway-cli smoke-wire smoke-world smoke-rootless smoke-multinet smoke-universe smoke-ledger smoke-chain \
+        smoke-gateway smoke-gateway-cli smoke-wire smoke-world \
+        smoke-rootless smoke-translator-port-neg smoke-multinet \
+        smoke-universe smoke-ledger smoke-chain \
+        smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
+        smoke-cella-gateway smoke-cella-network smoke-cella-probe \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5
 empty :=
@@ -90,7 +106,8 @@ $(CELLA_DEV): $(shell find crates -name '*.rs') Cargo.toml Cargo.lock
 	$(LOG)
 	$(CARGO) build --release
 
-build: $(CELLA_DEV) ## Release build (target/release/cella) -- the field flavor: no console
+## Release build (target/release/cella) -- the field flavor: no console
+build: $(CELLA_DEV)
 
 # The lab flavor: release-sized, debug-assertions on -- the console
 # exists. Every smoke and probe pins to it (see TESTING.md).
@@ -99,30 +116,38 @@ $(CELLA_SMOKE): $(shell find crates -name '*.rs') Cargo.toml Cargo.lock
 	$(LOG)
 	$(CARGO) build --profile smoke
 
-build-smoke: $(CELLA_SMOKE) ## Lab build (target/smoke/cella): release-sized with the console on
+## Lab build (target/smoke/cella): release-sized with the console on
+build-smoke: $(CELLA_SMOKE)
 
-debug: ## Debug build (target/debug/cella), faster to compile
+## Debug build (target/debug/cella), faster to compile
+debug:
 	$(LOG)
 	$(CARGO) build
 
-install: ## The field flavor: host deps, capabilities, and the console-free binary to ~/.local/bin (scripts/setup/install.sh)
+## The field flavor: host deps, capabilities, and the console-free binary to
+## ~/.local/bin (scripts/setup/install.sh)
+install:
 	$(LOG)
 	$(SCRIPTS)/setup/install.sh
 
 
-check: ## cargo check, no codegen
+## cargo check, no codegen
+check:
 	$(LOG)
 	$(CARGO) check --all-targets
 
-lint: fmt-check ## cargo clippy (all targets) + fmt-check
+## cargo clippy (all targets) + fmt-check
+lint: fmt-check
 	$(LOG)
 	$(CARGO) clippy --all-targets
 
-fmt: ## Apply cargo fmt
+## Apply cargo fmt
+fmt:
 	$(LOG)
 	$(CARGO) fmt
 
-fmt-check: ## Verify formatting without changing files (CI-friendly)
+## Verify formatting without changing files (CI-friendly)
+fmt-check:
 	$(LOG)
 	$(CARGO) fmt -- --check
 
@@ -131,15 +156,19 @@ fmt-check: ## Verify formatting without changing files (CI-friendly)
 # These run in an ordinary container. `make unit-test` stays fast during
 # work on the code. `make test` runs everything in this section.
 
-unit-test: ## cargo test --lib (inline #[cfg(test)] modules)
+## cargo test --lib (inline #[cfg(test)] modules)
+unit-test:
 	$(LOG)
 	$(CARGO) test --lib
 
-integration-test: ## cargo test --tests (tests/*.rs, real virtio-mmio/blk logic, no KVM)
+## cargo test --tests (tests/*.rs, real virtio-mmio/blk logic, no KVM)
+integration-test:
 	$(LOG)
 	$(CARGO) test --tests
 
-selftest: build ## Sanity-run the seccomp self-test binary directly (see also: make test-seccomp)
+## Sanity-run the seccomp self-test binary directly (see also: make test-
+## seccomp)
+selftest: build
 	$(LOG)
 	# This binary must exit 159 (SIGSYS). `set -e` stops a recipe at such
 	# an exit, thus the code takes the status with `|| status=$$?`.
@@ -152,60 +181,84 @@ selftest: build ## Sanity-run the seccomp self-test binary directly (see also: m
 		exit 1
 	fi
 
-test-jail: build ## Rootless bwrap jail actually confines the process (scripts/test/jail.sh)
+## Rootless bwrap jail actually confines the process (scripts/test/jail.sh)
+test-jail: build
 	$(LOG)
 	$(SCRIPTS)/test/jail.sh
 
-test-jail-identity: build-smoke golden ## Lane a's gate (1.6.14a): per-machine sub-uid, cross-machine refusal, bind-set refusal (scripts/test/jail-identity.sh)
+## Lane a's gate (1.6.14a): per-machine sub-uid, cross-machine refusal, bind-
+## set refusal (scripts/test/jail-identity.sh)
+test-jail-identity: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/jail-identity.sh
 
-test-seccomp: build ## The real BPF filter kills a disallowed syscall (scripts/test/seccomp.sh)
+## The real BPF filter kills a disallowed syscall (scripts/test/seccomp.sh)
+test-seccomp: build
 	$(LOG)
 	$(SCRIPTS)/test/seccomp.sh
 
-test-seccomp-vmm-kvm: build ## Lane b (1.6.14b): a KVM ioctl request outside the table kills the VMM (scripts/test/seccomp-kvm.sh)
+## Lane b (1.6.14b): a KVM ioctl request outside the table kills the VMM
+## (scripts/test/seccomp-kvm.sh)
+test-seccomp-vmm-kvm: build
 	$(LOG)
 	$(SCRIPTS)/test/seccomp-kvm.sh
 
-test-seccomp-gateway: build ## Lane b: cella-gateway's own filter kills a disallowed syscall
+## Lane b: cella-gateway's own filter kills a disallowed syscall
+test-seccomp-gateway: build
 	$(LOG)
 	$(SCRIPTS)/test/seccomp-persona.sh cella-gateway
 
-test-seccomp-universe: build ## Lane b: cella-universe's own filter kills a disallowed syscall
+## Lane b: cella-universe's own filter kills a disallowed syscall
+test-seccomp-universe: build
 	$(LOG)
 	$(SCRIPTS)/test/seccomp-persona.sh cella-universe
 
-test-seccomp-build: build ## Lane b: cella-build's own filter kills a disallowed syscall
+## Lane b: cella-build's own filter kills a disallowed syscall
+test-seccomp-build: build
 	$(LOG)
 	$(SCRIPTS)/test/seccomp-persona.sh cella-build
 
-test-seccomp-doctor: build ## Lane b: cella-doctor's own filter kills a disallowed syscall
+## Lane b: cella-doctor's own filter kills a disallowed syscall
+test-seccomp-doctor: build
 	$(LOG)
 	$(SCRIPTS)/test/seccomp-persona.sh cella-doctor
 
-test-seccomp-network: build ## Lane b: cella-network's own filter kills a disallowed syscall (table not installed in production yet -- see cella-network/src/seccomp.rs)
+## Lane b: cella-network's own filter kills a disallowed syscall (table not
+## installed in production yet -- see cella-network/src/seccomp.rs)
+test-seccomp-network: build
 	$(LOG)
 	$(SCRIPTS)/test/seccomp-persona.sh cella-network
 
-test-seccomp-probe: build ## Lane b: cella-probe's own filter kills a disallowed syscall (table not installed in production yet -- see cella-probe/src/seccomp.rs)
+## Lane b: cella-probe's own filter kills a disallowed syscall (table not
+## installed in production yet -- see cella-probe/src/seccomp.rs)
+test-seccomp-probe: build
 	$(LOG)
 	$(SCRIPTS)/test/seccomp-persona.sh cella-probe
 
-test-seccomp-machine: build ## Lane b: cella-machine's own filter kills a disallowed syscall
+## Lane b: cella-machine's own filter kills a disallowed syscall
+test-seccomp-machine: build
 	$(LOG)
 	$(SCRIPTS)/test/seccomp-persona.sh cella-machine
 
-test-seccomp-personas: test-seccomp test-seccomp-vmm-kvm test-seccomp-gateway test-seccomp-universe test-seccomp-build test-seccomp-doctor test-seccomp-network test-seccomp-probe test-seccomp-machine ## Lane b (1.6.14b): every persona's negative seccomp gate, one binary at a time
+## Lane b (1.6.14b): every persona's negative seccomp gate, one binary at a
+## time
+test-seccomp-personas: test-seccomp test-seccomp-vmm-kvm \
+        test-seccomp-gateway test-seccomp-universe test-seccomp-build \
+        test-seccomp-doctor test-seccomp-network test-seccomp-probe \
+        test-seccomp-machine
 	$(LOG)
 	echo ""
 	echo "=== test-seccomp-personas: every persona's filter kills its own canary ==="
 
-test-machine: build ## The machine registry verbs against a sandboxed CELLA_HOME (scripts/test/machine.sh)
+## The machine registry verbs against a sandboxed CELLA_HOME
+## (scripts/test/machine.sh)
+test-machine: build
 	$(LOG)
 	$(SCRIPTS)/test/machine.sh
 
-test-one-door: ## Static gate: exactly one TX call site writes the edge (the decision-delivery door)
+## Static gate: exactly one TX call site writes the edge (the decision-
+## delivery door)
+test-one-door:
 	$(LOG)
 	# With the pass table gone, the edge (a TAP or the translator
 	# socketpair -- 1.6.14e) is reachable from the decision delivery
@@ -219,7 +272,9 @@ test-one-door: ## Static gate: exactly one TX call site writes the edge (the dec
 	fi
 	echo "OK: one door -- a single TX call site writes the TAP"
 
-test-witness: ## Static gate: one witness door per persona binary (the one-door pattern applied to the audit)
+## Static gate: one witness door per persona binary (the one-door pattern
+## applied to the audit)
+test-witness:
 	$(LOG)
 	# Every persona binary witnesses its own verbs since the split
 	# (1.6.13): one audit::witness call site per persona main --
@@ -238,7 +293,9 @@ test-witness: ## Static gate: one witness door per persona binary (the one-door 
 	fi
 	echo "OK: six witness doors, one per persona; the shim owns none"
 
-test: check lint unit-test integration-test test-jail test-seccomp-personas test-machine test-one-door test-witness ## Everything above: build hygiene + all no-KVM tests
+## Everything above: build hygiene + all no-KVM tests
+test: check lint unit-test integration-test test-jail test-seccomp-personas \
+        test-machine test-one-door test-witness
 	$(LOG)
 	echo ""
 	echo "=== make test: all no-KVM checks passed ==="
@@ -251,7 +308,8 @@ test: check lint unit-test integration-test test-jail test-seccomp-personas test
 VM ?= vm1
 CREATE_FLAGS ?=
 
-boot: $(CELLA_DEV) ## Create (first time) and run the machine $(VM) -- or thaw it when frozen
+## Create (first time) and run the machine $(VM) -- or thaw it when frozen
+boot: $(CELLA_DEV)
 	$(LOG)
 	$(CELLA_DEV) create $(VM) $(CREATE_FLAGS) 2>/dev/null || true
 	if [ -f "$$HOME/.cella/machines/$(VM)/state" ]; then
@@ -261,33 +319,43 @@ boot: $(CELLA_DEV) ## Create (first time) and run the machine $(VM) -- or thaw i
 	fi
 	echo "cella: attach with: make enter (or: cella enter $(VM))"
 
-enter: $(CELLA_DEV) ## Attach to the console of $(VM) (detach: Ctrl-] or exit)
+## Attach to the console of $(VM) (detach: Ctrl-] or exit)
+enter: $(CELLA_DEV)
 	@$(CELLA_DEV) enter $(VM)
 
-freeze: $(CELLA_DEV) ## Freeze $(VM); resume with: make thaw
+## Freeze $(VM); resume with: make thaw
+freeze: $(CELLA_DEV)
 	$(LOG)
 	$(CELLA_DEV) freeze $(VM)
 
-thaw: $(CELLA_DEV) ## Thaw the frozen machine $(VM)
+## Thaw the frozen machine $(VM)
+thaw: $(CELLA_DEV)
 	$(LOG)
 	$(CELLA_DEV) thaw $(VM)
 
-remove: $(CELLA_DEV) ## Discard $(VM): stop it and destroy it
+## Discard $(VM): stop it and destroy it
+remove: $(CELLA_DEV)
 	$(LOG)
 	$(CELLA_DEV) stop $(VM) 2>/dev/null || true
 	$(CELLA_DEV) destroy $(VM)
 
 # --- Smoke tests: required real KVM ---------------
 
-smoke-shell: build-smoke golden ## A shell learns a value, freezes, thaws, and remembers -- the one gate that drives the machine through enter (scripts/test/shell.sh)
+## A shell learns a value, freezes, thaws, and remembers -- the one gate that
+## drives the machine through enter (scripts/test/shell.sh)
+smoke-shell: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/shell.sh
 
-smoke-boot: build-smoke golden ## Boot a real kernel under KVM all the way to a running init (scripts/test/boot.sh)
+## Boot a real kernel under KVM all the way to a running init
+## (scripts/test/boot.sh)
+smoke-boot: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/boot.sh
 
-smoke-thaw: build-smoke golden ## Create -> start -> freeze -> verify sidecar -> thaw -> one-shot check, then the clock probe
+## Create -> start -> freeze -> verify sidecar -> thaw -> one-shot check, then
+## the clock probe
+smoke-thaw: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/thaw.sh
 	# The script cannot see whether the guest keeps its time. A guest that
@@ -303,90 +371,170 @@ smoke-thaw: build-smoke golden ## Create -> start -> freeze -> verify sidecar ->
 	$(MAKE) probe-wallclock CELLA_OBSERVE_SECS=0
 	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0
 
-smoke-nested-boot-airgapped: build-smoke golden-nested ## cella hosts cella, no network on either layer
+## cella hosts cella, no network on either layer
+smoke-nested-boot-airgapped: build-smoke golden-nested
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh airgapped
 
-smoke-nested-boot-hybrid: build-smoke golden-nested ## cella hosts cella, the outer guest networked, the inner airgapped
+## cella hosts cella, the outer guest networked, the inner airgapped
+smoke-nested-boot-hybrid: build-smoke golden-nested
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh hybrid
 
-smoke-nested-boot-www: build-smoke golden-nested ## cella hosts cella, both layers networked (the outer init pings the inner guest)
+## cella hosts cella, both layers networked (the outer init pings the inner
+## guest)
+smoke-nested-boot-www: build-smoke golden-nested
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh www
 
-smoke-nested-boot: smoke-nested-boot-airgapped smoke-nested-boot-hybrid smoke-nested-boot-www ## All three nested variants
+## All three nested variants
+smoke-nested-boot: smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
+        smoke-nested-boot-www
 
-smoke-machine: $(CELLA_DEV) ## The lifecycle cycle with a real guest: cella selftest (the first migrated target)
+## The lifecycle cycle with a real guest: cella selftest (the first migrated
+## target)
+smoke-machine: $(CELLA_DEV)
 	$(LOG)
 	$(CELLA_DEV) selftest
 
-smoke-gateway: build-smoke golden ## The gateway ladder: pair wiring (bridge + route), the appliance forwards agent->world, and the pair freezes and thaws together
+## The gateway ladder: pair wiring (bridge + route), the appliance forwards
+## agent->world, and the pair freezes and thaws together
+smoke-gateway: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/gateway.sh
 
-smoke-wire: build-smoke golden ## The wire plane (1.6.14e): two machines, one wire, no host object; both membranes judge; the frozen peer's mail is discarded and counted
+## The wire plane (1.6.14e): two machines, one wire, no host object; both
+## membranes judge; the frozen peer's mail is discarded and counted
+smoke-wire: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/wire.sh
 
-smoke-world: build-smoke golden ## The world plane, stateless half (1.6.14e): --net world -- ARP and gateway echo at the edge, ICMP/UDP through sockets, replies park incoming
+## The world plane, stateless half (1.6.14e): --net world -- ARP and gateway
+## echo at the edge, ICMP/UDP through sockets, replies park incoming
+smoke-world: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/world.sh
 
-smoke-rootless: build ## The rootless sweep (1.6.14e): no capability on any cella binary, no tap, bridge, or nft table of cella's on the host, no boot unit
+## The rootless sweep (1.6.14e): no capability on any cella binary, no tap,
+## bridge, or nft table of cella's on the host, no boot unit
+smoke-rootless: build
 	$(LOG)
 	$(SCRIPTS)/test/rootless.sh
 
-smoke-multinet: build-smoke golden ## A machine takes N taps: two-tap boot, both nics in the guest, host pings eth0, claims exclusive per tap
+## The tether (negative): a machine dir removed without destroy orphans no
+## translator -- the process exits on its own and the knock port frees
+smoke-translator-port-neg: build-smoke golden
+	$(LOG)
+	$(SCRIPTS)/test/translator-port-neg.sh
+
+## A machine takes N taps: two-tap boot, both nics in the guest, host pings
+## eth0, claims exclusive per tap
+smoke-multinet: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/multinet.sh
 
-smoke-universe: build-smoke golden ## The universe family end to end: branch (frozen twin, rock to rock), archive (the latch), inspect (evidence at /rock, byte-identical after)
+## The universe family end to end: branch (frozen twin, rock to rock), archive
+## (the latch), inspect (evidence at /rock, byte-identical after)
+smoke-universe: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/universe.sh
 
-smoke-udp: build-smoke golden ## No datagram leaves undecided, proven from within the guest: closed drops UDP, open parks it (the park is the freeze), a refusal delivers nothing; the guest's own ICMP lapses the same way (scripts/test/udp.sh)
+## No datagram leaves undecided, proven from within the guest: closed drops
+## UDP, open parks it (the park is the freeze), a refusal delivers nothing;
+## the guest's own ICMP lapses the same way (scripts/test/udp.sh)
+smoke-udp: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/udp.sh
 
-smoke-witness: build-smoke golden ## Every verb is an event: machine-scoped verbs in machines/<vm>/audit, placeless in the root book, uid+gid+persona on each; show twice makes two entries; the harvest files and says so (scripts/test/witness.sh)
+## Every verb is an event: machine-scoped verbs in machines/<vm>/audit,
+## placeless in the root book, uid+gid+persona on each; show twice makes two
+## entries; the harvest files and says so (scripts/test/witness.sh)
+smoke-witness: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/witness.sh
 
-smoke-inspection: build-smoke golden ## Judgment requires sight, sight requires stillness: inspect renders a frozen hold's plaintext, seals the sealed, witnesses the look in the chronicle, refuses a running machine (scripts/test/inspection.sh)
+## Judgment requires sight, sight requires stillness: inspect renders a frozen
+## hold's plaintext, seals the sealed, witnesses the look in the chronicle,
+## refuses a running machine (scripts/test/inspection.sh)
+smoke-inspection: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/inspection.sh
 
-smoke-collide: build-smoke golden ## The matcher never guesses: a thaw over a colliding sidecar re-mints, holds every ambiguous frame, delivers none; refused stale ids lapse by the book (scripts/test/collide.sh)
+## The matcher never guesses: a thaw over a colliding sidecar re-mints, holds
+## every ambiguous frame, delivers none; refused stale ids lapse by the book
+## (scripts/test/collide.sh)
+smoke-collide: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/collide.sh
 
-smoke-ping: build-smoke golden ## The valve end to end: born closed fails a ping, open parks the reply and freezes, release answers, close darkens again (docs/NETWORK-MODEL.md)
+## The valve end to end: born closed fails a ping, open parks the reply and
+## freezes, release answers, close darkens again (docs/NETWORK-MODEL.md)
+smoke-ping: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/ping.sh
 
-smoke-gateway-cli: build-smoke golden ## 1.3: close shuts the valve, show lists the hold, release/refuse decide by id prefix, open refuses (docs/NETWORK-MODEL.md)
+## 1.3: close shuts the valve, show lists the hold, release/refuse decide by
+## id prefix, open refuses (docs/NETWORK-MODEL.md)
+smoke-gateway-cli: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/gateway-cli.sh
 
-smoke-ledger: build-smoke golden ## 1.2: hold, one fetch parks, the ledger holds one operation with an id and both clocks (docs/NETWORK-MODEL.md)
+## 1.2: hold, one fetch parks, the ledger holds one operation with an id and
+## both clocks (docs/NETWORK-MODEL.md)
+smoke-ledger: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/ledger.sh
 
-smoke-chain: build-smoke golden ## 1.6.14d: field 15 chains both books by SHA-256 of the predecessor's framed bytes -- an intact book verifies, a tampered one snaps loudly, a branched twin's book forks and stays valid (scripts/test/chain.sh)
+## 1.6.14d: field 15 chains both books by SHA-256 of the predecessor's framed
+## bytes -- an intact book verifies, a tampered one snaps loudly, a branched
+## twin's book forks and stays valid (scripts/test/chain.sh)
+smoke-chain: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/chain.sh
 
-doctor: $(CELLA_DEV) ## Judge the host and the goldens: cella doctor check + verify
+## Judge the host and the goldens: cella doctor check + verify
+doctor: $(CELLA_DEV)
 	$(LOG)
 	$(CELLA_DEV) doctor check
 	$(CELLA_DEV) doctor verify
 
-smoke: test smoke-shell smoke-boot smoke-thaw smoke-ping smoke-udp \
-        smoke-collide smoke-inspection smoke-witness smoke-nested-boot \
-        smoke-machine smoke-gateway smoke-gateway-cli \
-        smoke-multinet smoke-universe smoke-ledger smoke-chain \
-        smoke-device-state probe-inception ## The no-KVM checks first (fail fast), then all smoke-* targets + the deep clock probe (skips gracefully without KVM)
+# --- The battery, one part per CLI --------------------------------
+#
+# Each part gathers the gates whose subject is one binary: a red
+# part names an accused binary, the same granularity as the
+# per-binary jail, seccomp list, and SELinux domain. A gate belongs
+# to the verb under test, not the machinery it rides (every gate
+# boots a VMM; only cella-vmm's part is ABOUT the VMM).
+
+## cella-doctor's part: the host contract -- the rootless sweep, then doctor
+## check + verify
+smoke-cella-doctor: smoke-rootless doctor
+
+## cella-vmm's part: boot, the guest console, and device state across
+## freeze/thaw
+smoke-cella-vmm: smoke-shell smoke-boot smoke-device-state
+
+## cella-machine's part: the lifecycle verbs, thaw, clean, and the nested
+## recursion
+smoke-cella-machine: smoke-thaw smoke-machine smoke-clean smoke-nested-boot
+
+## cella-gateway's part: the valve, parking, the books, and their chains
+smoke-cella-gateway: smoke-ping smoke-udp smoke-collide smoke-gateway \
+        smoke-gateway-cli smoke-inspection smoke-ledger smoke-chain
+
+## cella-network's part: the translator planes -- wire, world, multinet, and
+## the tether
+smoke-cella-network: smoke-wire smoke-world smoke-multinet \
+        smoke-translator-port-neg
+
+## cella-probe's part: the witness doors, the universe, and the deep clock
+## probe
+smoke-cella-probe: smoke-witness smoke-universe probe-inception
+
+## The whole battery: the no-KVM checks first (fail fast), then one part per
+## CLI, ground first
+smoke: test smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
+        smoke-cella-gateway smoke-cella-network smoke-cella-probe
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
@@ -396,32 +544,47 @@ smoke: test smoke-shell smoke-boot smoke-thaw smoke-ping smoke-udp \
 # One gate per acceptance criterion, in dependency order. Each gate
 # fails until its implementation lands.
 
-device-state-ac1: build-smoke golden ## AC1: the disk survives the thaw -- transport state rides the sidecar (v7); write a file, freeze, thaw, read it back, sync; smoke-shell drops ROOT=ro
+## AC1: the disk survives the thaw -- transport state rides the sidecar (v7);
+## write a file, freeze, thaw, read it back, sync; smoke-shell drops ROOT=ro
+device-state-ac1: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac1
 
-device-state-ac2: build-smoke golden ## AC2: the network survives the thaw -- the tap claim persists through the manifest, the tap is recreated by convention, and the host pings the guest after a thaw
+## AC2: the network survives the thaw -- the tap claim persists through the
+## manifest, the tap is recreated by convention, and the host pings the guest
+## after a thaw
+device-state-ac2: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac2
 
-device-state-ac3: build-smoke golden ## AC3: the in-flight layer is exact -- a parked egress frame is delivered and completed after the thaw; the same request works, with no retransmission
+## AC3: the in-flight layer is exact -- a parked egress frame is delivered and
+## completed after the thaw; the same request works, with no retransmission
+device-state-ac3: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac3
 
-device-state-ac4: build-smoke golden ## AC4: the verdict is external -- the request toward a world that does not exist parks and freezes; the world grows while the machine sleeps; the release lands the same request (the world-ratchet gate)
+## AC4: the verdict is external -- the request toward a world that does not
+## exist parks and freezes; the world grows while the machine sleeps; the
+## release lands the same request (the world-ratchet gate)
+device-state-ac4: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac4
 
-device-state-ac5: build-smoke golden ## AC5: the true world -- a real internet fetch crosses the total membrane, one decision per frame (skips when offline; rides the peer-patience bound)
+## AC5: the true world -- a real internet fetch crosses the total membrane,
+## one decision per frame (skips when offline; rides the peer-patience bound)
+device-state-ac5: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac5
 
-smoke-device-state: device-state-ac1 device-state-ac2 device-state-ac3 device-state-ac4 device-state-ac5 ## The five device-state acceptance gates, in dependency order
+## The five device-state acceptance gates, in dependency order
+smoke-device-state: device-state-ac1 device-state-ac2 device-state-ac3 \
+        device-state-ac4 device-state-ac5
 	$(LOG)
 	echo ""
 	echo "=== make smoke-device-state: all gates passed ==="
 
-smoke-clean: ## Kill any stray cella process left running by an interrupted smoke test
+## Kill any stray cella process left running by an interrupted smoke test
+smoke-clean:
 	$(LOG)
 	# -x matches the process name exactly. A -f pattern kills any
 	# invoker whose own command line mentions the binary path.
@@ -432,42 +595,54 @@ smoke-clean: ## Kill any stray cella process left running by an interrupted smok
 
 # --- Setup --------------------------------------------------------------
 
-init: ## One-time host setup (Fedora): deps, toolbox, tap0, and every golden (needs sudo)
+## One-time host setup (Fedora): deps, toolbox, tap0, and every golden (needs
+## sudo)
+init:
 	$(LOG)
 	$(SCRIPTS)/setup/install.sh
 	$(MAKE) 
 	$(MAKE) golden
 	$(MAKE) golden-nested
 
-golden: build ## Build the base goldens natively: kernel canonical, rootfs canonical, rootfs cella
+## Build the base goldens natively: kernel canonical, rootfs canonical, rootfs
+## cella
+golden: build
 	$(LOG)
 	$(CELLA_DEV) build kernel canonical
 	$(CELLA_DEV) build rootfs canonical
 	$(CELLA_DEV) build rootfs cella
 	$(CELLA_DEV) build rootfs gateway
 
-golden-nested: build ## Build the nested-family goldens natively: kernel nested, rootfs nested, rootfs inception
+## Build the nested-family goldens natively: kernel nested, rootfs nested,
+## rootfs inception
+golden-nested: build
 	$(LOG)
 	$(CELLA_DEV) build kernel nested
 	$(CELLA_DEV) build rootfs nested
 	$(CELLA_DEV) build rootfs inception
 
-kernel-config-check: ## Resolve kernel-fragment.config against defconfig and report any line kconfig silently overruled (seconds, no compile)
+## Resolve kernel-fragment.config against defconfig and report any line
+## kconfig silently overruled (seconds, no compile)
+kernel-config-check:
 	$(LOG)
 	$(SCRIPTS)/build/kernel-config-check.sh
 
 # --- Everything -----------------------------------------------------
 
-test-all: test golden smoke ## make test, plus every KVM smoke test (skips gracefully without KVM)
+## make test, plus every KVM smoke test (skips gracefully without KVM)
+test-all: test golden smoke
 	$(LOG)
 	echo ""
 	echo "=== make test-all: done (see above for any SKIPs) ==="
 
-lines: ## Report source-only and source+test line counts (see also README's line-count section)
+## Report source-only and source+test line counts (see also README's line-
+## count section)
+lines:
 	$(LOG)
 	python3 $(SCRIPTS)/utils/count_lines.py
 
-logs-clean: ## Delete the run logs in .logs/, and keep the newest one for each target
+## Delete the run logs in .logs/, and keep the newest one for each target
+logs-clean:
 	$(LOG)
 	cd $(LOGDIR)
 	keep=$$(ls -1 *.log 2>/dev/null | sort | awk '{ t = $$0; sub(/-[0-9]{8}-[0-9]{6}\.log$$/, "", t); newest[t] = $$0 } END { for (k in newest) print newest[k] }')
@@ -485,11 +660,13 @@ logs-clean: ## Delete the run logs in .logs/, and keep the newest one for each t
 	kept=$$(echo "$$keep" | grep -c . || true)
 	echo "cella: kept $$kept log(s), one for each target, and deleted $$deleted older log(s)"
 
-clean: ## cargo clean
+## cargo clean
+clean:
 	$(LOG)
 	$(CARGO) clean
 
-distclean: clean ## clean + remove built dist/ assets
+## clean + remove built dist/ assets
+distclean: clean
 	$(LOG)
 
 # --- Probes ---------------------------------------------------------
@@ -559,15 +736,22 @@ CELLA_OBSERVE_SECS ?= 60
 export CELLA_FROZEN_SECS CELLA_POST_THAW_SECS CELLA_TIME_ARGS CELLA_EXTRA_CMDLINE
 export CELLA_OBSERVE_SECS
 
-probe-sregs: build ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same* ioctl call? (no /dev/kvm needed beyond opening it; boots nothing -- see src/bin/cella-probe/sregs.rs)
+## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same*
+## ioctl call? (no /dev/kvm needed beyond opening it; boots nothing -- see
+## src/bin/cella-probe/sregs.rs)
+probe-sregs: build
 	$(LOG)
 	target/smoke/cella-probe sregs
 
-probe-wallclock: build-smoke golden ## Does the guest's wall-clock land near real time at boot, with no RTC device? (needs /dev/kvm; see src/bin/cella-probe/wallclock.rs)
+## Does the guest's wall-clock land near real time at boot, with no RTC
+## device? (needs /dev/kvm; see src/bin/cella-probe/wallclock.rs)
+probe-wallclock: build-smoke golden
 	$(LOG)
 	target/smoke/cella-probe wallclock
 
-probe-freeze-thaw-clock: build-smoke golden ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs /dev/kvm + tap0, takes ~15s; see src/bin/cella-probe/freeze_thaw_clock.rs)
+## Does freeze/thaw leak real elapsed time into the guest's clock? (needs
+## /dev/kvm + tap0, takes ~15s; see src/bin/cella-probe/freeze_thaw_clock.rs)
+probe-freeze-thaw-clock: build-smoke golden
 	$(LOG)
 	target/smoke/cella-probe freeze-thaw-clock
 
@@ -600,14 +784,20 @@ probe-freeze-thaw-clock: build-smoke golden ## Does freeze/thaw leak real elapse
 # - The probe measures wake-up lateness after the thaw, not a clock step.
 #   A clock step smaller than the remaining sleep does not show in the
 #   crossing interval, because the wake-up is scheduled in the same clock.
-probe-prefault-ept: build-smoke golden ## probe-freeze-thaw-clock with the stage-2 prefault at thaw (CELLA_THAW_PREFAULT=ept)
+## probe-freeze-thaw-clock with the stage-2 prefault at thaw
+## (CELLA_THAW_PREFAULT=ept)
+probe-prefault-ept: build-smoke golden
 	$(LOG)
 	CELLA_THAW_PREFAULT=ept target/smoke/cella-probe freeze-thaw-clock
 
-probe-inception: build-smoke golden-nested ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a guest inside a cella guest
+## The freeze and thaw clock probe one layer deep: cella freezes and thaws a
+## guest inside a cella guest
+probe-inception: build-smoke golden-nested
 	$(LOG)
 	$(SCRIPTS)/test/inception.sh
 
-probe-thaw-gate: build-smoke golden ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable, oops) is a FAIL
+## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable,
+## oops) is a FAIL
+probe-thaw-gate: build-smoke golden
 	$(LOG)
 	CELLA_POST_THAW_SECS=30 target/smoke/cella-probe freeze-thaw-clock

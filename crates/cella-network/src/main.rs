@@ -45,7 +45,6 @@ fn main() {
                 eprintln!("cella-network: {e}");
                 std::process::exit(1);
             }
-            return;
         }
         Some("--help") | Some("-h") => {
             println!("cella-network -- the tap pool, without sudo");

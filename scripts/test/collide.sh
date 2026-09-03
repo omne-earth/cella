@@ -12,6 +12,10 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
@@ -60,7 +64,7 @@ pump_mail() {
 }
 
 say "step 1: one real operation parks and freezes"
-"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
+"$BIN" create "$VM" --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null
 "$BIN" start "$VM" >/dev/null
 sleep 4
 "$BIN" gateway "$VM" open >/dev/null
@@ -69,7 +73,7 @@ sleep 1
 # world's knock is not the resident's deed). Release it live, and
 # the guest's own reply parks in the egress lane -- that park is the
 # freeze.
-for _ in 1 2 3; do printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; sleep 1; done
+for _ in 1 2 3; do printf 'knock\n' > /dev/udp/127.0.0.1/$WORLD_PORT 2>/dev/null || true; sleep 1; done
 pump_mail
 wait_frozen || { echo "FAIL: nothing parked and froze"; exit 1; }
 ID_REAL=$("$BIN" --dump-ledger "$LEDGER" | grep '^parked .*dir=outgoing' | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p' | tail -1)

@@ -9,6 +9,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/../.."
 BIN="${CELLA_BIN:-$ROOT/target/smoke/cella}"
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 BOOT_WAIT_SECS="${CELLA_BOOT_WAIT:-8}"
 
@@ -43,7 +47,7 @@ fail() {
 }
 
 echo "--- step 1: create and start ---"
-"$BIN" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net world:1709/tcp+1709/udp >/dev/null || fail "create failed"
+"$BIN" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null || fail "create failed"
 "$BIN" start "$VM" >/dev/null || fail "start failed"
 sleep "$BOOT_WAIT_SECS"
 kill -0 "$(cat "$M/pid")" 2>/dev/null || fail "the VMM exited during boot"

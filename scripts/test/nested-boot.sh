@@ -24,6 +24,10 @@ case "$MODE" in airgapped|hybrid|www) ;; *) echo "usage: $0 airgapped|hybrid|www
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
@@ -45,7 +49,7 @@ teardown() {
 }
 trap teardown EXIT
 say() { echo; echo "==> $1"; }
-knock() { printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; }
+knock() { printf 'knock\n' > /dev/udp/127.0.0.1/$WORLD_PORT 2>/dev/null || true; }
 knock_loop() { local end=$((SECONDS + $1)); while [ $SECONDS -lt $end ]; do knock; sleep 1; done; }
 
 CON="$CELLA_HOME/machines/$VM/console.log"
@@ -91,7 +95,7 @@ pump_while() { # pid
 }
 
 say "step 1: create the outer machine through the verbs"
-NET_FLAG="--net none"; [ "$MODE" != airgapped ] && NET_FLAG="--net world:1709/tcp+1709/udp"
+NET_FLAG="--net none"; [ "$MODE" != airgapped ] && NET_FLAG="--net world:$WORLD_PORT/tcp+$WORLD_PORT/udp"
 "$BIN" create "$VM" --kernel nested --rootfs nested --mem-mb 768 $NET_FLAG >/dev/null
 [ "$(cat "$CELLA_HOME/machines/$VM/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 if [ "$MODE" = www ]; then

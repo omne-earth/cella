@@ -13,6 +13,10 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 UDP_PORT=9053
 
@@ -102,7 +106,7 @@ nc -u -l "$HOST_IP" "$UDP_PORT" > "$CAPTURE" 2>/dev/null &
 LISTEN_PID=$!
 
 say "step 1: born closed -- the guest's own datagram dies at the (negative)"
-"$BIN" create "$VM" --net world:1709/tcp+1709/udp >/dev/null
+"$BIN" create "$VM" --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null
 [ "$(cat "$CELLA_HOME/machines/$VM/valve")" = "closed" ] || { echo "FAIL: the valve record is not born closed"; exit 1; }
 "$BIN" start "$VM" >/dev/null
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
@@ -168,7 +172,7 @@ echo "  the echo request lapsed; the guest timed out in its own frame"
 say "step 5: the ear -- the world's datagram parks incoming, and a refusal drops it unseen"
 if [ -f "$STATE" ]; then "$BIN" thaw "$VM" >/dev/null; sleep 1; fi
 pump_mail
-printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true
+printf 'knock\n' > /dev/udp/127.0.0.1/$WORLD_PORT 2>/dev/null || true
 sleep 2
 [ -f "$STATE" ] && { echo "FAIL: the machine froze on inbound -- the knock is not its deed"; exit 1; }
 # The knock came from the host's loopback, which the translator

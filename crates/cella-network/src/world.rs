@@ -120,7 +120,7 @@ pub struct World {
     tcp: tcp::Tcp,
     listeners: Vec<Listener>,
     /// Frames toward the guest produced outside a poll (TCP
-    /// answers to guest segments); the next from_guest or poll
+    /// answers to guest segments); the next guest_frame or poll
     /// drains them.
     pending: Vec<Vec<u8>>,
     swept: Instant,
@@ -201,7 +201,7 @@ impl World {
     /// A frame from the VMM (vnet header first). Returns frames to
     /// send back to the VMM (ARP and gateway-echo answers happen
     /// here, at the edge); world-bound payloads leave via sockets.
-    pub fn from_guest(&mut self, frame: &[u8]) -> Vec<Vec<u8>> {
+    pub fn guest_frame(&mut self, frame: &[u8]) -> Vec<Vec<u8>> {
         self.sweep();
         let mut out = Vec::new();
         if frame.len() < VNET + ETH {
@@ -275,7 +275,7 @@ impl World {
                 // TCP (rung 4): the state machine answers with zero
                 // or more segments; the first is returned here and
                 // the rest ride the next poll.
-                let outs = self.tcp.from_guest(src, dst, payload);
+                let outs = self.tcp.guest_segment(src, dst, payload);
                 for o in outs {
                     let seg = tcp::segment(o.peer_ip, o.guest_ip, &o);
                     self.pending.push(build_ipv4_frame(

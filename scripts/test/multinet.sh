@@ -7,6 +7,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 BIN=target/smoke/cella
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 
@@ -24,7 +28,7 @@ trap teardown EXIT
 say() { echo; echo "==> $1"; }
 CON="$CELLA_HOME/machines/mn/console.log"
 M="$CELLA_HOME/machines/mn"
-knock() { printf 'knock\n' > /dev/udp/127.0.0.1/1709 2>/dev/null || true; }
+knock() { printf 'knock\n' > /dev/udp/127.0.0.1/$WORLD_PORT 2>/dev/null || true; }
 knock_loop() { local end=$((SECONDS + $1)); while [ $SECONDS -lt $end ]; do knock; sleep 1; done; }
 type_in() { (printf '%s\n' "$1"; sleep 2) | timeout 20 "$BIN" enter mn >/dev/null; }
 wait_for() {
@@ -65,7 +69,7 @@ pump_while() { # pid
 }
 
 say "step 1: create and start a machine on two nics: the world, and a wire"
-"$BIN" create mn --net world:1709/tcp+1709/udp,wire:mn-w >/dev/null
+"$BIN" create mn --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp,wire:mn-w >/dev/null
 "$BIN" start mn >/dev/null
 sleep 5
 

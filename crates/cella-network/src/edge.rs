@@ -190,6 +190,7 @@ pub fn run(vm: &str) -> Result<(), String> {
     );
 
     let mut buf = vec![0u8; MAX_FRAME];
+    let mut tether = std::time::Instant::now();
     loop {
         // New VMM connections: a hello byte names the nic index.
         // The VMM side blocks on connect+hello only at spawn, so a
@@ -280,7 +281,7 @@ pub fn run(vm: &str) -> Result<(), String> {
                                     // tap with no cable.
                                 }
                                 Kind::World(w) => {
-                                    for reply in w.from_guest(&buf[..n]) {
+                                    for reply in w.guest_frame(&buf[..n]) {
                                         let _ = write_frame(vfd, &reply);
                                     }
                                 }
@@ -348,6 +349,22 @@ pub fn run(vm: &str) -> Result<(), String> {
             }
         }
         if !moved {
+            // The tether (2026-09-03): the translator's existence is
+            // bound to the machine dir. An incomplete teardown that
+            // removes the dir without destroy used to orphan the
+            // process forever, and the orphan's bound knock port
+            // silently swallowed the next machine's knocks. The
+            // socket path is the lease: when edge.sock is gone, the
+            // machine is gone, and the translator exits with it.
+            if tether.elapsed().as_secs() >= 1 {
+                tether = std::time::Instant::now();
+                if !edge_sock.exists() {
+                    println!(
+                        "cella-network: edge.sock is gone -- the machine was removed; exiting"
+                    );
+                    return Ok(());
+                }
+            }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }

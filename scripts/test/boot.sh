@@ -23,6 +23,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/../.."
 BIN="${CELLA_BIN:-$ROOT/target/smoke/cella}"
+# The knock port: random per run, so a leaked translator from an
+# earlier gate (a stale bind on a fixed port swallows knocks
+# silently) can never poison this one. Four digits, unprivileged.
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
 TIMEOUT_SECS="${CELLA_BOOT_TIMEOUT:-20}"
 
@@ -44,6 +48,10 @@ VM=boot
 teardown() {
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
     [ -n "${VMM_PID:-}" ] && kill -9 "$VMM_PID" 2>/dev/null || true
+    # destroy before rm: the translator is machine-lifetime, and an
+    # rm alone orphans it -- a dead process holding the knock port
+    # swallows the next gate's knocks.
+    "$BIN" destroy "$VM" >/dev/null 2>&1 || true
     rm -rf "$CELLA_HOME"
 }
 trap teardown EXIT
@@ -51,7 +59,7 @@ CON="$CELLA_HOME/machines/$VM/console.log"
 
 echo "cella: booting through the verbs (timeout ${TIMEOUT_SECS}s)"
 boot_start=$(date +%s.%N)
-"$BIN" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net world:1709/tcp+1709/udp >/dev/null || { echo "FAIL: create failed"; exit 1; }
+"$BIN" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null || { echo "FAIL: create failed"; exit 1; }
 "$BIN" start "$VM" >/dev/null || { echo "FAIL: start failed"; exit 1; }
 VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
 
@@ -85,7 +93,7 @@ if [ "$init_seen" -eq 1 ]; then
     if [ -x "$REL" ]; then
         "$BIN" stop "$VM" >/dev/null 2>&1 || true
         "$BIN" destroy "$VM" >/dev/null 2>&1 || true
-        "$REL" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net world:1709/tcp+1709/udp >/dev/null
+        "$REL" create "$VM" --kernel canonical --rootfs canonical --mem-mb 128 --net world:$WORLD_PORT/tcp+$WORLD_PORT/udp >/dev/null
         "$REL" start "$VM" >/dev/null
         VMM_PID=$(cat "$CELLA_HOME/machines/$VM/pid")
         sleep 3
