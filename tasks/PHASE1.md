@@ -391,7 +391,7 @@ requires a decision, nothing stands, and the mouth closes.
             not dependency. Lane gate: a book with one edited
             entry fails verification loudly, and an intact book
             verifies end to end.
-      - [ ] 1.6.14e The rootless network (ruled 2026-09-02; final
+      - [x] 1.6.14e The rootless network (ruled 2026-09-02; final
             shape groomed 2026-09-02, five rulings): the file
             capability dies. One network peer per machine: every
             nic's backend fd in the VMM is a socketpair to the
