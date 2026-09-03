@@ -202,19 +202,22 @@ if [ -f "$STATE" ]; then
 fi
 type_in 'for p in 8081 8082; do wget -q $H:$p & done' || { echo "FAIL: could not type the batch into the guest"; exit 1; }
 wait_frozen || { echo "FAIL: C and D did not park-and-freeze (valve persistence)"; exit 1; }
-# The guest may freeze on C's batch before D's sender ran: thaw
-# (deciding nothing) until both operations stand held, in order.
+# The guest freezes on whichever sender ran first (one-shot), and
+# the other's SYN parks after a thaw: thaw (deciding nothing) until
+# both stand held. The predecessor is whoever parked first -- the
+# ledger's order, not the port numbers' (bare metal schedules the
+# two wgets either way).
 tries=0
-until "$BIN" --dump-ledger "$LEDGER" | grep -q "port=8082"; do
+until "$BIN" --dump-ledger "$LEDGER" | grep -q "port=8081" && "$BIN" --dump-ledger "$LEDGER" | grep -q "port=8082"; do
     tries=$((tries + 1))
-    [ $tries -le 4 ] || { echo "FAIL: D never parked"; exit 1; }
+    [ $tries -le 4 ] || { echo "FAIL: the batch did not park both operations"; exit 1; }
     "$BIN" thaw "$VM" >/dev/null 2>&1 || true
-    wait_frozen || { echo "FAIL: the machine did not refreeze while D was due"; exit 1; }
+    wait_frozen || { echo "FAIL: the machine did not refreeze while the batch was due"; exit 1; }
 done
 DUMP=$("$BIN" --dump-ledger "$LEDGER")
-ID_C=$(id_of "$DUMP" "port=8081")
-ID_D=$(id_of "$DUMP" "port=8082")
-[ -n "$ID_C" ] && [ -n "$ID_D" ] || { echo "FAIL: could not read both operation ids"; exit 1; }
+ID_C=$(echo "$DUMP" | grep -E '^parked .*port=808[12]' | head -1 | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p' || true)
+ID_D=$(echo "$DUMP" | grep -E '^parked .*port=808[12]' | tail -1 | sed -n 's/^parked id=\([0-9a-f]*\) .*/\1/p' || true)
+[ -n "$ID_C" ] && [ -n "$ID_D" ] && [ "$ID_C" != "$ID_D" ] || { echo "FAIL: could not read both operation ids"; exit 1; }
 echo "  C=$ID_C D=$ID_D"
 
 say "step 8: decide D first -- nothing applies, D's predecessor C is undecided"
