@@ -167,10 +167,6 @@ impl Tcp {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.flows.is_empty()
-    }
-
     /// A TCP segment from the guest (the IP payload). `src`/`dst`
     /// are the IP addresses. Returns segments for the guest.
     pub fn from_guest(&mut self, src: [u8; 4], dst: [u8; 4], seg: &[u8]) -> Vec<Out> {

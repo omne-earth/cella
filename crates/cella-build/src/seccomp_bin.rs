@@ -11,10 +11,6 @@ pub fn allowed() -> Vec<Entry> {
     v
 }
 
-pub fn install() -> std::io::Result<()> {
-    cella_libs::seccomp::install(&allowed(), None)
-}
-
 /// Self-test hook for `make test-seccomp-build`.
 pub fn selftest_provoke_kill() -> ! {
     cella_libs::seccomp::selftest_provoke_kill(&allowed(), None)
