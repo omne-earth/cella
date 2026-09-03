@@ -28,7 +28,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke smoke-shell smoke-boot smoke-thaw \
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
-        smoke-machine smoke-clean smoke-gateway smoke-gateway-cli \
+        smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire \
         smoke-ping smoke-udp smoke-collide smoke-inspection \
         smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
@@ -74,7 +74,7 @@ SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
         smoke-udp smoke-collide smoke-inspection smoke-witness smoke-nested-boot \
         smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
         smoke-nested-boot-www smoke-machine smoke-clean \
-        smoke-gateway smoke-gateway-cli smoke-multinet smoke-universe smoke-ledger smoke-chain \
+        smoke-gateway smoke-gateway-cli smoke-wire smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5
 empty :=
@@ -324,6 +324,10 @@ smoke-machine: $(CELLA_DEV) ## The lifecycle cycle with a real guest: cella self
 smoke-gateway: build-smoke golden ## The gateway ladder: pair wiring (bridge + route), the appliance forwards agent->world, and the pair freezes and thaws together
 	$(LOG)
 	$(SCRIPTS)/test/gateway.sh
+
+smoke-wire: build-smoke golden ## The wire plane (1.6.14e): two machines, one wire, no host object; both membranes judge; the frozen peer's mail is discarded and counted
+	$(LOG)
+	$(SCRIPTS)/test/wire.sh
 
 smoke-multinet: build-smoke golden ## A machine takes N taps: two-tap boot, both nics in the guest, host pings eth0, claims exclusive per tap
 	$(LOG)

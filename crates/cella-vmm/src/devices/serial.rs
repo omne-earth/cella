@@ -67,12 +67,15 @@ impl Write for ConsoleOut {
 
 pub struct SerialDevice {
     inner: Serial<IrqTrigger, NoEvents, ConsoleOut>,
+    /// Host input waiting for FIFO room -- see enqueue and feed.
+    pending: std::collections::VecDeque<u8>,
 }
 
 impl SerialDevice {
     pub fn new(vm: Arc<VmFd>, client: ConsoleClient) -> Self {
         SerialDevice {
             inner: Serial::new(IrqTrigger { vm }, ConsoleOut { client }),
+            pending: std::collections::VecDeque::new(),
         }
     }
 
@@ -122,16 +125,36 @@ impl SerialDevice {
         SerialDevice {
             inner: Serial::from_state(&state, IrqTrigger { vm }, NoEvents, ConsoleOut { client })
                 .expect("an empty in_buffer cannot overflow the FIFO"),
+            pending: std::collections::VecDeque::new(),
         }
     }
 
-    /// Feed host input into the RX FIFO of the guest. vm-superio raises
-    /// IRQ4 when the guest has RX interrupts enabled. A full FIFO drops
-    /// the rest of the bytes; the caller polls stdin once per run-loop
-    /// pass, thus the loss window is small and a terminal retype fixes
-    /// it.
+    /// Feed host input toward the RX FIFO of the guest. vm-superio
+    /// raises IRQ4 when the guest has RX interrupts enabled. The
+    /// 16550 FIFO holds 64 bytes and drops overflow, so bytes wait
+    /// in `pending` and `feed` moves them as the guest drains --
+    /// one long pasted line must arrive whole (a gate's type_in is
+    /// exactly that; every line under 64 bytes hid this for
+    /// months, and the first 68-byte line lost its tail).
     pub fn enqueue(&mut self, bytes: &[u8]) {
-        let _ = self.inner.enqueue_raw_bytes(bytes);
+        self.pending.extend(bytes.iter().copied());
+        self.feed();
+    }
+
+    /// Move pending bytes into the FIFO, as many as it accepts.
+    /// Called on every run-loop pass: each guest read of the FIFO
+    /// causes an exit, each exit a pass, so delivery self-sustains
+    /// until `pending` is empty.
+    pub fn feed(&mut self) {
+        while !self.pending.is_empty() {
+            let chunk: Vec<u8> = self.pending.iter().copied().take(32).collect();
+            match self.inner.enqueue_raw_bytes(&chunk) {
+                Ok(n) if n > 0 => {
+                    self.pending.drain(..n);
+                }
+                _ => break,
+            }
+        }
     }
 
     pub fn write(&mut self, port: u16, val: u8) {

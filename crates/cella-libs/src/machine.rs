@@ -378,6 +378,92 @@ fn have_net_admin() -> bool {
         .unwrap_or(false)
 }
 
+/// The translator's lifecycle, spawn side (1.6.14e rung 2): a
+/// machine with wire nics needs its translator standing before
+/// the VMM connects. Machine-lifetime: spawned here on the first
+/// start (or after a translator crash), killed by destroy. The
+/// binary resolves like every sibling: beside the current
+/// binary first (the lab runs the lab's), then the install.
+fn ensure_translator(name: &str, dir: &Path) -> Result<(), String> {
+    if let Ok(pid) = fs::read_to_string(dir.join("edge.pid")) {
+        if let Ok(pid) = pid.trim().parse::<i32>() {
+            // SAFETY: signal 0 probes liveness only.
+            if unsafe { libc::kill(pid, 0) } == 0 {
+                return Ok(());
+            }
+        }
+    }
+    let bin = std::env::current_exe()
+        .ok()
+        .and_then(|me| {
+            let p = me.parent()?.join("cella-network");
+            p.is_file().then_some(p)
+        })
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| find_program("cella-network"));
+    let log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("edge.log"))
+        .map_err(|e| format!("opening edge.log: {e}"))?;
+    let log2 = log
+        .try_clone()
+        .map_err(|e| format!("cloning edge.log: {e}"))?;
+    use std::os::unix::process::CommandExt;
+    let mut c = std::process::Command::new(&bin);
+    c.args(["edge", name])
+        .stdin(std::process::Stdio::null())
+        .stdout(log)
+        .stderr(log2);
+    // SAFETY: setsid detaches the translator from this verb's
+    // session; nothing async-signal-unsafe runs in the hook.
+    unsafe {
+        c.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    c.spawn()
+        .map_err(|e| format!("spawning the translator for {name:?}: {e}"))?;
+    Ok(())
+}
+
+/// The wire plane's spawn side (1.6.14e rung 2): connect one nic
+/// to this machine's translator on edge.sock, send the one-byte
+/// hello naming the nic index, and hand back an inheritable fd
+/// for --edge-fd. Retries until the translator stands, inside
+/// `patience` -- start spawns the translator and connects in the
+/// same breath, and the translator's listen may land second.
+pub fn connect_edge_nic(
+    dir: &Path,
+    nic_index: u8,
+    patience: std::time::Duration,
+) -> Result<i32, String> {
+    let path = dir.join("edge.sock");
+    let deadline = std::time::Instant::now() + patience;
+    loop {
+        match crate::seq::connect(&path) {
+            Ok(fd) => {
+                // SAFETY: one byte from a valid buffer to a live fd.
+                let n = unsafe { libc::write(fd, [nic_index].as_ptr() as *const libc::c_void, 1) };
+                if n != 1 {
+                    // SAFETY: fd is ours.
+                    unsafe { libc::close(fd) };
+                    return Err(format!("hello to {path:?} failed"));
+                }
+                crate::seq::inheritable(fd);
+                return Ok(fd);
+            }
+            Err(e) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!("the translator did not answer on {path:?}: {e}"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
+
 /// Give the spawned ip and nft CAP_NET_ADMIN. The file capability
 /// puts it in the permitted set only; an ambient raise also demands
 /// it in the process inheritable set, which the invoking shell never
@@ -687,9 +773,23 @@ pub fn create(m: &Manifest) -> Result<(), String> {
         m.net = allocate_tap()?;
     } else if m.net != "none" {
         let claimed = claimed_taps();
-        for tap in m.net.split(',') {
-            if claimed.contains(&tap.trim().to_string()) {
-                return Err(format!("tap {tap:?} is already claimed by another machine"));
+        for nic in m.net.split(',') {
+            let nic = nic.trim();
+            // A wire nic (1.6.14e): no host object, no claim -- two
+            // manifests naming the same wire ARE the pairing.
+            if let Some(w) = nic.strip_prefix("wire:") {
+                let ok = !w.is_empty()
+                    && w.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+                if !ok {
+                    return Err(format!(
+                        "wire name {w:?} -- lowercase letters, digits, and '-' only"
+                    ));
+                }
+                continue;
+            }
+            if claimed.contains(&nic.to_string()) {
+                return Err(format!("tap {nic:?} is already claimed by another machine"));
             }
         }
     }
@@ -740,6 +840,14 @@ pub fn destroy(name: &str) -> Result<(), String> {
     }
     if is_running(name) {
         return Err(format!("machine {name:?} is running -- stop it first"));
+    }
+    // The translator dies with its machine (1.6.14e): destroy is
+    // the end of the machine's lifetime, and the translator's.
+    if let Ok(pid) = fs::read_to_string(dir.join("edge.pid")) {
+        if let Ok(pid) = pid.trim().parse::<i32>() {
+            // SAFETY: pid comes from this machine's own edge.pid.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
     }
     fs::remove_dir_all(&dir).map_err(|e| format!("removing {}: {e}", dir.display()))
 }
@@ -819,6 +927,12 @@ fn cmdline_for(m: &Manifest) -> String {
     // convention; an agent-side pair tap (pair<n>a) uses the pair
     // convention, with the gateway as the route to everything.
     let first = taps[0];
+    if first.starts_with("wire:") {
+        // A wire nic carries no host addressing convention: the
+        // guest (or the gate driving its console) configures eth0
+        // itself (1.6.14e rung 2).
+        return line;
+    }
     if let Some(n) = pair_id(first, 'a') {
         line.push_str(&format!(
             " ip=10.77.{n}.2::10.77.{n}.1:255.255.255.0::eth0:off"
@@ -1045,20 +1159,24 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
 
     // The readiness pipe. The child inherits the write end, and the
     // VMM writes one line on it immediately before the first KVM_RUN
-    // (see CELLA_READY_FD in main.rs).
+    // (see CELLA_READY_FD in main.rs). CLOEXEC, deliberately: any
+    // OTHER child this function spawns (the translator, 1.6.14e)
+    // must not inherit a write end, or the parent's read below
+    // never sees EOF and start hangs forever; the raw-fork child
+    // clears the flag on exactly its own two fds before execv.
     let mut fds = [0i32; 2];
     // SAFETY: fds is a valid two-element array.
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
         return Err("creating the readiness pipe failed".to_string());
     }
     let (read_fd, write_fd) = (fds[0], fds[1]);
     // The info pipe. bwrap reports the host pid of its child (the VMM)
     // on --info-fd, and that pid is the fact the pid file records: the
     // freeze signal then goes straight to the VMM, with no process
-    // walking.
+    // walking. CLOEXEC for the same reason as the readiness pipe.
     let mut ifds = [0i32; 2];
     // SAFETY: ifds is a valid two-element array.
-    if unsafe { libc::pipe(ifds.as_mut_ptr()) } != 0 {
+    if unsafe { libc::pipe2(ifds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
         return Err("creating the info pipe failed".to_string());
     }
     let (info_read, info_write) = (ifds[0], ifds[1]);
@@ -1224,6 +1342,10 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| find_program("cella-network"));
         for tap in m.net.split(',') {
+            // Wires have no tap to own (1.6.14e).
+            if tap.trim().starts_with("wire:") {
+                continue;
+            }
             let status = std::process::Command::new(&net_bin)
                 .args(["own", tap, &host_uid.to_string()])
                 .status();
@@ -1289,8 +1411,11 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     }
     for dev in &profile.dev_binds {
         // The tap device is the one profile entry the manifest can
-        // still turn off: a netless machine gets no /dev/net/tun.
-        if dev == "/dev/net/tun" && m.net == "none" {
+        // still turn off: a machine with no tap nics (netless, or
+        // wired through its translator alone -- 1.6.14e) gets no
+        // /dev/net/tun.
+        let has_tap = m.net != "none" && m.net.split(',').any(|n| !n.trim().starts_with("wire:"));
+        if dev == "/dev/net/tun" && !has_tap {
             continue;
         }
         if Path::new(dev).exists() {
@@ -1317,9 +1442,22 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     cmd.args(["--state-dir", &dir_s]);
     cmd.args(["--kernel", kernel.to_str().unwrap()]);
     cmd.args(["--disk", dir.join("disk.img").to_str().unwrap()]);
+    let mut edge_fds: Vec<i32> = Vec::new();
     if m.net != "none" {
-        for tap in m.net.split(',') {
-            cmd.args(["--tap", tap.trim()]);
+        for (i, nic) in m.net.split(',').enumerate() {
+            let nic = nic.trim();
+            if nic.starts_with("wire:") {
+                // The wire plane (1.6.14e rung 2): the machine's own
+                // translator stands between this nic and the world of
+                // wires. Spawn it if it does not stand, connect this
+                // nic to edge.sock, and hand the VMM the connected fd.
+                ensure_translator(name, &dir)?;
+                let fd = connect_edge_nic(&dir, i as u8, std::time::Duration::from_secs(5))?;
+                edge_fds.push(fd);
+                cmd.args(["--edge-fd", &fd.to_string()]);
+            } else {
+                cmd.args(["--tap", nic]);
+            }
         }
     }
     if m.attach != "none" {
@@ -1412,6 +1550,13 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
                 libc::_exit(126);
             }
             libc::setenv(ready_fd_key.as_ptr(), ready_fd_val.as_ptr(), 1);
+            // The two pipe write ends are CLOEXEC so sibling spawns
+            // (the translator) cannot hold them open; this child is
+            // the one process that must carry them across exec.
+            for fd in [write_fd, info_write] {
+                let flags = libc::fcntl(fd, libc::F_GETFD, 0);
+                libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+            }
             libc::execv(bwrap_cpath.as_ptr(), argv.as_ptr());
             // execv only returns on failure.
             libc::_exit(127);
@@ -1424,6 +1569,13 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
         libc::close(info_write);
         libc::close(ready_write);
         libc::close(go_read);
+        // The edge fds crossed to the child at fork; the parent's
+        // copies close so the translator sees exactly one holder
+        // per nic (a lingering verb-side copy would mask a VMM
+        // exit from the translator's EOF).
+        for fd in &edge_fds {
+            libc::close(*fd);
+        }
     }
     // Wait for the child's readiness (it has unshared its own user
     // namespace and claimed uid/gid 0), then map that identity to

@@ -657,6 +657,10 @@ fn run_loop(
         // raises SIGIO, KVM_RUN returns with EINTR, and the byte lands
         // here even when the guest is idle in HLT.
         poll_stdin_rx(serial);
+        // Move any input still waiting for FIFO room (see
+        // serial.rs::feed): each guest FIFO read exits here, so a
+        // long line self-sustains its own delivery.
+        serial.feed();
         // The console socket: accept a client, and drain its input into
         // the serial RX FIFO. The accepted stream carries O_ASYNC, thus
         // a keystroke from the client wakes an idle guest the same way
@@ -757,12 +761,26 @@ fn poll_console(
     let mut drop_client = false;
     if let Some(stream) = client.borrow_mut().as_mut() {
         use std::io::Read;
+        // Drain until WouldBlock, not one buffer per pass: SIGIO is
+        // edge-triggered on arrival, and a machine whose only edge
+        // is a quiet wire gets no second pass -- bytes 65.. of one
+        // burst would wait forever (found by the first tapless
+        // machine, 1.6.14e rung 2; tap machines rode their taps'
+        // incidental SIGIOs and never showed it).
         let mut buf = [0u8; 64];
-        match stream.read(&mut buf) {
-            Ok(0) => drop_client = true,
-            Ok(n) => serial.enqueue(&buf[..n]),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => drop_client = true,
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) => {
+                    drop_client = true;
+                    break;
+                }
+                Ok(n) => serial.enqueue(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(_) => {
+                    drop_client = true;
+                    break;
+                }
+            }
         }
     }
     if drop_client {
@@ -1246,6 +1264,13 @@ fn dump_state(dir: &PathBuf) -> ! {
 
 /// Print every framed Message of a ledger file, one line per event.
 fn dump_ledger(path: &PathBuf) -> ! {
+    // A dump is a pipeline citizen: `... | grep -q` closes stdout
+    // early, and Rust's default SIGPIPE=ignore turns the next
+    // println into a panic-abort. Default disposition makes the
+    // process end quietly mid-pipe, like every other unix tool.
+    // SAFETY: resetting a signal disposition has no failure mode
+    // that matters here.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     let messages =
         ledger::read_all(path).unwrap_or_else(|e| fatal(&format!("reading {path:?}: {e}")));
     for msg in &messages {

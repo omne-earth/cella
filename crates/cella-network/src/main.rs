@@ -12,6 +12,8 @@ mod seccomp;
 
 use cella_libs::machine;
 
+mod edge;
+
 fn main() {
     // Hidden self-test hook for `make test-seccomp-network`. See
     // seccomp.rs's module doc: the real verbs stay unconfined until
@@ -54,6 +56,21 @@ fn main() {
                 std::process::exit(2);
             };
             if let Err(e) = machine::setup_pair(id, &via) {
+                eprintln!("cella-network: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        Some("edge") => {
+            // The translator (1.6.14e rung 2): one process per
+            // machine, machine-lifetime, wires only at this rung.
+            // The machine's start spawns it detached; destroy
+            // kills it by edge.pid.
+            let Some(vm) = args.get(1) else {
+                eprintln!("usage: cella-network edge <vm>");
+                std::process::exit(2);
+            };
+            if let Err(e) = edge::run(vm) {
                 eprintln!("cella-network: {e}");
                 std::process::exit(1);
             }

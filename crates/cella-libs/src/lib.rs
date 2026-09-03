@@ -8,6 +8,9 @@ pub mod config;
 #[cfg(feature = "golden")]
 pub mod golden;
 
+#[cfg(feature = "machine")]
+pub mod seq;
+
 #[cfg(feature = "wire")]
 pub mod ledger;
 #[cfg(feature = "wire")]
