@@ -175,4 +175,38 @@ if [ "$RUNG" = w4 ]; then
     echo; echo "PASS: engine-w4 -- the frozen machine"; exit 0
 fi
 
+say "w5: two judges -- the operator's hand and the engine's, both witnessed"
+# A fresh park; the operator refuses it BY HAND before the engine's
+# release can matter. Both decisions land in the verdict file; the
+# apply takes them in order; the operation lapses (the operator was
+# first), and no decision applies twice.
+if [ -f "$M/state" ]; then "$BIN" thaw "$VM" >/dev/null 2>&1 || true; sleep 1; fi
+B_LAP=$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "lapsed id=" || true)
+type_in "$VM" "echo contested > /dev/udp/192.168.210.1/$WORLD_PORT || true; echo se\"nt4\""
+deadline=$((SECONDS + 30))
+until [ -f "$M/state" ]; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the park never froze the machine"; exit 1; }
+    sleep 1
+done
+ID_C=$("$BIN" gateway "$VM" show | sed -n 's/^\([0-9a-f]\{32\}\) .*held$/\1/p' | head -1)
+[ -n "$ID_C" ] || { echo "FAIL: no held operation to contest"; exit 1; }
+"$BIN" gateway "$VM" refuse "$ID_C" --why "the operator spoke first" >/dev/null
+"$BIN" thaw "$VM" >/dev/null
+deadline=$((SECONDS + 30))
+until "$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -q "lapsed id=$ID_C"; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the operator's refusal never applied"; exit 1; }
+    if [ -f "$M/state" ]; then "$BIN" thaw "$VM" >/dev/null 2>&1 || true; fi
+    sleep 1
+done
+"$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -q "released id=$ID_C" \
+    && { echo "FAIL: the operation both lapsed and released -- a decision applied twice"; exit 1; }
+grep -q "refuse" "$CELLA_HOME/machines/$VM/audit" 2>/dev/null \
+    || { echo "FAIL: the operator's hand is not in the book"; exit 1; }
+grep -q "release\|refuse" "$CELLA_HOME/machines/$VM/audit" 2>/dev/null \
+    || { echo "FAIL: no judged hand in the book"; exit 1; }
+echo "  two hands, one outcome: the first decision won, the book names both"
+if [ "$RUNG" = w5 ]; then
+    echo; echo "PASS: engine-w5 -- two judges"; exit 0
+fi
+
 echo "FAIL: rung $RUNG is not built yet"; exit 1

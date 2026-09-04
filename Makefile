@@ -28,7 +28,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke smoke-shell smoke-boot smoke-thaw \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
-        smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 \
+        smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 engine-w5 \
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
         smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire \
@@ -92,7 +92,7 @@ SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
         smoke-universe smoke-ledger smoke-chain \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
-        smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 \
+        smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 engine-w5 \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5
 empty :=
@@ -456,9 +456,15 @@ engine-w4: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/engine.sh w4
 
-## The world-engine gates, in dependency order (w1-w4 today; w5 lands
-## next)
-smoke-engine: engine-w1 engine-w2 engine-w3 engine-w4
+## engine-w5 (docs/WORLD-ENGINE.md, "The gates"): two judges -- the
+## operator's hand interleaves with the stream, both witnessed, no
+## decision applied twice
+engine-w5: build-smoke golden
+	$(LOG)
+	$(SCRIPTS)/test/engine.sh w5
+
+## The world-engine gates, in dependency order
+smoke-engine: engine-w1 engine-w2 engine-w3 engine-w4 engine-w5
 
 ## A machine takes N nics: a two-nic boot, both present in the guest,
 ## every crossing decided per nic

@@ -36,11 +36,27 @@ docs/EXAMPLES.md, E1-E2).
 - **The lab flavor for benches.** The field build has no console.
   Bench runs use the lab (-debug) binaries so the console
   transcript lands in the machine's log.
-- **The network is judged, not allowed.** With a world nic,
-  every crossing waits for an external decision
-  (`cella gateway <machine> release <id>`). The harness supplies the
-  judge; a task's allowlist becomes that judge's policy. Start
-  with `--net none` tasks; they need none of this.
+- **The network is judged, not allowed.** With a world nic, every
+  crossing waits for an external decision. The judge is a gRPC
+  engine (docs/WORLD-ENGINE.md): the harness starts one, the
+  bridge (`cella-engine <machine> --dial <addr>`) streams every
+  park to it as an Event, and each returned Decision applies. A
+  task's network policy becomes that engine's policy. Start with
+  `--net none` tasks; they need none of this.
+
+  Before, without cella (the krun-podman rung): the task declares
+  `allow_internet = true|false` in task.toml, the harness derives
+  an allowlist from the task's URLs (agents/network.py,
+  allowlist_from_urls), and the container's edge enforces it --
+  decided once, then flows run free.
+
+  With cella: the same task.toml policy compiles into the
+  engine's allowlist, and enforcement changes kind. Every frame
+  parks; the engine releases the allowed and refuses the rest,
+  one decision per crossing, each on the record;
+  `allow_internet = false` is simply `--net none`. The trajectory
+  gains what no other rung has: the chronicle of every crossing
+  the agent attempted, including the refused ones.
 - **Nested layers need distinct knock ports**
   (docs/EXAMPLES.md, E2).
 
