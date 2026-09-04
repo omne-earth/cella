@@ -41,11 +41,16 @@ make init          # once per host: deps, toolbox, goldens (the one sudo moment)
 cella create room --net world
 cella start room
 cella gateway room open
+# inside, say the workload asks for example.com:
+# the request parks at the gateway border and waits
+cella gateway room show          # the held crossings, one line each with id
+cella gateway room release <id>  # let one crossing through
 ```
 
 The machine is dark before `open`. After `open`, each crossing
-waits for `cella gateway room release <id>`. The worked shapes,
-E1-E6, are in docs/EXAMPLES.md.
+parks and waits: `show` lists the holds with their ids, `release`
+lets one through, and `refuse` answers it cleanly. The worked
+shapes, E1-E6, are in docs/EXAMPLES.md.
 
 ## The verbs
 

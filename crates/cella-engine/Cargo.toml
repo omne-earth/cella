@@ -1,0 +1,20 @@
+# cella-engine: the bridge between a machine's border and a world
+# engine (docs/WORLD-ENGINE.md). It tails the ledger, streams the
+# Events to the engine over gRPC, and lands each returned Decision
+# in the verdict file with the kick. It never decides.
+[package]
+name = "cella-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cella-libs = { workspace = true, features = ["wire", "machine", "audit"] }
+libc = { workspace = true }
+prost = { workspace = true }
+tonic = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }

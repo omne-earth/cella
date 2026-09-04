@@ -197,6 +197,55 @@ The walk of one run against it:
    waits, and stillness is the failure mode
    (docs/NETWORK-MODEL.md, the membrane's law).
 
+## The gates
+
+The bridge lands with five acceptance rungs, one gate each, in
+dependency order; `make smoke-engine` runs all five. Each rung's
+teardown asserts that the bridge died with the run.
+
+1. **engine-w1 -- the stream stands.** The bridge dials a toy
+   engine, the Accord agrees, and a park arrives as an Event with
+   its id, its Destination, its direction, and both clocks.
+   Observation only: no decision is sent.
+2. **engine-w2 -- the decision lands.** The engine releases an
+   allowed destination and refuses another. The release delivers
+   and completes; the refusal lapses with its why; both land in
+   the book (N.F.3).
+3. **engine-w3 -- stillness on engine death (negative).** The
+   engine dies mid-hold. The operation waits, nothing defaults in
+   either direction, and a restarted engine resumes judging the
+   same hold. This rung is the reason the bridge never decides.
+4. **engine-w4 -- the frozen machine.** Decisions against a
+   frozen machine stage in the verdict file (N.F.2), and the thaw
+   applies them in park order. A kick against a machine with no
+   pid stages; it does not error.
+5. **engine-w5 -- two judges.** An operator release (N.X.1)
+   interleaves with the stream. Both hands land, both books
+   witness both, and no decision applies twice.
+
+The no-KVM tier gains test-seccomp-engine, and the witness-door
+count includes the new binary when it lands.
+
+## Audit
+
+The two hands of judgment leave symmetric records, by
+construction:
+
+1. **The chronicle is judge-blind.** Every decision's effect
+   lands in the ledger (N.F.3) as a Released or Lapsed event,
+   chained (field 15), identical whichever hand decided. The
+   operations book cannot tell the engine from the operator.
+2. **The verb book names the hand.** An operator's release lands
+   in the machine's audit book as an N.X.1 entry (verb, uid, gid,
+   persona, host clock, chained). The bridge writes the same
+   shape: one audit entry per landed Decision, persona
+   cella-engine, plus one entry for its own spawn. A reader of
+   the book sees who judged, entry by entry.
+3. **The stream itself is not a record.** gRPC bytes are
+   transport; nothing replays them. The books are the evidence,
+   and the gate engine-w5 asserts the symmetry: two judges, both
+   witnessed, no decision applied twice.
+
 ## What the bridge never does
 
 1. It never decides. An engine that is down means holds that

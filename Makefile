@@ -28,6 +28,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke smoke-shell smoke-boot smoke-thaw \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
+        smoke-engine engine-w1 \
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
         smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire \
@@ -91,6 +92,7 @@ SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
         smoke-universe smoke-ledger smoke-chain \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
+        smoke-engine engine-w1 \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5
 empty :=
@@ -277,12 +279,12 @@ test-witness:
 	$(LOG)
 	# Every persona binary witnesses its own verbs since the split
 	# (1.6.13): one audit::witness call site per persona main --
-	# machine, gateway, universe, build, doctor, network -- and the
+	# machine, gateway, universe, build, doctor, network, engine --
 	# shim owns none (it owns no verbs). The VMM is internal (its
 	# actions are the border events), and the probes are diagnostics.
 	doors=$$(grep -rln 'audit::witness(' crates/*/src/main.rs | wc -l)
-	if [ "$$doors" -ne 6 ]; then
-		echo "FAIL: $$doors witness doors (exactly 6 persona mains)"
+	if [ "$$doors" -ne 7 ]; then
+		echo "FAIL: $$doors witness doors (exactly 7 persona mains)"
 		grep -rln 'audit::witness(' crates/*/src/main.rs
 		exit 1
 	fi
@@ -290,7 +292,7 @@ test-witness:
 		echo "FAIL: the shim witnesses -- it owns no verbs"
 		exit 1
 	fi
-	echo "OK: six witness doors, one per persona; the shim owns none"
+	echo "OK: seven witness doors, one per persona; the shim owns none"
 
 ## Everything above: build hygiene + all no-KVM tests
 test: check lint unit-test integration-test test-jail test-seccomp-personas \
@@ -427,6 +429,17 @@ smoke-translator-port-neg: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/translator-port-neg.sh
 
+## engine-w1 (docs/WORLD-ENGINE.md, "The gates"): the stream stands --
+## the bridge dials the toy engine, and a park arrives as a
+## well-formed Event
+engine-w1: build-smoke golden
+	$(LOG)
+	$(SCRIPTS)/test/engine.sh w1
+
+## The world-engine gates, in dependency order (w1 today; w2-w5 land
+## with the decision path)
+smoke-engine: engine-w1
+
 ## A machine takes N nics: a two-nic boot, both present in the guest,
 ## every crossing decided per nic
 smoke-multinet: build-smoke golden
@@ -535,7 +548,7 @@ smoke-cella-probe: smoke-witness smoke-universe probe-inception
 ## The whole battery: the no-KVM checks first (fail fast), then one part per
 ## CLI, ground first
 smoke: test smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
-        smoke-cella-gateway smoke-cella-network smoke-cella-probe
+        smoke-cella-gateway smoke-cella-network smoke-cella-probe smoke-engine
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
