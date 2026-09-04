@@ -60,6 +60,39 @@ docs/EXAMPLES.md, E1-E2).
 - **Nested layers need distinct knock ports**
   (docs/EXAMPLES.md, E2).
 
+## Not the exec model: the collection model
+
+The container rungs drive a live workload from outside. cella
+does not, by design: there is no exec-into, and the run is a
+sealed experiment whose results are collected afterward. The
+converter and the harness must both honor this.
+
+Before, without cella (the podman family): the harness reaches
+into the running container at will -- `podman exec` installs the
+agent after start, runs the verifier inside the workload's own
+filesystem, and copies artifacts out of a live machine
+(PODMAN.md notes the exec plumbing down to its tty flags). The
+workload and its examiner share a room.
+
+With cella, the same task becomes bake, run, collect:
+
+1. **Bake.** The agent and its configuration enter the image at
+   build time; the init shim starts them. Nothing is installed
+   after boot.
+2. **Run.** The machine runs sealed: the console transcript and
+   the chronicle are the only live observations, and the network
+   is judged (the section below).
+3. **Collect.** The run ends (the guest halts, or the timeout
+   stops it). `cella inspect` mounts the still disk read-only,
+   and the verifier reads the task's declared artifacts -- for
+   example `artifacts = ["/app/report.json"]` from task.toml --
+   from the evidence view, never from a live machine.
+
+The trade is deliberate. A live workload can lie to its examiner
+interactively; a still disk cannot answer at all, only be read.
+Verification against evidence is stronger than verification by
+conversation, and the freeze makes the evidence exact.
+
 ## The rules that shape the design
 
 1. **Do not add flags to cella.** cella boots flavors, never bare
