@@ -100,6 +100,7 @@ target, and `make help` renders it. The map from gate to law:
 | `smoke-universe` | branch, archive, inspect: machines as artifacts, rocks stay rocks | scripts/test/universe.sh |
 | `smoke-witness` | every verb is an event, in the right book, with uid, gid, persona | scripts/test/witness.sh |
 | `probe-inception` | the cryogenic clock, one nesting level down | via cella probe |
+| `smoke-engine` (engine-w1..w5) | the world-engine seam: the stream stands, decisions land, stillness on engine halt, the frozen machine, two judges (docs/WORLD-ENGINE.md, "The gates") | scripts/test/engine.sh |
 
 Design detail lives with the law: docs/NETWORK-MODEL.md (the
 membrane), docs/ROOTLESS-NETWORK.md (the translator),

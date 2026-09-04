@@ -191,9 +191,13 @@ lives in tasks/PHASE1-core.md.
       landing at the join (deal-breaker 7). What the choice left
       open moved to 1.6.14i: the inside face of the map, the
       translator's uid, the personas, and the groups.
-- [ ] 2.6 The cella <-> engine protocol: a .proto for the verdict
-      vocabulary; gRPC never enters a VMM (see NETWORK-MODEL.md,
-      the control plane).
+- [x] 2.6 The cella <-> engine protocol (2026-09-04): the .proto
+      was the vocabulary since birth; the wire landed as
+      crates/cella-engine -- the bridge streams Events over rpc
+      Decide and lands Decisions in the verdict file; gRPC never
+      enters a VMM. Five gates green (engine-w1..w5,
+      docs/WORLD-ENGINE.md). The engine itself stays external:
+      cella ships the seam, the world ships the judge (2.7).
 - [ ] 2.7 Augmenting world engine (AWE): the engine over the appliance
       seam; materializer = the Artifact Keeper fork with timeline
       translation (response time = request T + delta).

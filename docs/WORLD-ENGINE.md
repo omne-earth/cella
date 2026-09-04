@@ -5,11 +5,11 @@ decides a machine's border crossings through the gRPC seam. The law of
 the border is docs/NETWORK-MODEL.md; the vocabulary is
 proto/cella.proto; this document states how a program speaks it.
 
-Status: the vocabulary and the file wire are shipped and
-load-bearing. The stream (the bridge, W.B.1) is designed here and
-is not built yet (tasks/PHASE2-security.md tracks the protocol
-work as 2.6). Until it lands, a harness judges through the CLI
-verbs, exactly as the gate scripts do.
+Status: shipped (2026-09-04). The vocabulary, the file wire, the
+bridge (W.B.1, crates/cella-engine), and the motor are built, and
+the five gates run green (`make smoke-engine`). The engine itself
+(W.E.1) stays external by design: cella ships the seam, the world
+ships the judge.
 
 The identifiers: W.B is the bridge and W.E the engine, minted
 here (W for this document, per the first-letter rule). All other identifiers are borrowed: N.* from
