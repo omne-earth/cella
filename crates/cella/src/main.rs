@@ -45,22 +45,30 @@ fn print_help() {
     println!("cella -- a cryogenic chamber for agents");
     println!();
     println!("The machine lifecycle (see docs/LIFECYCLE.md):");
-    println!("  cella build <kernel|rootfs> <flavor> [--fresh]   make a golden artifact");
-    println!("  cella create <name> [options]          stage a machine from the goldens");
-    println!("  cella start <name>                     run it (detached, jailed)");
+    println!("  cella build <kernel|rootfs> <flavor> [--fresh]  build one golden artifact");
+    println!("  cella create <name> [options]                   stage a machine from the goldens");
     println!(
-        "  cella enter <name>                     attach to its console (the lab flavor alone)"
+        "  cella start <name>                              run the machine, detached and jailed"
     );
-    println!("  cella freeze <name>                    stop it and keep the instant");
-    println!("  cella thaw <name>                      resume the instant");
-    println!("  cella stop <name>                      end it fast, clear the transients");
-    println!("  cella destroy <name>                   delete it, once and for all");
-    println!("  cella list                             every machine, one line each");
-    println!("  cella info <name>                      everything about one machine");
-    println!("  cella gateway <name> <verb>            the border: show, release, refuse, inspect, open, close");
-    println!("  cella branch|archive|inspect           machines as artifacts");
-    println!("  cella doctor check|fix|verify|harvest  the host judged, repaired, audited");
-    println!("  cella selftest                         run the lifecycle cycle end to end");
+    println!("  cella enter <name>                              attach the console (the lab flavor only)");
+    println!(
+        "  cella freeze <name>                             stop the machine and keep the instant"
+    );
+    println!("  cella thaw <name>                               resume the instant");
+    println!("  cella stop <name>                               end the machine and clear the transients");
+    println!("  cella destroy <name>                            delete the machine");
+    println!(
+        "  cella list                                      show each machine, one line per machine"
+    );
+    println!(
+        "  cella info <name>                               show the full record of one machine"
+    );
+    println!("  cella gateway <name> <verb>                     operate the border: show, release, refuse, inspect, open, close");
+    println!("  cella branch|archive|inspect                    operate on machines as artifacts");
+    println!(
+        "  cella doctor check|fix|verify|harvest           examine, repair, and audit the host"
+    );
+    println!("  cella selftest                                  run the full lifecycle against a real guest");
     println!();
     println!("Each verb runs in its own persona binary; the shim only routes.");
 }

@@ -601,9 +601,13 @@ pub fn freeze(name: &str) -> Result<(), String> {
 /// /etc/subuid or /etc/subgid, "<user>:<base>:<count>". This is the
 /// host prerequisite for the identity mapping below -- an
 /// administrator runs `usermod --add-subuids` (or edits the file
-/// directly) once, out of band, the same one-time spending as
-/// cella-network's file capability.
-fn subid_range(file: &str) -> Result<(u32, u32), String> {
+/// directly) once, out of band: the one root moment.
+///
+/// The one parser: the spawn maps by it, and doctor judges by it,
+/// thus doctor-ok and spawn-works cannot disagree. An entry may be
+/// keyed by the username or by the numeric uid -- newuidmap honors
+/// both, and so does this.
+pub fn subid_range(file: &str) -> Result<(u32, u32), String> {
     let user = std::env::var("USER").unwrap_or_else(|_| {
         std::process::Command::new("id")
             .arg("-un")
@@ -613,12 +617,14 @@ fn subid_range(file: &str) -> Result<(u32, u32), String> {
             .map(|s| s.trim().to_string())
             .unwrap_or_default()
     });
+    // SAFETY: getuid never fails.
+    let uid = unsafe { libc::getuid() }.to_string();
     let text = fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?;
     text.lines()
         .find_map(|l| {
             let mut f = l.splitn(3, ':');
             let u = f.next()?;
-            if u != user {
+            if u != user && u != uid {
                 return None;
             }
             let base: u32 = f.next()?.parse().ok()?;

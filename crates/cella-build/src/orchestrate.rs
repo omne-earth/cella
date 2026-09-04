@@ -17,10 +17,22 @@ use std::process::Command;
 pub const KERNEL_VERSION: &str = "7.2.2";
 
 pub fn repo_root() -> PathBuf {
-    // The build reads its fragments from the repository. A build from
-    // an installed binary needs the repository checkout as the
-    // current directory, and says so when the fragments are absent.
+    // A build from the checkout reads its inputs in place.
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// The build inputs (kernel fragments, init scripts): the checkout's
+/// scripts/build/ when the current directory is a checkout, else the
+/// installed copy at ~/.cella/build/scripts (make install lays it).
+/// The golden manifests digest the inputs, thus the two sources
+/// cannot silently diverge: a changed input rebuilds and names
+/// itself.
+pub fn inputs_root() -> PathBuf {
+    let checkout = repo_root().join("scripts/build");
+    if checkout.is_dir() {
+        return checkout;
+    }
+    cella_libs::machine::home().join("build/scripts")
 }
 
 /// Run one command, inherit the output, and fail loudly.
@@ -111,9 +123,10 @@ fn run_in_toolbox(what: &str, cwd: &Path, args: &[&str]) -> Result<(), String> {
     run(what, "toolbox", &full, Some(cwd))
 }
 
-/// Download with resume and retries, then extract. The cache lives in
-/// target/, the same trees as the script era, thus a source that is
-/// already present downloads nothing.
+/// Download with resume and retries, then extract. The cache lives
+/// in ~/.cella/build/ (the build verb's own workshop): it survives
+/// make clean and a fresh checkout, one cache per host, and a
+/// source that is already present downloads nothing.
 fn fetch_and_extract(
     what: &str,
     url: &str,
@@ -181,15 +194,15 @@ fn assert_config(config: &Path, symbols: &[&str]) -> Result<(), String> {
 /// the fragment onto the defconfig, assert the result, compile, and
 /// migration lasts: the probes still pin there.
 pub fn kernel_canonical(golden: &Path) -> Result<(), String> {
-    let root = repo_root();
-    let fragment = root.join("scripts/build/kernel-fragment.config");
+    let _root = repo_root();
+    let fragment = inputs_root().join("kernel-fragment.config");
     if !fragment.is_file() {
         return Err(format!(
-            "{} missing -- run the build from the repository checkout",
+            "{} missing -- run from the checkout, or make install (it lays ~/.cella/build/scripts)",
             fragment.display()
         ));
     }
-    let kbuild = root.join("target/kernel-build");
+    let kbuild = cella_libs::machine::home().join("build/kernel");
     let src = kbuild.join(format!("linux-{KERNEL_VERSION}"));
     let major = KERNEL_VERSION.split('.').next().unwrap();
     fetch_and_extract(
@@ -299,18 +312,18 @@ fn apply_busybox_fragment(config: &Path, fragment: &Path) -> Result<(), String> 
 /// The canonical rootfs, natively: a static busybox from pinned
 /// source, the heartbeat init, hardlinked applets, one ext4 image.
 pub fn rootfs_canonical(golden: &Path) -> Result<(), String> {
-    let root = repo_root();
-    let init = root.join("scripts/build/rootfs.sh");
-    let fragment = root.join("scripts/build/busybox-fragment.config");
+    let _root = repo_root();
+    let init = inputs_root().join("rootfs.sh");
+    let fragment = inputs_root().join("busybox-fragment.config");
     for f in [&init, &fragment] {
         if !f.is_file() {
             return Err(format!(
-                "{} missing -- run the build from the repository checkout",
+                "{} missing -- run from the checkout, or make install (it lays ~/.cella/build/scripts)",
                 f.display()
             ));
         }
     }
-    let rbuild = root.join("target/rootfs-build");
+    let rbuild = cella_libs::machine::home().join("build/rootfs");
     let src = rbuild.join(format!("busybox-{BUSYBOX_VERSION}"));
     fetch_and_extract(
         "busybox",
@@ -389,15 +402,15 @@ pub const GUEST_BASH_VERSION: &str = "5.3";
 /// static bash and the interactive init. Builds the canonical tree
 /// first when it is absent: the flavor extends it.
 pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String> {
-    let root = repo_root();
-    let init = root.join("scripts/build/rootfs-cella.sh");
+    let _root = repo_root();
+    let init = inputs_root().join("rootfs-cella.sh");
     if !init.is_file() {
         return Err(format!(
-            "{} missing -- run the build from the repository checkout",
+            "{} missing -- run from the checkout, or make install (it lays ~/.cella/build/scripts)",
             init.display()
         ));
     }
-    let rbuild = root.join("target/rootfs-build");
+    let rbuild = cella_libs::machine::home().join("build/rootfs");
     let rootdir = rbuild.join("root");
     if !rootdir.is_dir() {
         println!("cella: rootfs cella: the canonical tree is absent, building it first");
@@ -479,15 +492,15 @@ pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String
 /// docs/LIFECYCLE.md). No bash, no diagnostics beyond a heartbeat:
 /// the appliance forwards, and a busybox shell serves diagnosis.
 pub fn rootfs_gateway(golden: &Path, canonical_golden: &Path) -> Result<(), String> {
-    let root = repo_root();
-    let init = root.join("scripts/build/rootfs-gateway.sh");
+    let _root = repo_root();
+    let init = inputs_root().join("rootfs-gateway.sh");
     if !init.is_file() {
         return Err(format!(
-            "{} missing -- run the build from the repository checkout",
+            "{} missing -- run from the checkout, or make install (it lays ~/.cella/build/scripts)",
             init.display()
         ));
     }
-    let rbuild = root.join("target/rootfs-build");
+    let rbuild = cella_libs::machine::home().join("build/rootfs");
     let rootdir = rbuild.join("root");
     if !rootdir.is_dir() {
         println!("cella: rootfs gateway: the canonical tree is absent, building it first");
@@ -538,15 +551,15 @@ pub fn rootfs_gateway(golden: &Path, canonical_golden: &Path) -> Result<(), Stri
 /// stack, from the same pinned source, in a copied clean tree. The
 /// canonical tree stays as the canonical cache.
 pub fn kernel_nested(golden: &Path) -> Result<(), String> {
-    let root = repo_root();
-    let frag = root.join("scripts/build/kernel-fragment.config");
-    let nfrag = root.join("scripts/build/kernel-fragment-nested.config");
+    let _root = repo_root();
+    let frag = inputs_root().join("kernel-fragment.config");
+    let nfrag = inputs_root().join("kernel-fragment-nested.config");
     for f in [&frag, &nfrag] {
         if !f.is_file() {
             return Err(format!("{} missing", f.display()));
         }
     }
-    let kbuild = root.join("target/kernel-build");
+    let kbuild = cella_libs::machine::home().join("build/kernel");
     let src = kbuild.join(format!("linux-{KERNEL_VERSION}"));
     if !src.is_dir() {
         // The canonical build fetches the source; reuse its cache.
@@ -725,12 +738,12 @@ fn rootfs_nested_family(
     with_jail: bool,
     tree_name: &str,
 ) -> Result<(), String> {
-    let root = repo_root();
-    let init = root.join("scripts/build").join(init_name);
+    let _root = repo_root();
+    let init = inputs_root().join(init_name);
     if !init.is_file() {
         return Err(format!("{} missing", init.display()));
     }
-    let rbuild = root.join("target/rootfs-build");
+    let rbuild = cella_libs::machine::home().join("build/rootfs");
     if !rbuild.join("root").is_dir() {
         rootfs_canonical(&cella_libs::machine::rootfs_path("canonical"))?;
     }

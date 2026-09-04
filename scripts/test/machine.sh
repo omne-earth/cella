@@ -8,13 +8,18 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 BIN=target/release/cella
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
-# The native build reuses the repo-level source caches; without them
-# the first run downloads and compiles, which is not a unit test.
-[ -d target/kernel-build ] && [ -d target/rootfs-build ] \
+# The native build reuses the host's source cache
+# (~/.cella/build); without it the first run downloads and
+# compiles, which is not a unit test.
+REAL_CACHE="${CELLA_HOME:-$HOME/.cella}/build"
+[ -d "$REAL_CACHE/kernel" ] && [ -d "$REAL_CACHE/rootfs" ] \
     || { echo "SKIP: build caches missing -- run: make golden once"; exit 0; }
 
 export CELLA_HOME=$(mktemp -d /tmp/cella-machine-test.XXXXXX)
 trap 'rm -rf "$CELLA_HOME"' EXIT
+# The sandboxed home shares the host's source cache read-through:
+# the cache is pinned upstream sources, not machine state.
+ln -s "$REAL_CACHE" "$CELLA_HOME/build"
 
 "$BIN" build kernel canonical >/dev/null
 "$BIN" build rootfs cella >/dev/null

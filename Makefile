@@ -124,8 +124,8 @@ debug:
 	$(LOG)
 	$(CARGO) build
 
-## The field flavor: host deps, capabilities, and the console-free binary to
-## ~/.local/bin (scripts/setup/install.sh)
+## The field flavor: host deps and the console-free binaries to
+## ~/.cella/bin (scripts/setup/install.sh)
 install:
 	$(LOG)
 	$(SCRIPTS)/setup/install.sh

@@ -11,7 +11,7 @@ fail=0
 say() { echo "==> $1"; }
 
 say "no file capability on any cella binary"
-for b in target/release/cella* target/smoke/cella* "$HOME"/.local/bin/cella*; do
+for b in target/release/cella* target/smoke/cella* "$HOME"/.cella/bin/cella*; do
     [ -f "$b" ] || continue
     if caps=$(getcap "$b" 2>/dev/null) && [ -n "$caps" ]; then
         echo "FAIL: $caps"; fail=1

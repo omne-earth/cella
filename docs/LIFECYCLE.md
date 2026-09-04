@@ -174,7 +174,16 @@ tool earns its place later.
 
 ```
 $HOME/.cella/
+  bin/                           the installed thin CLIs (make install); the
+                                 spawn's ACLs make the home traversable per
+                                 machine sub-uid, thus the jail can read them
   config.json                    the defaults of create; flags override it
+  build/kernel/, build/rootfs/   the build verb's workshop: pinned upstream
+                                 sources and build trees, one cache per host
+                                 (safe to delete; the next build refetches)
+  build/scripts/                 the installed build inputs (fragments, init
+                                 scripts); the checkout's scripts/build/ wins
+                                 when the build runs from a checkout
   kernel/<flavor>/bzImage        golden kernels (build)
   kernel/<flavor>/golden.json    the manifest: sha3-256, sources, inputs (mode 444)
   rootfs/<flavor>/rootfs.ext4    golden root filesystems (build)

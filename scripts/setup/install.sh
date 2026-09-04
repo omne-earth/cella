@@ -53,7 +53,7 @@ if [ ! -e /dev/kvm ]; then
     echo "cella: /dev/kvm not present -- enable virtualization in BIOS/UEFI" \
          "and confirm kvm_intel/kvm_amd is loaded (lsmod | grep kvm)" >&2
 elif [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-    echo "cella: /dev/kvm is rw for $USER, good"
+    echo "cella: /dev/kvm is rw for $USER"
 elif getent group kvm &>/dev/null; then
     echo "cella: /dev/kvm exists but isn't rw for $USER -- adding $USER to the kvm group"
     sudo usermod -aG kvm "$USER"
@@ -64,24 +64,14 @@ else
 fi
 
 
-cat <<'EOT'
-cella: install done.
 
-Next, from any directory (no make needed from here on):
-
-  1. Prove the lifecycle end to end:
-       cella selftest
-
-  2. A machine of your own -- the network is rootless (no setup,
-     no capability; the machine's own translator carries it):
-       cella create m1 --net world
-       cella start m1
-       cella gateway m1 open   (then judge: cella gateway m1 show / release <id>)
-       cella enter m1          (the lab flavor only; Ctrl-] detaches)
-EOT
-
-# The binary. A release build lands in ~/.local/bin, and PATH gains
-# the directory when absent. make install calls this script.
+# The binaries. A release build lands in ~/.cella/bin -- inside
+# the one artifact home, whose traversal the spawn already grants
+# each machine's sub-uid by ACL, thus bwrap can resolve the VMM
+# binary on any host, whatever the mode of $HOME (found on bare
+# metal, 2026-09-03: a 0700 home refused the sub-uid at bwrap's
+# source resolution). PATH gains the directory when absent.
+# make install calls this script.
 # The workspace's own crates rebuild unconditionally: cargo trusts
 # mtimes, and a synced checkout (rsync keeps source times) under an
 # older target/ ships stale binaries with a 0.04s "Finished". The
@@ -94,25 +84,31 @@ cargo build --release
 # shim routes, the personas own their verbs, and the shakedown
 # confines each inode. No binary carries a capability (1.6.14e).
 for name in cella cella-machine cella-vmm cella-gateway cella-universe cella-build cella-doctor cella-network cella-probe; do
-    install -D -m 0755 "target/release/$name" "$HOME/.local/bin/$name"
+    install -D -m 0755 "target/release/$name" "$HOME/.cella/bin/$name"
 done
-echo "cella: nine persona binaries installed (the shim routes; each owns its verbs)"
+# The build inputs (kernel fragments, init scripts) install beside
+# the workshop: an installed binary builds the goldens from any
+# directory. The manifests digest the inputs, thus a stale copy
+# rebuilds and names itself.
+for f in scripts/build/*.config scripts/build/rootfs*.sh; do
+    install -D -m 0644 "$f" "$HOME/.cella/build/scripts/$(basename "$f")"
+done
 
 # The network is rootless (1.6.14e): no capability, no unit, no
 # host object -- this install creates none. It also removes none:
 # a tap or table left by an older install is removed by hand, by
 # the one who knows it is cella's (ruled 2026-09-03; a name is not
 # ownership, and deleting by name is what docker does to others).
-echo "cella: the network is rootless -- no capability, no unit, no host object"
+NEXT="cella doctor check"
 case ":$PATH:" in
-*":$HOME/.local/bin:"*) echo "cella: ~/.local/bin is already on PATH" ;;
+*":$HOME/.cella/bin:"*) : ;;
 *)
-    if ! grep -qs '\.local/bin' "$HOME/.bashrc"; then
-        printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
-        echo "cella: added ~/.local/bin to PATH in ~/.bashrc -- open a new shell"
-    else
-        echo "cella: ~/.bashrc already mentions ~/.local/bin -- open a new shell"
+    if ! grep -qs '\.cella/bin' "$HOME/.bashrc"; then
+        printf '\nexport PATH="$HOME/.cella/bin:$PATH"\n' >> "$HOME/.bashrc"
+        echo "cella: added ~/.cella/bin to PATH in ~/.bashrc"
     fi
+    NEXT="source ~/.bashrc && cella doctor check"
     ;;
 esac
-echo "cella: installed -> $HOME/.local/bin/cella"
+echo "cella: installed -> $HOME/.cella/bin/cella"
+echo "cella: the thin CLIs installed -- run: $NEXT"

@@ -20,15 +20,27 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The marker that says "already inside the jail this profile
-/// describes" -- set by the parent before the bwrap exec, read by
-/// the child so it does not jail itself a second time.
-pub const JAILED_ENV: &str = "CELLA_JAILED";
-
-/// The escape hatch for tests that must run unjailed on purpose
-/// (e.g. a gate that inspects the pre-jail state). Never set by
-/// installed code.
-pub const NO_JAIL_ENV: &str = "CELLA_NO_JAIL";
+/// True when this process already runs inside a user namespace --
+/// the recursion guard of confine_self. The evidence is
+/// /proc/self/uid_map: outside any namespace it is the identity
+/// map of the whole id space (one line, length 2^32); inside the
+/// jail's namespace it is one narrow line. An environment variable
+/// is not evidence -- a caller can export one, and a wall with a
+/// switch is not a wall (the no-escape-hatch ruling).
+pub fn inside_user_namespace() -> bool {
+    fs::read_to_string("/proc/self/uid_map")
+        .map(|m| {
+            let lines: Vec<&str> = m.lines().collect();
+            match lines.as_slice() {
+                [one] => {
+                    let f: Vec<&str> = one.split_whitespace().collect();
+                    f.len() == 3 && f[2] != "4294967295"
+                }
+                _ => true,
+            }
+        })
+        .unwrap_or(false)
+}
 
 /// One profile: the namespace set and the bind set, exactly as the
 /// file names them.
@@ -177,21 +189,19 @@ pub fn apply(profile: &Profile, args: &mut Vec<String>) {
 
 /// Re-exec the current process inside its own jail, described by
 /// security/profiles/<persona>/bwrap.txt. A no-op when the marker
-/// says the process is already jailed, or when the escape hatch is
-/// set. Never returns on the confining path: exec replaces this
-/// process with bwrap, which in turn execs the same binary again
-/// with the marker set, and that second incarnation returns here to
-/// find the marker and fall through to real work.
+/// says the process is already jailed. There is no override: no
+/// environment variable skips this wall (the no-escape-hatch
+/// ruling). Never returns on the confining path: exec replaces
+/// this process with bwrap, which execs the same binary again;
+/// that incarnation finds itself inside the user namespace and
+/// falls through to real work.
 ///
 /// `extra_binds` names paths this invocation needs beyond the
 /// profile's static set (a machine name resolved to its directory,
 /// for instance) -- always read-write, since the caller already
 /// knows the exact use.
 pub fn confine_self(persona: &str, extra_binds: &[PathBuf]) -> Result<(), String> {
-    if std::env::var(NO_JAIL_ENV).is_ok() {
-        return Ok(());
-    }
-    if std::env::var(JAILED_ENV).is_ok() {
+    if inside_user_namespace() {
         return Ok(());
     }
     let profile = load(persona)?;
@@ -210,10 +220,7 @@ pub fn confine_self(persona: &str, extra_binds: &[PathBuf]) -> Result<(), String
     args.push(me.to_string_lossy().to_string());
     args.extend(std::env::args().skip(1));
     use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new(&bwrap)
-        .args(&args)
-        .env(JAILED_ENV, "1")
-        .exec();
+    let err = std::process::Command::new(&bwrap).args(&args).exec();
     Err(format!("exec {bwrap}: {err}"))
 }
 

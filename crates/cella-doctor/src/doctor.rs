@@ -91,9 +91,9 @@ pub fn check() -> u32 {
     // console; the lab flavor (debug-assertions on) keeps it as the
     // instrument, under the -debug names.
     if cfg!(debug_assertions) {
-        r.ok("flavor", "debug -- the console exists (the lab)");
+        r.ok("flavor", "debug, the lab: the console exists");
     } else {
-        r.ok("flavor", "release -- no console exists (the field)");
+        r.ok("flavor", "release, the field: no console exists");
     }
 
     // /dev/kvm: the one device that makes a machine possible.
@@ -123,25 +123,32 @@ pub fn check() -> u32 {
     // sub-user, mapped by the spawn. That needs a delegated sub-id
     // range for this user, the setuid mapping helpers, and setfacl
     // (the spawn grants the sub-user its machine directory by ACL).
-    let user = std::env::var("USER").unwrap_or_default();
+    // One parser, one truth: the same subid_range the spawn maps
+    // by. The ok line reports the evidence, not reassurance.
     for file in ["/etc/subuid", "/etc/subgid"] {
-        let delegated = fs::read_to_string(file)
-            .map(|t| {
-                t.lines()
-                    .any(|l| l.split(':').next() == Some(user.as_str()))
-            })
-            .unwrap_or(false);
-        if delegated {
-            r.ok(file, "a sub-id range is delegated to this user");
-        } else {
-            r.fail(
+        match cella_libs::machine::subid_range(file) {
+            Ok((base, count)) if count >= 1024 => r.ok(
+                file,
+                &format!("{base}-{} delegated ({count} ids)", base + count - 1),
+            ),
+            Ok((base, count)) => r.fail(
+                file,
+                &format!(
+                    "{base}-{} delegated but too small ({count} ids; one machine \
+                     costs one id) -- run: sudo usermod --add-subuids {r} \
+                     --add-subgids {r} $USER",
+                    base + count - 1,
+                    r = cella_libs::config::SUBID_RANGE_HINT
+                ),
+            ),
+            Err(_) => r.fail(
                 file,
                 &format!(
                     "no delegated range -- run: sudo usermod --add-subuids {r} \
                      --add-subgids {r} $USER (make install does this)",
                     r = cella_libs::config::SUBID_RANGE_HINT
                 ),
-            );
+            ),
         }
     }
     for tool in ["newuidmap", "newgidmap", "setfacl"] {
@@ -175,29 +182,8 @@ pub fn check() -> u32 {
 
     // The network (1.6.14e): no host state exists to check. Each
     // machine's translator is spawned by its start and dies at
-    // its destroy; there is no pool, no unit, and no capability.
-
-    // Forwarding: guest egress dies without it.
-    match fs::read_to_string("/proc/sys/net/ipv4/ip_forward") {
-        Ok(v) if v.trim() == "1" => r.ok("ip_forward", "on"),
-        _ => r.fail("ip_forward", "off -- run: cella doctor fix"),
-    }
-
-    // The nft tables need root to inspect: state the fact, no guess.
-    if unsafe { libc::geteuid() } == 0 {
-        match run_out("nft", &["list", "table", "inet", "cella_nat"]) {
-            Some(_) => r.ok("nat", "table inet cella_nat present"),
-            None => r.fail(
-                "nat",
-                "table inet cella_nat absent -- run: cella doctor fix",
-            ),
-        }
-    } else {
-        r.note(
-            "nat",
-            "needs root to inspect -- run: sudo cella doctor check",
-        );
-    }
+    // its destroy; there is no pool, no unit, no capability, no
+    // forwarding, and no NAT -- thus no fact to judge here.
 
     // The goldens, and their manifests.
     for (axis, flavor) in [
@@ -213,15 +199,9 @@ pub fn check() -> u32 {
         };
         let label = format!("{axis} {flavor}");
         if !p.is_file() {
-            r.fail(
-                &label,
-                &format!("absent -- run: cella build {axis} {flavor}"),
-            );
+            r.fail(&label, "absent");
         } else if !golden::manifest_path(&p).is_file() {
-            r.fail(
-                &label,
-                &format!("no manifest -- run: cella build {axis} {flavor}"),
-            );
+            r.fail(&label, "no manifest");
         } else {
             r.ok(&label, "present, with manifest");
         }
@@ -239,7 +219,10 @@ pub fn check() -> u32 {
     if r.failed == 0 {
         println!("cella doctor: all facts hold");
     } else {
-        println!("cella doctor: {} fact(s) FAIL", r.failed);
+        println!(
+            "cella doctor: {} fact(s) FAIL -- run: cella doctor fix",
+            r.failed
+        );
     }
     r.failed
 }
@@ -296,7 +279,7 @@ pub fn fix() -> u32 {
         if p.is_file() && golden::manifest_path(&p).is_file() {
             continue;
         }
-        println!("cella doctor: fix -- building {axis} {flavor} (minutes for the kernel)");
+        println!("cella doctor: fix -- building {axis} {flavor}");
         // Green-field: an artifact without a manifest rebuilds fresh,
         // so that the manifest is born with the artifact it states.
         if let Err(e) = cella_build::flags::build_flags(axis, flavor, true) {

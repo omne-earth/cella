@@ -22,7 +22,7 @@ KERNEL_VERSION="${KERNEL_VERSION:-7.2.2}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FRAGMENT="$HERE/scripts/build/kernel-fragment.config"
-SRC_DIR="$HERE/target/kernel-build/linux-$KERNEL_VERSION"
+SRC_DIR="${CELLA_HOME:-$HOME/.cella}/build/kernel/linux-$KERNEL_VERSION"
 
 if [ ! -f /run/.toolboxenv ]; then
     command -v toolbox &>/dev/null || { echo "cella: 'toolbox' not found -- run: make init" >&2; exit 1; }
