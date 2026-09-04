@@ -1,6 +1,6 @@
 # cella
 
-*a cryogenic chamber for agents*
+*a cryogenic world for agents*
 
 cella runs workloads in hardware-isolated micro-VMs. It is written
 from scratch in Rust, directly on KVM. It is ten small binaries.

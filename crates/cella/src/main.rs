@@ -42,7 +42,7 @@ fn sibling(name: &str) -> PathBuf {
 }
 
 fn print_help() {
-    println!("cella -- a cryogenic chamber for agents");
+    println!("cella -- a cryogenic world for agents");
     println!();
     println!("The machine lifecycle (see docs/LIFECYCLE.md):");
     println!("  cella build <kernel|rootfs> <flavor> [--fresh]  build one golden artifact");
