@@ -43,9 +43,16 @@ impl pb::engine_server::Engine for Toy {
                     port,
                     dir
                 );
-                let allowed = allow.iter().any(|(a_ip, a_port)| {
-                    (a_ip.is_empty() || *a_ip == ip) && (*a_port == 0 || *a_port == port)
-                });
+                // An L2 park (ARP, or anything the membrane named
+                // by ethertype and MAC alone) carries no IPv4
+                // triple. Policy speaks IPv4; the wire's grammar
+                // releases: refusing ARP would darken every
+                // destination, allowed ones included.
+                let l2 = ip.is_empty() && port == 0;
+                let allowed = l2
+                    || allow.iter().any(|(a_ip, a_port)| {
+                        (a_ip.is_empty() || *a_ip == ip) && (*a_port == 0 || *a_port == port)
+                    });
                 let decision = if allowed {
                     pb::decision::Decision::Release(pb::Release {})
                 } else {

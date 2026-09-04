@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The world-engine gates (docs/WORLD-ENGINE.md, "The gates"). One
-# rung per invocation: engine.sh w1 | w2 | w3 | w4 | e5. Each rung
+# rung per invocation: engine.sh w1 | w2 | w3 | w4 | w5. Each rung
 # assumes the ones before it; a red rung names its layer.
 set -euo pipefail
 
@@ -48,7 +48,7 @@ say "$RUNG: stand the machine, the toy engine, and the bridge"
 "$BIN" create "$VM" --net world:$WORLD_PORT/udp >/dev/null
 "$BIN" start "$VM" >/dev/null
 TOY_LOG="$CELLA_HOME/toy.log"
-"$ENG" toy --listen "127.0.0.1:$DIAL_PORT" > "$TOY_LOG" 2>&1 &
+"$ENG" toy --listen "127.0.0.1:$DIAL_PORT" --allow "192.168.210.1:*" > "$TOY_LOG" 2>&1 &
 TOY_PID=$!
 sleep 1
 grep -q "toy: listening" "$TOY_LOG" || { echo "FAIL: the toy engine never listened"; exit 1; }
@@ -70,6 +70,46 @@ grep -q "toy: parked id=[0-9a-f]\{32\}" "$TOY_LOG" || { echo "FAIL: the Event ca
 echo "  the stream stands: the park arrived with its id"
 if [ "$RUNG" = w1 ]; then
     echo; echo "PASS: engine-w1 -- the stream stands"; exit 0
+fi
+
+say "w2: the decision lands -- the release delivers, the refusal lapses"
+# The toy allowed the gateway's address; the park above was the
+# guest's ARP or its echo toward the gateway, and the toy's release
+# must deliver it: the machine froze on the park (its own egress),
+# the bridge's kick staged the decision, and a thaw applies it.
+deadline=$((SECONDS + 30))
+until grep -q "toy: release id=" "$TOY_LOG"; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the toy released nothing"; exit 1; }
+    sleep 1
+done
+if [ -f "$M/state" ]; then "$BIN" thaw "$VM" >/dev/null; fi
+deadline=$((SECONDS + 30))
+until "$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -q "released id="; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the engine's release never applied"; exit 1; }
+    if [ -f "$M/state" ]; then "$BIN" thaw "$VM" >/dev/null 2>&1 || true; fi
+    sleep 1
+done
+echo "  the release landed: parked by the machine, decided by the engine, applied"
+
+# The refusal: a destination off the allowlist. The guest sends a
+# datagram to a refused address; the toy refuses; the operation
+# lapses by the book.
+type_in "$VM" "echo refused > /dev/udp/198.51.100.9/9 || true; echo of"f""
+deadline=$((SECONDS + 40))
+until grep -q "toy: refuse id=" "$TOY_LOG"; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the refused park never reached the engine"; exit 1; }
+    if [ -f "$M/state" ]; then "$BIN" thaw "$VM" >/dev/null 2>&1 || true; fi
+    sleep 1
+done
+deadline=$((SECONDS + 30))
+until "$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -q "lapsed id=.*off the allowlist"; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the refusal never lapsed with its why"; exit 1; }
+    if [ -f "$M/state" ]; then "$BIN" thaw "$VM" >/dev/null 2>&1 || true; fi
+    sleep 1
+done
+echo "  the refusal lapsed, the why in the book"
+if [ "$RUNG" = w2 ]; then
+    echo; echo "PASS: engine-w2 -- the decision lands"; exit 0
 fi
 
 echo "FAIL: rung $RUNG is not built yet"; exit 1

@@ -38,7 +38,7 @@ docs/EXAMPLES.md, E1-E2).
   transcript lands in the machine's log.
 - **The network is judged, not allowed.** With a world nic,
   every crossing waits for an external decision
-  (`cella gateway <vm> release <id>`). The harness supplies the
+  (`cella gateway <machine> release <id>`). The harness supplies the
   judge; a task's allowlist becomes that judge's policy. Start
   with `--net none` tasks; they need none of this.
 - **Nested layers need distinct knock ports**

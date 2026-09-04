@@ -28,7 +28,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke smoke-shell smoke-boot smoke-thaw \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
-        smoke-engine engine-w1 \
+        smoke-engine engine-w1 engine-w2 \
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
         smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire \
@@ -92,7 +92,7 @@ SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
         smoke-universe smoke-ledger smoke-chain \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
-        smoke-engine engine-w1 \
+        smoke-engine engine-w1 engine-w2 \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5
 empty :=
@@ -436,9 +436,15 @@ engine-w1: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/engine.sh w1
 
-## The world-engine gates, in dependency order (w1 today; w2-w5 land
-## with the decision path)
-smoke-engine: engine-w1
+## engine-w2 (docs/WORLD-ENGINE.md, "The gates"): the decision lands --
+## the engine's release delivers and its refusal lapses with the why
+engine-w2: build-smoke golden
+	$(LOG)
+	$(SCRIPTS)/test/engine.sh w2
+
+## The world-engine gates, in dependency order (w1-w2 today; w3-w5
+## land next)
+smoke-engine: engine-w1 engine-w2
 
 ## A machine takes N nics: a two-nic boot, both present in the guest,
 ## every crossing decided per nic

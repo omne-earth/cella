@@ -46,25 +46,29 @@ fn print_help() {
     println!();
     println!("The machine lifecycle (see docs/LIFECYCLE.md):");
     println!("  cella build <kernel|rootfs> <flavor> [--fresh]  build one golden artifact");
-    println!("  cella create <name> [options]                   stage a machine from the goldens");
     println!(
-        "  cella start <name>                              run the machine, detached and jailed"
+        "  cella create <machine> [options]                   stage a machine from the goldens"
     );
-    println!("  cella enter <name>                              attach the console (the lab flavor only)");
     println!(
-        "  cella freeze <name>                             stop the machine and keep the instant"
+        "  cella start <machine>                              run the machine, detached and jailed"
     );
-    println!("  cella thaw <name>                               resume the instant");
-    println!("  cella stop <name>                               end the machine and clear the transients");
-    println!("  cella destroy <name>                            delete the machine");
+    println!("  cella enter <machine>                              attach the console (the lab flavor only)");
+    println!(
+        "  cella freeze <machine>                             stop the machine and keep the instant"
+    );
+    println!("  cella thaw <machine>                               resume the instant");
+    println!("  cella stop <machine>                               end the machine and clear the transients");
+    println!("  cella destroy <machine>                            delete the machine");
     println!(
         "  cella list                                      show each machine, one line per machine"
     );
     println!(
-        "  cella info <name>                               show the full record of one machine"
+        "  cella info <machine>                               show the full record of one machine"
     );
-    println!("  cella gateway <name> <verb>                     operate the border: show, release, refuse, inspect, open, close");
-    println!("  cella branch|archive|inspect                    operate on machines as artifacts");
+    println!("  cella gateway <machine> <verb>                     operate the border: show, release, refuse, inspect, open, close");
+    println!(
+        "  cella branch <machine> <new> | archive <machine> | inspect <machine>  operate on machines as artifacts"
+    );
     println!(
         "  cella doctor check|fix|verify|harvest           examine, repair, and audit the host"
     );
@@ -98,7 +102,7 @@ fn main() {
     };
     let bin = sibling(persona);
     // The verb word stays in the persona's argv where the persona
-    // expects it: cella-gateway takes <vm> first (the verb is its
+    // expects it: cella-gateway takes <machine> first (the verb is its
     // name); the machine and universe personas take the verb.
     let args: Vec<&String> = match first.as_str() {
         "gateway" | "build" | "doctor" | "probe" | "network" => argv[1..].iter().collect(),

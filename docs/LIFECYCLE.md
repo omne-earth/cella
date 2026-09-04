@@ -76,7 +76,7 @@ the probe is the instrument, not the product.
 ### The network, rootless
 
 No network privilege exists (1.6.14e). The network is one
-translator process per machine (`cella-network edge <vm>`,
+translator process per machine (`cella-network edge <machine>`,
 N.T.1 in docs/NETWORK-MODEL.md's maps), spawned by start, killed
 by destroy or by its own tether (docs/ROOTLESS-NETWORK.md, "The
 translator"), holding plain sockets (N.H.1-N.H.4) and no
@@ -117,9 +117,9 @@ stateDiagram-v2
 | branch  | Copies a still machine: a frozen source yields a frozen twin, a stopped source a fresh-bootable copy, a rock a rock. Records the layer digests | Rust only |
 | archive | Turns a still machine into a rock: storage layers stay, runtime state goes, the manifest latches | Rust only |
 | inspect | Attaches the disk of a still machine to a throwaway appliance, read-only; the detach destroys the appliance | Rust only |
-| doctor  | check: the host facts, one line each. fix: repairs what the uid can (the sub-id delegation, absent goldens via build), deletes nothing. verify: recomputes each golden digest against its manifest, and the recorded layer digests of a machine (verify <vm>) | Rust only |
+| doctor  | check: the host facts, one line each. fix: repairs what the uid can (the sub-id delegation, absent goldens via build), deletes nothing. verify: recomputes each golden digest against its manifest, and the recorded layer digests of a machine (verify <machine>) | Rust only |
 | probe   | The cryogenic diagnostics (cella-probe): wallclock, freeze-thaw-clock, sregs | Rust only |
-| network | The translator (cella-network edge <vm>, N.T.1): one per machine, spawned by start; not an operator's verb | Rust only |
+| network | The translator (cella-network edge <machine>, N.T.1): one per machine, spawned by start; not an operator's verb | Rust only |
 | gateway | The membrane surface (N.X.1): show [incoming|outgoing], release <id>, refuse <id>, inspect <id> (frozen holds only), open, close. A machine is born closed (nothing in or out); open arms the membrane, never a free flow; a release delivers one operation, and no allow outlives its decision | Rust only |
 
 The difference between stop and freeze is intent. Freeze preserves the
@@ -134,12 +134,12 @@ is its manifest and its disk, nothing else.
 branch, archive, and inspect. Every operation records the sha3-256
 of each storage layer it touches into the manifest of the machine
 it produces; `list` shows a short disk digest, `info` the full
-set, and `doctor verify <vm>` recomputes them.
+set, and `doctor verify <machine>` recomputes them.
 
 One rule spans the family: running is the only state a universe
 verb refuses.
 
-- **branch <existing-vm> <new-vm>** -- both names mandatory. A
+- **branch <existing-vm> <new-machine>** -- both names mandatory. A
   frozen source copies to a frozen twin (each sidecar thaws once;
   the twins share the CRNG state of the fork instant, deliberately
   -- divergence comes from the world, never a reseed). A stopped
@@ -148,7 +148,7 @@ verb refuses.
   side effect. The copy's manifest carries `net none` always: the
   network identity of the source lives in its RAM, and a nic is a
   deliberate re-attachment, not an inheritance.
-- **archive <vm>** -- a stopped or a frozen machine becomes a
+- **archive <machine>** -- a stopped or a frozen machine becomes a
   rock: the storage layers stay (disk.img, and ram.img where
   present), the runtime state goes (the sidecar: irqchip, vCPU,
   in-flight registers -- archiving a frozen machine deliberately
@@ -156,9 +156,9 @@ verb refuses.
   `state: archived`. A rock cannot be started by accident: start,
   thaw, and enter refuse it by name. Un-archiving, if it ever
   exists, is its own verb.
-- **inspect <vm>** -- attach the disk of any still machine
+- **inspect <machine>** -- attach the disk of any still machine
   (archived, stopped, or frozen) as evidence, never as a machine:
-  a temporary appliance named `<vm>-inspector` boots the stock
+  a temporary appliance named `<machine>-inspector` boots the stock
   rootfs, and the disk attaches as an external second virtio-blk,
   read-only at the device. The guest init mounts it at /rock with
   ro,noexec,nosuid,nodev,norecovery -- the content cannot execute,

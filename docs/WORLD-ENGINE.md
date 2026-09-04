@@ -82,8 +82,8 @@ same bytes.
 Via CLI:
 
 ```sh
-cella gateway <vm> show            # both directions
-cella gateway <vm> show incoming   # the ingress lane (N.M.2)
+cella gateway <machine> show            # both directions
+cella gateway <machine> show incoming   # the ingress lane (N.M.2)
 ```
 
 Via engine: no request exists or is needed. Every park arrives as
@@ -95,7 +95,7 @@ direction, and both clocks.
 Via CLI:
 
 ```sh
-cella gateway <vm> release <id-prefix>
+cella gateway <machine> release <id-prefix>
 ```
 
 Via engine: send one Decision on the stream:
@@ -109,7 +109,7 @@ Decision { id: <the operation id>, release: Release {} }
 Via CLI:
 
 ```sh
-cella gateway <vm> refuse <id-prefix> --why "off the allowlist"
+cella gateway <machine> refuse <id-prefix> --why "off the allowlist"
 ```
 
 Via engine:
@@ -123,8 +123,8 @@ Decision { id: <the operation id>, refusal: Refusal { why: "off the allowlist" }
 Via CLI:
 
 ```sh
-cella gateway <vm> open
-cella gateway <vm> close
+cella gateway <machine> open
+cella gateway <machine> close
 ```
 
 Via engine: not on the Decide stream. The valve is the border's
@@ -137,7 +137,7 @@ posture changes through the CLI alone.
 Via CLI:
 
 ```sh
-cella gateway <vm> inspect <id-prefix>
+cella gateway <machine> inspect <id-prefix>
 ```
 
 Via engine: not on the Decide stream. Sight requires stillness
@@ -187,7 +187,7 @@ python -m grpc_tools.protoc -Iproto \
 The walk of one run against it:
 
 1. Start the engine (above).
-2. Start the bridge: `cella-engine <vm> --dial 127.0.0.1:1709`
+2. Start the bridge: `cella-engine <machine> --dial 127.0.0.1:1709`
    (the planned invocation; the bridge is spawned by the harness,
    the way N.T.1 is spawned by start -- never by the shim).
 3. Create, start, and open the machine through the CLI.

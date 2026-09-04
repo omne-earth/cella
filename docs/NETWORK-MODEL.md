@@ -17,7 +17,7 @@ diagrams live in docs/ROOTLESS-NETWORK.md and docs/EXAMPLES.md.
 ## The decision
 
 A machine is always shielded. The membrane is the machine's own
-VMM, and no configuration bypasses it. `cella create <name>` takes
+VMM, and no configuration bypasses it. `cella create <machine>` takes
 one flag, `--net SPEC`, where SPEC is a comma list of nics:
 `none` (the default, airgapped), `world[:PORT/proto+...]`, or
 `wire:NAME`. A machine is born closed.
@@ -29,7 +29,7 @@ each membrane judges its own frames.
 ## The shape
 
 - **One translator per machine.** `cella start` spawns
-  `cella-network edge <vm>`, one process, machine-lifetime:
+  `cella-network edge <machine>`, one process, machine-lifetime:
   destroy kills it, and it survives freeze and thaw. It holds no
   capability. It exits on its own when its machine directory is
   removed.
@@ -262,7 +262,7 @@ sequenceDiagram
 
 ## The control plane
 
-`cella gateway <name> <verb>` is the surface, its own thin CLI. It
+`cella gateway <machine> <verb>` is the surface, its own thin CLI. It
 acts on files and signals alone: it writes the valve record, reads
 the ledger, and kicks the running VMM. It holds no capability, and
 neither does any other network binary.

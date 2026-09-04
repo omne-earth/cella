@@ -122,7 +122,7 @@ written as history, never read back as truth.
 The concrete surface, in order:
 
 1. A machine is born closed: nothing in or out, no
-   parking, no freeze. `cella gateway <vm> open` arms the
+   parking, no freeze. `cella gateway <machine> open` arms the
    membrane; `close` returns the dark. The posture is the valve
    file (N.F.1) and survives every thaw.
 2. A park mints the operation id (v7-shaped, the guest frame in
@@ -132,7 +132,7 @@ The concrete surface, in order:
    machine freezes itself -- the park is the freeze. Held frames
    ride the sidecar; the operation records ride the chronicle.
 4. Decisions are framed proto messages in the verdict file, one
-   per operation id, written by `cella gateway <vm> release|refuse
+   per operation id, written by `cella gateway <machine> release|refuse
    <id>`. The thaw applies them strictly in park order: a release
    delivers and completes one operation, and installs nothing; a
    refusal lapses the operation; an operation behind an undecided
