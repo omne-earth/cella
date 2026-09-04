@@ -1,4 +1,4 @@
-//! The toy engine: the gates' stand-in judge (W.E.1's chair with a
+//! The motor engine: the gates' stand-in judge (W.E.1's chair with a
 //! simple occupant). It logs every Event it receives and answers
 //! each Parked with a Release when the destination is on its
 //! allowlist, a Refusal when it is not. It is a gate fixture, not
@@ -7,12 +7,12 @@
 use crate::pb;
 use tokio_stream::StreamExt;
 
-struct Toy {
+struct Motor {
     allow: Vec<(Vec<u8>, u32)>,
 }
 
 #[tonic::async_trait]
-impl pb::engine_server::Engine for Toy {
+impl pb::engine_server::Engine for Motor {
     type DecideStream = tokio_stream::wrappers::ReceiverStream<Result<pb::Decision, tonic::Status>>;
 
     async fn decide(
@@ -26,15 +26,15 @@ impl pb::engine_server::Engine for Toy {
             while let Some(Ok(ev)) = events.next().await {
                 let Some(pb::event::Event::Parked(op)) = ev.event else {
                     // Completions and looks are evidence, not questions.
-                    println!("toy: event (not a park)");
+                    println!("motor: event (not a park)");
                     continue;
                 };
-                let (ip, port, dir) = match &op.destination {
-                    Some(d) => (d.ip.clone(), d.port, op.direction),
-                    None => (Vec::new(), 0, op.direction),
+                let (ip, port, ethertype, dir) = match &op.destination {
+                    Some(d) => (d.ip.clone(), d.port, d.ethertype, op.direction),
+                    None => (Vec::new(), 0, 0, op.direction),
                 };
                 println!(
-                    "toy: parked id={} ip={} port={} dir={}",
+                    "motor: parked id={} ip={} port={} dir={}",
                     cella_hex(&op.id),
                     ip.iter()
                         .map(|b| b.to_string())
@@ -43,13 +43,16 @@ impl pb::engine_server::Engine for Toy {
                     port,
                     dir
                 );
-                // An L2 park (ARP, or anything the membrane named
-                // by ethertype and MAC alone) carries no IPv4
-                // triple. Policy speaks IPv4; the wire's grammar
-                // releases: refusing ARP would darken every
-                // destination, allowed ones included.
-                let l2 = ip.is_empty() && port == 0;
-                let allowed = l2
+                // ARP alone rides free: policy speaks IPv4, and a
+                // judge that refuses ARP darkens every destination,
+                // allowed ones included. The exception is exactly
+                // ethertype 0x0806 -- on the world plane a released
+                // ARP reaches only the machine's own translator,
+                // which answers it at the edge. Every other
+                // non-IPv4 ethertype is refused like anything else
+                // the policy cannot name.
+                let arp = ethertype == 0x0806;
+                let allowed = arp
                     || allow.iter().any(|(a_ip, a_port)| {
                         (a_ip.is_empty() || *a_ip == ip) && (*a_port == 0 || *a_port == port)
                     });
@@ -65,7 +68,7 @@ impl pb::engine_server::Engine for Toy {
                     decision: Some(decision),
                 };
                 println!(
-                    "toy: {} id={}",
+                    "motor: {} id={}",
                     if allowed { "release" } else { "refuse" },
                     cella_hex(&op.id)
                 );
@@ -134,9 +137,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
     rt.block_on(async move {
-        println!("toy: listening on {listen}");
+        println!("motor: listening on {listen}");
         tonic::transport::Server::builder()
-            .add_service(pb::engine_server::EngineServer::new(Toy { allow }))
+            .add_service(pb::engine_server::EngineServer::new(Motor { allow }))
             .serve(addr)
             .await
             .map_err(|e| e.to_string())

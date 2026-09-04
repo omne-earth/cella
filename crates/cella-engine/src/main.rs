@@ -5,13 +5,13 @@
 //! - `cella-engine <vm> --dial <addr>` -- the bridge: tail the
 //!   machine's ledger, stream each Event to the engine, land each
 //!   returned Decision in the verdict file, and kick the VMM. The
-//!   bridge never decides: a dead engine means holds that wait.
-//! - `cella-engine toy --listen <addr> [--allow ip:port ...]` --
+//!   bridge never decides: a halted engine means holds that wait.
+//! - `cella-engine motor --listen <addr> [--allow ip:port ...]` --
 //!   a stand-in engine for the gates: releases the allowed
 //!   destinations, refuses the rest, logs every Event.
 
 mod bridge;
-mod toy;
+mod motor;
 
 /// The generated vocabulary: the same proto/cella.proto that
 /// cella-libs compiles for the file wire, here with the Engine
@@ -21,7 +21,9 @@ pub mod pb {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: cella-engine <vm> --dial <addr> | toy --listen <addr> [--allow ip:port ...]");
+    eprintln!(
+        "usage: cella-engine <vm> --dial <addr> | motor --listen <addr> [--allow ip:port ...]"
+    );
     std::process::exit(2);
 }
 
@@ -34,9 +36,9 @@ fn main() {
         }
     }
     match args.first().map(|s| s.as_str()) {
-        Some("toy") => {
-            if let Err(e) = toy::run(&args[1..]) {
-                eprintln!("cella-engine: toy: {e}");
+        Some("motor") => {
+            if let Err(e) = motor::run(&args[1..]) {
+                eprintln!("cella-engine: motor: {e}");
                 std::process::exit(1);
             }
         }

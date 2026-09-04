@@ -430,7 +430,7 @@ smoke-translator-port-neg: build-smoke golden
 	$(SCRIPTS)/test/translator-port-neg.sh
 
 ## engine-w1 (docs/WORLD-ENGINE.md, "The gates"): the stream stands --
-## the bridge dials the toy engine, and a park arrives as a
+## the bridge dials the motor, and a park arrives as a
 ## well-formed Event
 engine-w1: build-smoke golden
 	$(LOG)

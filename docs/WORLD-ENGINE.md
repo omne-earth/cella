@@ -201,9 +201,9 @@ The walk of one run against it:
 
 The bridge lands with five acceptance rungs, one gate each, in
 dependency order; `make smoke-engine` runs all five. Each rung's
-teardown asserts that the bridge died with the run.
+teardown asserts that the bridge halted with the run.
 
-1. **engine-w1 -- the stream stands.** The bridge dials a toy
+1. **engine-w1 -- the stream stands.** The bridge dials a motor
    engine, the Accord agrees, and a park arrives as an Event with
    its id, its Destination, its direction, and both clocks.
    Observation only: no decision is sent.
@@ -211,8 +211,8 @@ teardown asserts that the bridge died with the run.
    allowed destination and refuses another. The release delivers
    and completes; the refusal lapses with its why; both land in
    the book (N.F.3).
-3. **engine-w3 -- stillness on engine death (negative).** The
-   engine dies mid-hold. The operation waits, nothing defaults in
+3. **engine-w3 -- stillness on engine halt (negative).** The
+   engine halts mid-hold. The operation waits, nothing defaults in
    either direction, and a restarted engine resumes judging the
    same hold. This rung is the reason the bridge never decides.
 4. **engine-w4 -- the frozen machine.** Decisions against a
