@@ -1,6 +1,6 @@
 // The one language of the network model (docs/NETWORK-MODEL.md).
 // Every party speaks it: the membrane inside the appliance, the
-// cella-gateway CLI, and the engine that presides on the longer
+// cella-gateway CLI, and the engine that decides on the longer
 // term. Field numbers are the wire contract: never reuse one.
 syntax = "proto3";
 package cella;
@@ -164,7 +164,7 @@ message Valve {
 }
 
 // The gRPC face of the same vocabulary, outside every VMM: the
-// engine presides -- events in, decisions out.
+// engine decides -- events in, decisions out.
 service Engine {
-  rpc Preside(stream Event) returns (stream Decision);
+  rpc Decide(stream Event) returns (stream Decision);
 }

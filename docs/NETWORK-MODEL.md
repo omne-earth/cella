@@ -279,8 +279,8 @@ neither does any other network binary.
 **One language.** `proto/cella.proto` defines the vocabulary:
 Event (an operation parked, released, or lapsed), Operation (id,
 destination, both clocks), Decision, Valve, and `service Engine {
-rpc Preside(stream Event) returns (stream Decision) }`. The verbs
-speak it today; an engine that presides later speaks the same
+rpc Decide(stream Event) returns (stream Decision) }`. The verbs
+speak it today; an engine that arrives later speaks the same
 schema, and nothing gets rewritten. gRPC never enters a VMM.
 
 ### N5 -- the control and lifecycle planes
@@ -322,9 +322,9 @@ interface carries an unmanaged mode.
 Cella ends as the enforcement primitive: every crossing named,
 held, decided by someone else, witnessed. The items below build on
 that primitive, in order, at the proto seam -- each one belongs to
-a presiding engine, not to cella.
+the world engine, not to cella.
 
-1. The engine: `service Engine` presides over the Event stream and
+1. The engine: `service Engine` receives the Event stream and
    answers with Decisions -- the judge becomes a program.
 2. The appliance pair: a gateway machine between a member and the
    world, judging as a resident.
@@ -334,7 +334,7 @@ a presiding engine, not to cella.
    trusts its own CA from birth.
 5. DNS as a service: resolution becomes a parkable operation on a
    name.
-6. Ownership of peer patience: the presider manages what the
+6. Ownership of peer patience: the engine manages what the
    world's timeouts will bear.
 7. The timeline rewrite: application-layer timestamps translated
    into the machine's frame at the one boundary.
