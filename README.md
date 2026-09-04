@@ -9,7 +9,7 @@ can stop a machine in one instant. You can keep the machine as
 files. You can resume it, and the guest cannot detect the stop.
 You can copy it, archive it, and judge each frame at its border.
 
-## The ideas, in order
+## Design principles
 
 1. **A machine is files.** A directory is a machine: manifest,
    disk, RAM image, sidecar. Each verb is a transaction on one
@@ -32,6 +32,33 @@ You can copy it, archive it, and judge each frame at its border.
 6. **Worlds contain worlds.** A guest can run cella and can host
    its own guests. The same stack operates one level down
    (docs/NESTED-BOOT.md).
+
+## Cryogenic scope
+
+The word is a claim, and the claim has three parts:
+
+1. **Time stops with the machine.** A freeze stops the guest's
+   clocks, its timers, its TSC, and its entropy, not only its
+   execution. A thaw continues them from the frozen instant. The
+   guest does not age across the gap, and no measurement from
+   inside can show that the gap existed. The probes measure this
+   at each nesting depth (docs/FREEZE-THAW.md).
+2. **The frozen state is inert and exact.** A frozen machine is
+   two files. No process runs, nothing decays, and nothing costs.
+   A thaw after an hour or after a year resumes the same instant.
+   The RNG state persists across the thaw, by design: the
+   cryogenic principle applies to the full machine state, and a
+   reseed would be the gap made visible. A branch copies the
+   instant into twins that share the CRNG state of the fork;
+   divergence comes from the world, never from a reseed
+   (docs/LIFECYCLE.md, "The universe family").
+3. **The gap is where the world acts.** A machine freezes at the
+   moment it needs something: its own network request parks, and
+   the park is the freeze. A judge decides while the machine
+   sleeps, the world can grow to meet the request
+   (docs/WORLD-ENGINE.md), and the thaw delivers the answer into
+   a guest for which no time passed. The freeze decouples the
+   machine's time from the judgment's.
 
 ## Quick start
 
