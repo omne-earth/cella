@@ -112,4 +112,34 @@ if [ "$RUNG" = w2 ]; then
     echo; echo "PASS: engine-w2 -- the decision lands"; exit 0
 fi
 
+say "w3: stillness on engine halt -- the operation waits, nothing defaults"
+kill "$MOTOR_PID" 2>/dev/null; wait "$MOTOR_PID" 2>/dev/null || true; MOTOR_PID=""
+sleep 1
+B_REL=$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "released id=\|lapsed id=" || true)
+if [ -f "$M/state" ]; then "$BIN" thaw "$VM" >/dev/null 2>&1 || true; sleep 1; fi
+type_in "$VM" "echo held > /dev/udp/192.168.210.1/$WORLD_PORT || true; echo se\"nt2\""
+sleep 8
+A_REL=$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "released id=\|lapsed id=" || true)
+[ "$A_REL" -gt "$B_REL" ] && { echo "FAIL: something decided while the engine was halted"; exit 1; }
+"$BIN" gateway "$VM" show | grep -qE "^[0-9a-f]{32} .*held$" || { echo "FAIL: no held operation stands -- where did it go?"; exit 1; }
+echo "  the engine halted; the operation waits; nothing defaulted"
+
+say "w3: a restarted engine resumes judging the same hold"
+"$ENG" motor --listen "127.0.0.1:$DIAL_PORT" --allow "192.168.210.1:*" > "$MOTOR_LOG" 2>&1 &
+MOTOR_PID=$!
+sleep 1
+# The old bridge halted with its stream; a new one carries on.
+"$ENG" "$VM" --dial "127.0.0.1:$DIAL_PORT" > "$CELLA_HOME/bridge2.log" 2>&1 &
+BRIDGE_PID=$!
+deadline=$((SECONDS + 40))
+until [ "$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "released id=\|lapsed id=" || true)" -gt "$B_REL" ]; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the restarted engine never judged the waiting hold"; exit 1; }
+    if [ -f "$M/state" ]; then "$BIN" thaw "$VM" >/dev/null 2>&1 || true; fi
+    sleep 1
+done
+echo "  the hold outlived the halt: judged by the engine's second life"
+if [ "$RUNG" = w3 ]; then
+    echo; echo "PASS: engine-w3 -- stillness on engine halt"; exit 0
+fi
+
 echo "FAIL: rung $RUNG is not built yet"; exit 1
