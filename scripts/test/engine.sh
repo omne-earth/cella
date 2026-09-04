@@ -142,4 +142,37 @@ if [ "$RUNG" = w3 ]; then
     echo; echo "PASS: engine-w3 -- stillness on engine halt"; exit 0
 fi
 
+say "w4: the frozen machine -- decisions stage, and the thaw applies them"
+# A fresh park: the guest's own egress freezes it (the park is the
+# freeze), so the machine has no pid when the engine's decision
+# arrives -- the bridge's kick must stage, not error.
+if [ -f "$M/state" ]; then "$BIN" thaw "$VM" >/dev/null 2>&1 || true; sleep 1; fi
+B_REL=$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "released id=" || true)
+V_SIZE=$(stat -c %s "$M/verdict" 2>/dev/null || echo 0)
+type_in "$VM" "echo staged > /dev/udp/192.168.210.1/$WORLD_PORT || true; echo se\"nt3\""
+deadline=$((SECONDS + 30))
+until [ -f "$M/state" ]; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the park never froze the machine"; exit 1; }
+    sleep 1
+done
+deadline=$((SECONDS + 30))
+until [ "$(stat -c %s "$M/verdict" 2>/dev/null || echo 0)" -gt "$V_SIZE" ]; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: no decision staged against the frozen machine"; exit 1; }
+    sleep 1
+done
+kill -0 "$BRIDGE_PID" 2>/dev/null || { echo "FAIL: the bridge halted on the pidless kick"; exit 1; }
+[ "$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "released id=" || true)" -gt "$B_REL" ] \
+    && { echo "FAIL: a decision applied against a frozen machine"; exit 1; }
+echo "  the decision staged in the verdict file; the frozen machine holds"
+"$BIN" thaw "$VM" >/dev/null
+deadline=$((SECONDS + 30))
+until [ "$("$BIN" --dump-ledger "$M/network/ledger" 2>/dev/null | grep -c "released id=" || true)" -gt "$B_REL" ]; do
+    [ $SECONDS -lt $deadline ] || { echo "FAIL: the thaw never applied the staged decision"; exit 1; }
+    sleep 1
+done
+echo "  the thaw applied the staged decision, in park order"
+if [ "$RUNG" = w4 ]; then
+    echo; echo "PASS: engine-w4 -- the frozen machine"; exit 0
+fi
+
 echo "FAIL: rung $RUNG is not built yet"; exit 1

@@ -28,7 +28,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke smoke-shell smoke-boot smoke-thaw \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
-        smoke-engine engine-w1 engine-w2 engine-w3 \
+        smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 \
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
         smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire \
@@ -92,7 +92,7 @@ SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
         smoke-universe smoke-ledger smoke-chain \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
-        smoke-engine engine-w1 engine-w2 engine-w3 \
+        smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5
 empty :=
@@ -449,9 +449,16 @@ engine-w3: build-smoke golden
 	$(LOG)
 	$(SCRIPTS)/test/engine.sh w3
 
-## The world-engine gates, in dependency order (w1-w3 today; w4-w5
-## land next)
-smoke-engine: engine-w1 engine-w2 engine-w3
+## engine-w4 (docs/WORLD-ENGINE.md, "The gates"): the frozen machine --
+## decisions stage in the verdict file, the pidless kick stages
+## without error, and the thaw applies in park order
+engine-w4: build-smoke golden
+	$(LOG)
+	$(SCRIPTS)/test/engine.sh w4
+
+## The world-engine gates, in dependency order (w1-w4 today; w5 lands
+## next)
+smoke-engine: engine-w1 engine-w2 engine-w3 engine-w4
 
 ## A machine takes N nics: a two-nic boot, both present in the guest,
 ## every crossing decided per nic
