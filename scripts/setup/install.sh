@@ -5,7 +5,7 @@
 # scripts/ depend on, then checks /dev/kvm access. Every step is
 # idempotent, so it's safe to re-run after e.g. a fresh install or a
 # new machine. The lab flavor never installs (ruled 2026-09-02):
-# the lab is the checkout, target/smoke/* is its home, and this
+# the lab is the checkout, target/lab/* is its home, and this
 # field install is the only install.
 #
 # Usage: scripts/setup/install.sh

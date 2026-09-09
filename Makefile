@@ -28,7 +28,7 @@ BUSYBOX_VERSION ?= 1.37.0
 GUEST_BASH_VERSION ?= 5.3
 export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 
-.PHONY: help build build-smoke install debug check lint fmt fmt-check \
+.PHONY: help build build-lab install debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested  \
         boot enter freeze thaw remove doctor \
@@ -67,7 +67,7 @@ help:
 	echo "cella -- build, lint, and test targets"
 	echo ""
 	echo "Build:"
-	$(call help_section,build|build-smoke|install|debug|check|lint|fmt|fmt-check)
+	$(call help_section,build|build-lab|install|debug|check|lint|fmt|fmt-check)
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	$(call help_section,unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-seccomp-vmm-kvm|test-seccomp-personas|test-seccomp-gateway|test-seccomp-universe|test-seccomp-build|test-seccomp-doctor|test-seccomp-network|test-seccomp-probe|test-seccomp-machine|test-machine|test-one-door|test-witness)
@@ -121,13 +121,13 @@ build: $(CELLA_DEV)
 
 # The lab flavor: release-sized, debug-assertions on -- the console
 # exists. Every smoke and probe pins to it (see TESTING.md).
-CELLA_SMOKE := target/smoke/cella
-$(CELLA_SMOKE): $(shell find crates -name '*.rs') Cargo.toml Cargo.lock
+CELLA_LAB := target/lab/cella
+$(CELLA_LAB): $(shell find crates -name '*.rs') Cargo.toml Cargo.lock
 	$(LOG)
-	$(CARGO) build --profile smoke
+	$(CARGO) build --profile lab
 
-## Lab build (target/smoke/cella): release-sized with the console on
-build-smoke: $(CELLA_SMOKE)
+## Lab build (target/lab/cella): release-sized with the console on
+build-lab: $(CELLA_LAB)
 
 ## Debug build (target/debug/cella), faster to compile
 debug:
@@ -198,7 +198,7 @@ test-jail: build
 
 ## Lane a's gate (1.6.14a): per-machine sub-uid, cross-machine refusal, bind-
 ## set refusal (scripts/test/jail-identity.sh)
-test-jail-identity: build-smoke golden
+test-jail-identity: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/jail-identity.sh
 
@@ -352,7 +352,7 @@ remove: $(CELLA_DEV)
 
 ## A shell learns a value, freezes, thaws, and remembers -- the one gate that
 ## drives the machine through enter (scripts/test/shell.sh)
-smoke-shell: build-smoke golden
+smoke-shell: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/shell.sh
 
@@ -360,7 +360,7 @@ smoke-shell: build-smoke golden
 ## (scripts/test/boot.sh). Needs both flavors: the console byte comes
 ## from the smoke binary, and the enter refusal is asserted against a
 ## fresh release binary.
-smoke-boot: build-smoke build golden
+smoke-boot: build-lab build golden
 	$(LOG)
 	$(SCRIPTS)/test/boot.sh
 
@@ -383,18 +383,18 @@ smoke-thaw: build golden
 	$(MAKE) probe-freeze-thaw-clock CELLA_POST_THAW_SECS=0
 
 ## cella hosts cella, no network on either layer
-smoke-nested-boot-airgapped: build-smoke golden-nested
+smoke-nested-boot-airgapped: build-lab golden-nested
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh airgapped
 
 ## cella hosts cella, the outer guest networked, the inner airgapped
-smoke-nested-boot-hybrid: build-smoke golden-nested
+smoke-nested-boot-hybrid: build-lab golden-nested
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh hybrid
 
 ## cella hosts cella, both layers networked (the outer init pings the inner
 ## guest)
-smoke-nested-boot-www: build-smoke golden-nested
+smoke-nested-boot-www: build-lab golden-nested
 	$(LOG)
 	$(SCRIPTS)/test/nested-boot.sh www
 
@@ -411,19 +411,19 @@ smoke-machine: $(CELLA_DEV)
 ## The gateway ladder: the appliance shape over wires -- the agent reaches
 ## the world only through the gateway machine, and the pair freezes and
 ## thaws together
-smoke-gateway: build-smoke golden
+smoke-gateway: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/gateway.sh
 
 ## The wire plane (1.6.14e): two machines, one wire, no host object; both
 ## membranes judge; the frozen peer's mail is discarded and counted
-smoke-wire: build-smoke golden
+smoke-wire: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/wire.sh
 
 ## The world plane, stateless half (1.6.14e): --net world -- ARP and gateway
 ## echo at the edge, ICMP/UDP through sockets, replies park incoming
-smoke-world: build-smoke golden
+smoke-world: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/world.sh
 
@@ -442,34 +442,34 @@ smoke-translator-port-neg: build golden
 ## engine-w1 (docs/WORLD-ENGINE.md, "The gates"): the stream stands --
 ## the bridge dials the motor, and a park arrives as a
 ## well-formed Event
-engine-w1: build-smoke golden
+engine-w1: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/engine.sh w1
 
 ## engine-w2 (docs/WORLD-ENGINE.md, "The gates"): the decision lands --
 ## the engine's release delivers and its refusal lapses with the why
-engine-w2: build-smoke golden
+engine-w2: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/engine.sh w2
 
 ## engine-w3 (docs/WORLD-ENGINE.md, "The gates"): stillness on engine
 ## halt -- the hold waits, nothing defaults, and a restarted engine
 ## judges it
-engine-w3: build-smoke golden
+engine-w3: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/engine.sh w3
 
 ## engine-w4 (docs/WORLD-ENGINE.md, "The gates"): the frozen machine --
 ## decisions stage in the verdict file, the pidless kick stages
 ## without error, and the thaw applies in park order
-engine-w4: build-smoke golden
+engine-w4: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/engine.sh w4
 
 ## engine-w5 (docs/WORLD-ENGINE.md, "The gates"): two judges -- the
 ## operator's hand interleaves with the stream, both witnessed, no
 ## decision applied twice
-engine-w5: build-smoke golden
+engine-w5: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/engine.sh w5
 
@@ -478,20 +478,20 @@ smoke-engine: engine-w1 engine-w2 engine-w3 engine-w4 engine-w5
 
 ## A machine takes N nics: a two-nic boot, both present in the guest,
 ## every crossing decided per nic
-smoke-multinet: build-smoke golden
+smoke-multinet: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/multinet.sh
 
 ## The universe family end to end: branch (frozen twin, rock to rock), archive
 ## (the latch), inspect (evidence at /rock, byte-identical after)
-smoke-universe: build-smoke golden
+smoke-universe: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/universe.sh
 
 ## No datagram leaves undecided, proven from within the guest: closed drops
 ## UDP, open parks it (the park is the freeze), a refusal delivers nothing;
 ## the guest's own ICMP lapses the same way (scripts/test/udp.sh)
-smoke-udp: build-smoke golden
+smoke-udp: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/udp.sh
 
@@ -505,7 +505,7 @@ smoke-witness: build golden
 ## Judgment requires sight, sight requires stillness: inspect renders a frozen
 ## hold's plaintext, seals the sealed, witnesses the look in the chronicle,
 ## refuses a running machine (scripts/test/inspection.sh)
-smoke-inspection: build-smoke golden
+smoke-inspection: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/inspection.sh
 
@@ -525,13 +525,13 @@ smoke-ping: build golden
 ## The gateway verbs: born closed asserted, open arms the membrane, show
 ## lists the hold, release/refuse decide by id prefix, close returns the
 ## dark (docs/NETWORK-MODEL.md)
-smoke-gateway-cli: build-smoke golden
+smoke-gateway-cli: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/gateway-cli.sh
 
 ## 1.2: hold, one fetch parks, the ledger holds one operation with an id and
 ## both clocks (docs/NETWORK-MODEL.md)
-smoke-ledger: build-smoke golden
+smoke-ledger: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/ledger.sh
 
@@ -590,7 +590,7 @@ smoke-cella-probe: smoke-witness smoke-universe probe-inception
 
 ## The console gates: the scripts here either type into the guest
 ## through cella enter or assert on console.log (nested-boot), so the
-## lab flavor (build-smoke) is the subject
+## lab flavor (build-lab) is the subject
 smoke-debug: smoke-shell smoke-boot smoke-gateway smoke-gateway-cli \
         smoke-wire smoke-world smoke-multinet smoke-universe smoke-udp \
         smoke-inspection smoke-ledger smoke-engine smoke-device-state \
@@ -617,33 +617,33 @@ smoke: test smoke-release smoke-debug
 
 ## AC1: the disk survives the thaw -- transport state rides the sidecar (v7);
 ## write a file, freeze, thaw, read it back, sync; smoke-shell drops ROOT=ro
-device-state-ac1: build-smoke golden
+device-state-ac1: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac1
 
 ## AC2: the network survives the thaw -- the machine-lifetime translator
 ## holds the flows across the freeze; the gate exercises the nic across
 ## freeze and thaw, every answer decided
-device-state-ac2: build-smoke golden
+device-state-ac2: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac2
 
 ## AC3: the in-flight layer is exact -- a parked egress frame is delivered and
 ## completed after the thaw; the same request works, with no retransmission
-device-state-ac3: build-smoke golden
+device-state-ac3: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac3
 
 ## AC4: the verdict is external -- the request toward a world that does not
 ## exist parks and freezes; the world grows while the machine sleeps; the
 ## release lands the same request (the world-ratchet gate)
-device-state-ac4: build-smoke golden
+device-state-ac4: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac4
 
 ## AC5: the true world -- a real internet fetch crosses the total membrane,
 ## one decision per frame (skips when offline; rides the peer-patience bound)
-device-state-ac5: build-smoke golden
+device-state-ac5: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac5
 
@@ -671,7 +671,6 @@ smoke-clean:
 init:
 	$(LOG)
 	$(SCRIPTS)/setup/install.sh
-	$(MAKE) 
 	$(MAKE) golden
 	$(MAKE) golden-nested
 
@@ -812,19 +811,19 @@ export CELLA_OBSERVE_SECS
 ## src/bin/cella-probe/sregs.rs)
 probe-sregs: build
 	$(LOG)
-	target/smoke/cella-probe sregs
+	target/lab/cella-probe sregs
 
 ## Does the guest's wall-clock land near real time at boot, with no RTC
 ## device? (needs /dev/kvm; see src/bin/cella-probe/wallclock.rs)
-probe-wallclock: build-smoke golden
+probe-wallclock: build-lab golden
 	$(LOG)
-	target/smoke/cella-probe wallclock
+	target/lab/cella-probe wallclock
 
 ## Does freeze/thaw leak real elapsed time into the guest's clock? (needs
 ## /dev/kvm + tap0, takes ~15s; see src/bin/cella-probe/freeze_thaw_clock.rs)
-probe-freeze-thaw-clock: build-smoke golden
+probe-freeze-thaw-clock: build-lab golden
 	$(LOG)
-	target/smoke/cella-probe freeze-thaw-clock
+	target/lab/cella-probe freeze-thaw-clock
 
 # Findings from the 2026-08-30 investigation of the thaw delay:
 # - The excess across the freeze is a constant cost of each thaw. It does
@@ -857,18 +856,18 @@ probe-freeze-thaw-clock: build-smoke golden
 #   crossing interval, because the wake-up is scheduled in the same clock.
 ## probe-freeze-thaw-clock with the stage-2 prefault at thaw
 ## (CELLA_THAW_PREFAULT=ept)
-probe-prefault-ept: build-smoke golden
+probe-prefault-ept: build-lab golden
 	$(LOG)
-	CELLA_THAW_PREFAULT=ept target/smoke/cella-probe freeze-thaw-clock
+	CELLA_THAW_PREFAULT=ept target/lab/cella-probe freeze-thaw-clock
 
 ## The freeze and thaw clock probe one layer deep: cella freezes and thaws a
 ## guest inside a cella guest
-probe-inception: build-smoke golden-nested
+probe-inception: build-lab golden-nested
 	$(LOG)
 	$(SCRIPTS)/test/inception.sh
 
 ## Watch the thawed guest for 30 s: any kernel complaint (watchdog, unstable,
 ## oops) is a FAIL
-probe-thaw-gate: build-smoke golden
+probe-thaw-gate: build-lab golden
 	$(LOG)
-	CELLA_POST_THAW_SECS=30 target/smoke/cella-probe freeze-thaw-clock
+	CELLA_POST_THAW_SECS=30 target/lab/cella-probe freeze-thaw-clock

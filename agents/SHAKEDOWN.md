@@ -20,7 +20,7 @@ work turns fully "enforced".
 - Negative tests are mandatory: what must not happen gets
   asserted, not assumed. Every lane's gate below names its
   negatives.
-- Run gates with make targets; gate binaries are target/smoke/*
+- Run gates with make targets; gate binaries are target/lab/*
   (the lab flavor). The field flavor is target/release/*.
 - Stray VMMs are named cella-vmm; `pkill -9 -x cella-vmm` and
   remove /tmp/cella-* sandboxes before rerunning a failed gate.

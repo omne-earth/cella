@@ -119,7 +119,7 @@ fn repo_root() -> PathBuf {
 fn sibling_cella(root: &std::path::Path) -> PathBuf {
     // The probe is a lab instrument: it reads consoles, thus it must
     // drive its own flavor. The -debug sibling wins (the installed
-    // lab), then the plain sibling (the repo's target/smoke, where
+    // lab), then the plain sibling (the repo's target/lab, where
     // both carry bare names), then the lab build under the root --
     // never the field binary, whose machines are dark.
     if let Ok(me) = std::env::current_exe() {
@@ -130,7 +130,7 @@ fn sibling_cella(root: &std::path::Path) -> PathBuf {
             }
         }
     }
-    root.join("target/smoke/cella-vmm")
+    root.join("target/lab/cella-vmm")
 }
 
 fn golden(axis: &str, flavor: &str, file: &str) -> PathBuf {

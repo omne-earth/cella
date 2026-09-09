@@ -6,7 +6,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-BIN=target/smoke/cella
+BIN=target/lab/cella
 # The knock port: random per run, so a leaked translator from an
 # earlier gate (a stale bind on a fixed port swallows knocks
 # silently) can never poison this one. Four digits, unprivileged.

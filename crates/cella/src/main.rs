@@ -54,7 +54,7 @@ fn print_help() {
     );
     // enter exists only in the lab: the release help does not offer it.
     if cfg!(debug_assertions) {
-        println!("  cella enter <machine>                              attach the console (the lab flavor only)");
+        println!("  cella enter <machine>                              attach the console (the lab profile only)");
     }
     println!(
         "  cella freeze <machine>                             stop the machine and keep the instant"

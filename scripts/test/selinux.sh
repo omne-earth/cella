@@ -10,10 +10,10 @@
 set -uo pipefail
 
 cd "$(dirname "$0")/../.."
-BIN=target/smoke/cella
-DOCTOR=target/smoke/cella-doctor
-[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
-[ -f "$DOCTOR" ] || { echo "SKIP: $DOCTOR not built -- run: make build-smoke"; exit 0; }
+BIN=target/lab/cella
+DOCTOR=target/lab/cella-doctor
+[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-lab"; exit 0; }
+[ -f "$DOCTOR" ] || { echo "SKIP: $DOCTOR not built -- run: make build-lab"; exit 0; }
 
 if ! command -v semodule >/dev/null || ! command -v runcon >/dev/null; then
     echo "SKIP: semodule or runcon not on PATH -- install policycoreutils"

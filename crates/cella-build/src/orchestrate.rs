@@ -678,7 +678,7 @@ fn build_static_binaries() -> Result<(Vec<PathBuf>, PathBuf), String> {
     let root = repo_root();
     println!("cella: building the static cella and the static cella-probe");
     let rustflags = "RUSTFLAGS=-C target-feature=+crt-static";
-    // The smoke profile: release-sized, debug-assertions on. The
+    // The lab profile: release-sized, debug-assertions on. The
     // in-image cella keeps its console -- the nested and inception
     // gates read the inner machines through it, in the lab.
     run_in_toolbox_quiet(
@@ -690,12 +690,12 @@ fn build_static_binaries() -> Result<(Vec<PathBuf>, PathBuf), String> {
             "cargo",
             "build",
             "--profile",
-            "smoke",
+            "lab",
             "--target",
             "x86_64-unknown-linux-gnu",
         ],
     )?;
-    let out = root.join("target/x86_64-unknown-linux-gnu/smoke");
+    let out = root.join("target/x86_64-unknown-linux-gnu/lab");
     // Every persona is its own binary since the split (1.6.13): the
     // in-guest world needs the whole set -- the shim routes, and the
     // verbs the nested init drives exec their siblings.

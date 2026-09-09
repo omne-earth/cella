@@ -7,7 +7,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-BIN=target/smoke/cella
+BIN=target/lab/cella
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella golden:rootfs:gateway || exit 0
 

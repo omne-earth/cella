@@ -62,16 +62,51 @@ The word is a claim, and the claim has three parts:
 
 ## Quick start
 
+### Install, once per host
+
+The dependencies and the field binaries land in `~/.cella/bin`
+(the one sudo step). Log out and in again (or run: `source
+~/.bashrc`) to apply the new PATH and the kvm group.
+
 ```sh
-make test          # seconds, no KVM -- the no-KVM battery
-make init          # once per host: deps, toolbox, goldens (the one sudo moment)
+scripts/setup/install.sh
+```
+
+### Build the goldens, once per host
+
+One kernel and three rootfs flavors.
+
+```sh
+cella build kernel canonical
+cella build rootfs canonical
+cella build rootfs cella
+cella build rootfs gateway
+```
+
+### Prove the host
+
+The full lifecycle against a real guest, in a sandboxed home.
+```sh
+cella selftest
+```
+For a more comprehensive proof:
+```sh
+make test # no KVM required
+make smoke # KVM required, full battery
+```
+
+### Run a machine
+
+When the workload in the machine requests example.com, the request
+parks at the gateway border and waits: `show` lists each held
+crossing with its id, and `release` lets one crossing through.
+
+```sh
 cella create room --net world
 cella start room
 cella gateway room open
-# inside, say the workload asks for example.com:
-# the request parks at the gateway border and waits
-cella gateway room show          # the held crossings, one line each with id
-cella gateway room release <id>  # let one crossing through
+cella gateway room show
+cella gateway room release <id>
 ```
 
 The machine is dark before `open`. After `open`, each crossing
@@ -84,7 +119,7 @@ shapes, E1-E6, are in docs/EXAMPLES.md.
 
 ```
 cella build <kernel|rootfs> <flavor>
-cella create <machine> [--net SPEC] | start <machine> | enter <machine>
+cella create <machine> [--net SPEC] | start <machine> | enter <machine> (the lab profile only)
 cella freeze <machine> | thaw <machine> | stop <machine> | destroy <machine>
 cella list | info <machine> | selftest
 cella gateway <machine> show | release <id> | refuse <id> | inspect <id> | open | close

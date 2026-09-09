@@ -6,15 +6,15 @@ set -euo pipefail
 
 RUNG="${1:-w1}"
 cd "$(dirname "$0")/../.."
-BIN=target/smoke/cella
-ENG=target/smoke/cella-engine
+BIN=target/lab/cella
+ENG=target/lab/cella-engine
 # The knock port: random per run, so a leaked translator from an
 # earlier gate can never poison this one. Four digits, unprivileged.
 WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 # The engine's own listener: distinct from the knock port.
 DIAL_PORT=$(( (RANDOM % 8976) + 1024 ))
-[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
-[ -f "$ENG" ] || { echo "SKIP: $ENG not built -- run: make build-smoke"; exit 0; }
+[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-lab"; exit 0; }
+[ -f "$ENG" ] || { echo "SKIP: $ENG not built -- run: make build-lab"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 
 say() { echo; echo "==> $1"; }

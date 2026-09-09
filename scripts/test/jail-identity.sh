@@ -16,9 +16,9 @@
 set -ueo pipefail
 
 cd "$(dirname "$0")/../.."
-BIN=target/smoke/cella
+BIN=target/lab/cella
 
-[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
+[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-lab"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:canonical || exit 0
 command -v newuidmap >/dev/null || { echo "SKIP: newuidmap not installed"; exit 0; }
 command -v setfacl >/dev/null || { echo "SKIP: setfacl (the acl package) not installed"; exit 0; }

@@ -23,7 +23,7 @@ MODE="${1:-airgapped}"
 case "$MODE" in airgapped|hybrid|www) ;; *) echo "usage: $0 airgapped|hybrid|www" >&2; exit 2;; esac
 
 cd "$(dirname "$0")/../.."
-BIN=target/smoke/cella
+BIN=target/lab/cella
 # The knock port: random per run, so a leaked translator from an
 # earlier gate (a stale bind on a fixed port swallows knocks
 # silently) can never poison this one. Four digits, unprivileged.

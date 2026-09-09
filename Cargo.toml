@@ -51,6 +51,6 @@ lto = true
 # The lab profile: release-sized (the debug profile's binary does not
 # fit the nested images), with debug-assertions on -- the console
 # exists only where they are on. The smokes and probes pin to it.
-[profile.smoke]
+[profile.lab]
 inherits = "release"
 debug-assertions = true
