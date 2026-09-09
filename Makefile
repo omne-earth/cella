@@ -2,7 +2,14 @@ SHELL := /bin/bash
 .ONESHELL:
 .SHELLFLAGS := -ueo pipefail -c
 LOGDIR := .logs
-LOG = @mkdir -p $(LOGDIR); CELLA_LOG_FILE="$(LOGDIR)/$(subst /,_,$@)-$$(date +%Y%m%d-%H%M%S).log"; exec > >(tee -a "$$CELLA_LOG_FILE") 2>&1; echo "=== make $@ -- $$(date -Is) ==="
+# One directory per top-level invocation: the run id is minted once
+# (:= -- a lazy ?= would re-run date at every expansion) and exported,
+# so a sub-make (smoke-thaw's probes) logs into the same run.
+ifndef CELLA_RUN
+CELLA_RUN := $(shell date +%Y%m%d-%H%M%S)
+endif
+export CELLA_RUN
+LOG = @mkdir -p $(LOGDIR)/$(CELLA_RUN); CELLA_LOG_FILE="$(LOGDIR)/$(CELLA_RUN)/$(subst /,_,$@).log"; exec > >(tee -a "$$CELLA_LOG_FILE") 2>&1; echo "=== make $@ -- $$(date -Is) ==="
 
 CARGO ?= cargo
 SCRIPTS := scripts
