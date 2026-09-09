@@ -52,7 +52,10 @@ fn print_help() {
     println!(
         "  cella start <machine>                              run the machine, detached and jailed"
     );
-    println!("  cella enter <machine>                              attach the console (the lab flavor only)");
+    // enter exists only in the lab: the release help does not offer it.
+    if cfg!(debug_assertions) {
+        println!("  cella enter <machine>                              attach the console (the lab flavor only)");
+    }
     println!(
         "  cella freeze <machine>                             stop the machine and keep the instant"
     );

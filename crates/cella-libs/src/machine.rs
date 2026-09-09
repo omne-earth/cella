@@ -1291,6 +1291,7 @@ pub fn stop(name: &str) -> Result<(), String> {
 /// Connect to the console socket of a running machine. A unix socket
 /// path caps at ~108 bytes: connect by the file name from inside the
 /// machine directory, thus any home path works.
+#[cfg(debug_assertions)]
 pub fn connect_console(name: &str) -> Result<std::os::unix::net::UnixStream, String> {
     if !is_running(name) {
         return Err(format!(
@@ -1305,15 +1306,20 @@ pub fn connect_console(name: &str) -> Result<std::os::unix::net::UnixStream, Str
     connected.map_err(|e| format!("connecting to {}: {e}", dir.join("console.sock").display()))
 }
 
+/// The release build carries no console codepath at all: this stub is
+/// the whole of enter, and the attach machinery below is compiled out.
+#[cfg(not(debug_assertions))]
+pub fn enter(_name: &str) -> Result<(), String> {
+    Err(
+        "enter is a debug affordance -- a release machine is dark: no console \
+         exists, and the machine is observed through files, verbs, and the \
+         chronicle"
+            .to_string(),
+    )
+}
+
+#[cfg(debug_assertions)]
 pub fn enter(name: &str) -> Result<(), String> {
-    if !cfg!(debug_assertions) {
-        return Err(
-            "enter is a debug affordance -- a release machine is dark: no console \
-             exists, and the machine is observed through files, verbs, and the \
-             chronicle"
-                .to_string(),
-        );
-    }
     refuse_rock(name, "enter")?;
     use std::io::{Read, Write};
     let mut stream = connect_console(name)?;
