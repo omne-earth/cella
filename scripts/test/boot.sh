@@ -22,7 +22,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/../.."
-BIN="${CELLA_BIN:-$ROOT/target/smoke/cella}"
+BIN="$ROOT/target/smoke/cella"
 # The knock port: random per run, so a leaked translator from an
 # earlier gate (a stale bind on a fixed port swallows knocks
 # silently) can never poison this one. Four digits, unprivileged.

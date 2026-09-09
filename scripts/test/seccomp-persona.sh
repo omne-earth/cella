@@ -10,7 +10,7 @@ set -uo pipefail  # not -e: we need the non-zero/signal exit code
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAME="${1:?usage: seccomp-persona.sh <persona-binary-name>}"
-BIN="${CELLA_BIN:-$HERE/../../target/release/$NAME}"
+BIN="$HERE/../../target/release/$NAME"
 
 if [ ! -x "$BIN" ]; then
     echo "FAIL: $BIN not built (run: make build)"

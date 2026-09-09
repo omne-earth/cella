@@ -8,7 +8,7 @@
 set -uo pipefail  # not -e: we need the non-zero/signal exit code
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${CELLA_BIN:-$HERE/../../target/release/cella-vmm}"
+BIN="$HERE/../../target/release/cella-vmm"
 
 if [ ! -x "$BIN" ]; then
     echo "FAIL: $BIN not built (run: make build)"

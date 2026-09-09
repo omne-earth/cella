@@ -5,7 +5,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${CELLA_BIN:-$HERE/../../target/release/cella}"
+BIN="$HERE/../../target/release/cella"
 
 if ! command -v bwrap >/dev/null; then
     echo "SKIP: bubblewrap not installed"

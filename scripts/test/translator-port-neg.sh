@@ -8,11 +8,11 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-BIN=target/smoke/cella
+BIN=target/release/cella
 # The knock port: random per run, so a leaked translator from an
 # earlier gate can never poison this one. Four digits, unprivileged.
 WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
-[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-smoke"; exit 0; }
+[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:cella || exit 0
 
 say() { echo; echo "==> $1"; }

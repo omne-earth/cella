@@ -25,7 +25,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         unit-test integration-test selftest test test-all \
         init golden golden-nested  \
         boot enter freeze thaw remove doctor \
-        smoke smoke-shell smoke-boot smoke-thaw \
+        smoke smoke-debug smoke-release smoke-shell smoke-boot smoke-thaw \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
         smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 engine-w5 \
@@ -82,7 +82,8 @@ help:
 
 # The smoke roster, one list: the help section renders it, and the
 # alternation below is generated -- a new gate is added here once.
-SMOKE_TARGETS := smoke smoke-shell smoke-boot smoke-thaw smoke-ping \
+SMOKE_TARGETS := smoke smoke-debug smoke-release \
+        smoke-shell smoke-boot smoke-thaw smoke-ping \
         smoke-udp smoke-collide smoke-inspection smoke-witness \
         smoke-nested-boot \
         smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
@@ -349,14 +350,16 @@ smoke-shell: build-smoke golden
 	$(SCRIPTS)/test/shell.sh
 
 ## Boot a real kernel under KVM all the way to a running init
-## (scripts/test/boot.sh)
-smoke-boot: build-smoke golden
+## (scripts/test/boot.sh). Needs both flavors: the console byte comes
+## from the smoke binary, and the enter refusal is asserted against a
+## fresh release binary.
+smoke-boot: build-smoke build golden
 	$(LOG)
 	$(SCRIPTS)/test/boot.sh
 
 ## Create -> start -> freeze -> verify sidecar -> thaw -> one-shot check, then
 ## the clock probe
-smoke-thaw: build-smoke golden
+smoke-thaw: build golden
 	$(LOG)
 	$(SCRIPTS)/test/thaw.sh
 	# The script cannot see whether the guest keeps its time. A guest that
@@ -425,7 +428,7 @@ smoke-rootless: build
 
 ## The tether (negative): a machine dir removed without destroy orphans no
 ## translator -- the process exits on its own and the knock port frees
-smoke-translator-port-neg: build-smoke golden
+smoke-translator-port-neg: build golden
 	$(LOG)
 	$(SCRIPTS)/test/translator-port-neg.sh
 
@@ -488,7 +491,7 @@ smoke-udp: build-smoke golden
 ## Every verb is an event: machine-scoped verbs in machines/<vm>/audit,
 ## placeless in the root book, uid+gid+persona on each; show twice makes two
 ## entries; the harvest files and says so (scripts/test/witness.sh)
-smoke-witness: build-smoke golden
+smoke-witness: build golden
 	$(LOG)
 	$(SCRIPTS)/test/witness.sh
 
@@ -502,13 +505,13 @@ smoke-inspection: build-smoke golden
 ## The matcher never guesses: a thaw over a colliding sidecar re-mints, holds
 ## every ambiguous frame, delivers none; refused stale ids lapse by the book
 ## (scripts/test/collide.sh)
-smoke-collide: build-smoke golden
+smoke-collide: build golden
 	$(LOG)
 	$(SCRIPTS)/test/collide.sh
 
 ## The valve end to end: born closed fails a ping, open parks the reply and
 ## freezes, release answers, close darkens again (docs/NETWORK-MODEL.md)
-smoke-ping: build-smoke golden
+smoke-ping: build golden
 	$(LOG)
 	$(SCRIPTS)/test/ping.sh
 
@@ -528,7 +531,7 @@ smoke-ledger: build-smoke golden
 ## 1.6.14d: field 15 chains both books by SHA-256 of the predecessor's framed
 ## bytes -- an intact book verifies, a tampered one snaps loudly, a branched
 ## twin's book forks and stays valid (scripts/test/chain.sh)
-smoke-chain: build-smoke golden
+smoke-chain: build golden
 	$(LOG)
 	$(SCRIPTS)/test/chain.sh
 
@@ -571,10 +574,31 @@ smoke-cella-network: smoke-wire smoke-world smoke-multinet \
 ## probe
 smoke-cella-probe: smoke-witness smoke-universe probe-inception
 
-## The whole battery: the no-KVM checks first (fail fast), then one part per
-## CLI, ground first
-smoke: test smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
-        smoke-cella-gateway smoke-cella-network smoke-cella-probe smoke-engine
+# --- The battery, sliced by flavor ---------------------------------
+#
+# The same leaves as the per-CLI parts, cut the other way: the gates
+# that drive the guest through enter (the console, a lab-only
+# affordance) versus the gates that need no console. Together the two
+# groups cover every smoke leaf.
+
+## The console gates: the scripts here either type into the guest
+## through cella enter or assert on console.log (nested-boot), so the
+## lab flavor (build-smoke) is the subject
+smoke-debug: smoke-shell smoke-boot smoke-gateway smoke-gateway-cli \
+        smoke-wire smoke-world smoke-multinet smoke-universe smoke-udp \
+        smoke-inspection smoke-ledger smoke-engine smoke-device-state \
+        smoke-nested-boot probe-inception
+
+## The dark gates: no console anywhere -- these run the field flavor
+## (target/release/cella) and assert only on files, verbs, and the
+## chronicle
+smoke-release: smoke-thaw smoke-machine smoke-rootless \
+        smoke-translator-port-neg smoke-witness smoke-collide smoke-ping \
+        smoke-chain smoke-clean doctor
+
+## The whole battery: the no-KVM checks first (fail fast), then the dark
+## half against the field flavor, then the console half against the lab
+smoke: test smoke-release smoke-debug
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
