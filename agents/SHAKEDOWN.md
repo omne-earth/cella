@@ -20,8 +20,9 @@ work turns fully "enforced".
 - Negative tests are mandatory: what must not happen gets
   asserted, not assumed. Every lane's gate below names its
   negatives.
-- Run gates with make targets; gate binaries are target/lab/*
-  (the lab flavor). The field flavor is target/release/*.
+- Run gates with make targets. The console gates (smoke-debug)
+  run target/lab/* (the lab flavor); the dark gates
+  (smoke-release) run target/release/* (the field flavor).
 - Stray VMMs are named cella-vmm; `pkill -9 -x cella-vmm` and
   remove /tmp/cella-* sandboxes before rerunning a failed gate.
 - KVM batteries do not run concurrently across lanes: prove
@@ -46,7 +47,7 @@ work turns fully "enforced".
   the spawn and jail.sh consume them. The VMM's jail is built by
   the machine persona's spawn (code), reading the same profile
   file.
-- The -debug flavor confines like the field flavor, except the
+- The lab flavor confines like the field flavor, except the
   console surfaces the lab needs (console.sock, enter): the lab
   is an instrument, not an exemption.
 

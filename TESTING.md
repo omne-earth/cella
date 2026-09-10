@@ -49,8 +49,12 @@ do not know what was not checked.
 
 ## The battery, one part per CLI
 
-`make smoke` chains six parts, one per binary. A red part names an
-accused binary -- the same granularity as the per-binary jail,
+`make smoke` runs the no-KVM tier first, then the two flavor
+halves: `smoke-release` (the dark gates, against
+`target/release/cella`) and `smoke-debug` (the console gates,
+against `target/lab`). The six per-CLI parts below are the same
+leaves cut the other way -- the blame direction: a red part names
+an accused binary, the same granularity as the per-binary jail,
 seccomp list, and SELinux domain. Each part runs standalone.
 
 | Part | Accused binary | Gates it runs |
@@ -111,18 +115,22 @@ shapes, E1-E7).
 
 ## Logs
 
-Every target tees its output to `.logs/<target>-<timestamp>.log`.
-When a battery fails:
+Every target tees its output to `.logs/<run-id>/<target>.log` --
+one directory per top-level make invocation, and a sub-make (the
+probes under smoke-thaw) logs into the same run. When a battery
+fails:
 
-1. Do not rerun blindly. Read the newest log for the failing
-   target: the FAIL line names the step and the assertion.
+1. Do not rerun blindly. Read the failing target's log inside the
+   newest `.logs/<run-id>/` directory: the FAIL line names the
+   step and the assertion.
 2. Rerun only the failing part (`make smoke-cella-network`), or
    the single gate (`make smoke-wire`).
 3. Never edit source while a battery runs: the results after the
    edit are tainted, and the battery restarts from clean.
 
 On a shared checkout (a bare-metal run), the same `.logs/`
-directory carries the results back; read them from there.
+directory carries the results back; each run is one
+`.logs/<run-id>/` subdirectory.
 
 ## Knobs
 
@@ -164,11 +172,11 @@ Follow scripts/test/wire.sh as the template:
 ## Line counts
 
 `make lines` separates real source from test code
-(scripts/utils/count_lines.py). As of 2026-09-03:
+(scripts/utils/count_lines.py). As of 2026-09-09:
 
 ```
-SOURCE ONLY (all crates)                  14281
-SOURCE + ALL TESTS (inline + tests/)      16018
+SOURCE ONLY (all crates)                  14924
+SOURCE + ALL TESTS (inline + tests/)      16663
 ```
 
 Ten crates; the largest is cella-vmm, the smallest is the shim

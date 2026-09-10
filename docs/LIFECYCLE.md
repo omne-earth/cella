@@ -112,7 +112,7 @@ stateDiagram-v2
 | stop    | Ends the machine as fast as possible, and clears the transients: ram.img, the pid file, the console socket, and any stale sidecar. An emergency maneuver: in-flight state is disposable, and the next start boots fresh from the disk | Rust only |
 | freeze  | Stops the machine and preserves the in-flight state: RAM, vCPU, clocks, devices, held operations. A machine with an open valve also freezes itself on a park (docs/NETWORK-MODEL.md, "The membrane": the park is the freeze). The next thaw resumes the same instant | Rust only |
 | thaw    | Resumes a frozen machine | Rust only |
-| enter   | Attaches the terminal to the serial console -- the lab flavor alone (debug-assertions on). The release flavor has no console, and enter refuses; the machine is observed through files, verbs, and the chronicle. An exit of the guest shell detaches | Rust only |
+| enter   | Attaches the terminal to the serial console -- the lab flavor alone (debug-assertions on). The release binary is built without the console codepath: no console.sock, no console.log, no attach machinery, and enter is absent from its help (a residual stub only explains that the machine is dark, observed through files, verbs, and the chronicle). An exit of the guest shell detaches | Rust only |
 | destroy | Deletes the machine and its artifacts, once and for all | Rust only |
 | branch  | Copies a still machine: a frozen source yields a frozen twin, a stopped source a fresh-bootable copy, a rock a rock. Records the layer digests | Rust only |
 | archive | Turns a still machine into a rock: storage layers stay, runtime state goes, the manifest latches | Rust only |
@@ -154,9 +154,10 @@ verb refuses.
   present), the runtime state goes (the sidecar: irqchip, vCPU,
   in-flight registers -- archiving a frozen machine deliberately
   discards its instant), and the manifest latches
-  `state: archived`. A rock cannot be started by accident: start,
-  thaw, and enter refuse it by name. Un-archiving, if it ever
-  exists, is its own verb.
+  `state: archived`. A rock cannot be started by accident: start
+  and thaw refuse it by name (and enter too, in the lab flavor
+  where enter exists). Un-archiving, if it ever exists, is its
+  own verb.
 - **inspect <machine>** -- attach the disk of any still machine
   (archived, stopped, or frozen) as evidence, never as a machine:
   a temporary appliance named `<machine>-inspector` boots the stock

@@ -41,7 +41,7 @@ Three layers, one vocabulary:
 2. **The file wire, shipped.** The ledger (N.F.3) holds framed
    Events; the verdict file (N.F.2) holds framed Decisions. The
    files are the resting form of the stream.
-3. **The stream, designed.** The bridge (W.B.1) tails the ledger,
+3. **The stream, shipped.** The bridge (W.B.1) tails the ledger,
    calls `Decide`, and lands each returned Decision in the
    verdict file with a kick. The membrane never learns which
    judge wrote the file.
@@ -73,8 +73,8 @@ The rules of the walk:
 
 ## The operations, via CLI and via engine
 
-Each row is one act of judgment. The CLI form works today; the
-engine form works when the bridge lands. The two forms write the
+Each row is one act of judgment. Both forms work today: the CLI
+by hand, the engine through the bridge. The two forms write the
 same bytes.
 
 ### Observe the holds
@@ -188,7 +188,7 @@ The walk of one run against it:
 
 1. Start the engine (above).
 2. Start the bridge: `cella-engine <machine> --dial 127.0.0.1:1709`
-   (the planned invocation; the bridge is spawned by the harness,
+   (the invocation; the bridge is spawned by the harness,
    the way N.T.1 is spawned by start -- never by the shim).
 3. Create, start, and open the machine through the CLI.
 4. Every park streams to the engine; every Decision lands in the
@@ -223,8 +223,9 @@ teardown asserts that the bridge halted with the run.
    interleaves with the stream. Both hands land, both books
    witness both, and no decision applies twice.
 
-The no-KVM tier gains test-seccomp-engine, and the witness-door
-count includes the new binary when it lands.
+The witness-door count includes the binary (test-witness counts
+seven doors); its seccomp part in the no-KVM tier is still to
+come.
 
 ## Audit
 

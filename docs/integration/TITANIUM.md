@@ -34,8 +34,10 @@ docs/EXAMPLES.md, E1-E2).
 - **One vCPU.** Every cella machine runs a single vCPU today.
   Long compiles are slow; set honest timeouts.
 - **The lab flavor for benches.** The field build has no console.
-  Bench runs use the lab (-debug) binaries so the console
-  transcript lands in the machine's log.
+  Bench runs use the lab binaries (`make build-lab`,
+  `target/lab/*`) so the console transcript lands in the
+  machine's log. Artifact collection needs no console at all:
+  `cella extract` works in the field flavor.
 - **The network is judged, not allowed.** With a world nic, every
   crossing waits for an external decision. The judge is a gRPC
   engine (docs/WORLD-ENGINE.md): the harness starts one, the
@@ -70,8 +72,7 @@ converter and the harness must both honor this.
 Before, without cella (the podman family): the harness reaches
 into the running container at will -- `podman exec` installs the
 agent after start, runs the verifier inside the workload's own
-filesystem, and copies artifacts out of a live machine
-(PODMAN.md notes the exec plumbing down to its tty flags). The
+filesystem, and copies artifacts out of a live machine. The
 workload and its examiner share a room.
 
 With cella, the same task becomes bake, run, collect:

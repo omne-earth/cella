@@ -113,7 +113,10 @@ is distinct (1710; docs/EXAMPLES.md, E2).
   virtualization one layer deeper), no host /dev/kvm access, or no
   nested artifacts.
 - **FAIL**: an incomplete checklist within the timeout. The serial
-  log and the stderr of the outer cella stay on disk.
+  log and the stderr of the outer cella stay on disk, and the
+  make-driven transcript lands in
+  `.logs/<run-id>/smoke-nested-boot-<variant>.log` (one directory
+  per run).
 
 ## Results (2026-08-30)
 
@@ -129,7 +132,9 @@ cells pass unchanged.
 
 ```
 make golden-nested                # build the nested goldens (needs the toolbox)
-make smoke-nested-boot            # all three variants
+make smoke-nested-boot            # all three variants -- console gates:
+                                  # they build the lab flavor (make
+                                  # build-lab) and ride make smoke-debug
 make smoke-nested-boot-airgapped  # one variant at a time
 make smoke-nested-boot-hybrid
 make smoke-nested-boot-www

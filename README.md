@@ -135,7 +135,7 @@ only its own verbs (docs/LIFECYCLE.md, "The verbs").
 
 ```sh
 make test          # no KVM, runs in each environment
-make smoke         # the full battery: one part per binary
+make smoke         # the full battery: the dark half, then the console half
 ```
 
 Each gate is a make target. It reports SKIP with a reason when KVM
@@ -155,7 +155,7 @@ status table is in docs/LIFECYCLE.md, "The security boundary".
 
 ```
 crates/            ten binaries: the shim, the personas, the VMM
-docs/              the law: seven documents, cross-referenced by id
+docs/              the law: eight documents, cross-referenced by id
 scripts/test/      the gates, one per workflow
 security/profiles/ per-binary bwrap, seccomp, and SELinux policy
 tasks/             the boards: PHASE1-core (done), PHASE2-security
