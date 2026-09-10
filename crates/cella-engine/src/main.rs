@@ -16,6 +16,9 @@ mod motor;
 /// The generated vocabulary: the same proto/cella.proto that
 /// cella-libs compiles for the file wire, here with the Engine
 /// service stubs. Same bytes, one contract.
+// result_large_err: tonic's generated client returns Status (176
+// bytes) in its Err -- generated code, not ours to shrink.
+#[allow(clippy::result_large_err)]
 pub mod pb {
     tonic::include_proto!("cella");
 }

@@ -564,11 +564,11 @@ pub fn segment(src: [u8; 4], dst: [u8; 4], o: &Out) -> Vec<u8> {
     }
     sum += 6;
     sum += s.len() as u32;
-    let mut chunks = s.chunks_exact(2);
-    for c in &mut chunks {
-        sum += u32::from(u16::from_be_bytes([c[0], c[1]]));
+    let (pairs, rest) = s.as_chunks::<2>();
+    for c in pairs {
+        sum += u32::from(u16::from_be_bytes(*c));
     }
-    if let [last] = chunks.remainder() {
+    if let [last] = rest {
         sum += u32::from(u16::from_be_bytes([*last, 0]));
     }
     while sum > 0xffff {

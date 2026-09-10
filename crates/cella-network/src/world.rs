@@ -600,11 +600,11 @@ fn build_ipv4_frame(
 
 fn internet_checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
-    let mut chunks = data.chunks_exact(2);
-    for c in &mut chunks {
-        sum += u32::from(u16::from_be_bytes([c[0], c[1]]));
+    let (pairs, rest) = data.as_chunks::<2>();
+    for c in pairs {
+        sum += u32::from(u16::from_be_bytes(*c));
     }
-    if let [last] = chunks.remainder() {
+    if let [last] = rest {
         sum += u32::from(u16::from_be_bytes([*last, 0]));
     }
     while sum > 0xffff {
@@ -619,11 +619,11 @@ fn fix_checksum(data: &mut [u8], at: usize, pseudo: Option<u32>) {
     data[at] = 0;
     data[at + 1] = 0;
     let mut sum = pseudo.unwrap_or(0);
-    let mut chunks = data.chunks_exact(2);
-    for c in &mut chunks {
-        sum += u32::from(u16::from_be_bytes([c[0], c[1]]));
+    let (pairs, rest) = data.as_chunks::<2>();
+    for c in pairs {
+        sum += u32::from(u16::from_be_bytes(*c));
     }
-    if let [last] = chunks.remainder() {
+    if let [last] = rest {
         sum += u32::from(u16::from_be_bytes([*last, 0]));
     }
     while sum > 0xffff {
