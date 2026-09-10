@@ -178,6 +178,21 @@ pub fn archive(vm: &str) -> Result<(), String> {
 /// instant). The terminal attaches; the detach destroys the
 /// inspector. The source never changes: a frozen source stays
 /// thaw-able, a rock stays a rock.
+/// The release build carries no interactive inspect at all: the
+/// attach rides the console, which the release binary is built
+/// without. This stub is the whole of inspect there -- the refused
+/// attempt is still witnessed (main.rs), and no appliance spins up.
+#[cfg(not(debug_assertions))]
+pub fn inspect(_vm: &str) -> Result<(), String> {
+    Err(
+        "inspect's interactive attach is a lab affordance -- a release host \
+         extracts evidence (cella extract <machine> <path>), or carries the \
+         rock to a lab checkout"
+            .to_string(),
+    )
+}
+
+#[cfg(debug_assertions)]
 pub fn inspect(vm: &str) -> Result<(), String> {
     if !machine::machine_dir(vm).exists() {
         return Err(format!("no machine named {vm:?}"));

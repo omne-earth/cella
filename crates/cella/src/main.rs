@@ -69,9 +69,17 @@ fn print_help() {
         "  cella info <machine>                               show the full record of one machine"
     );
     println!("  cella gateway <machine> <verb>                     operate the border: show, release, refuse, inspect, open, close");
-    println!(
-        "  cella branch <machine> <new> | archive <machine> | inspect <machine>  operate on machines as artifacts"
-    );
+    // inspect's attach exists only in the lab: the release help
+    // offers branch, archive, and extract alone.
+    if cfg!(debug_assertions) {
+        println!(
+            "  cella branch <machine> <new> | archive <machine> | inspect <machine>  operate on machines as artifacts"
+        );
+    } else {
+        println!(
+            "  cella branch <machine> <new> | archive <machine>   operate on machines as artifacts"
+        );
+    }
     println!(
         "  cella extract <machine> <guest-path>               copy evidence out as tar on stdout"
     );

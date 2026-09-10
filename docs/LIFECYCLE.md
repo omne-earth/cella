@@ -116,7 +116,7 @@ stateDiagram-v2
 | destroy | Deletes the machine and its artifacts, once and for all | Rust only |
 | branch  | Copies a still machine: a frozen source yields a frozen twin, a stopped source a fresh-bootable copy, a rock a rock. Records the layer digests | Rust only |
 | archive | Turns a still machine into a rock: storage layers stay, runtime state goes, the manifest latches | Rust only |
-| inspect | Attaches the disk of a still machine to a throwaway appliance, read-only; the detach destroys the appliance | Rust only |
+| inspect | Attaches the disk of a still machine to a throwaway appliance, read-only; the detach destroys the appliance. The lab flavor alone: the attach rides the console, and the release build refuses up front and points to extract | Rust only |
 | extract | Copies evidence out of a still machine as a tar stream on stdout: the named guest path (or /) read inside a throwaway appliance, never mounted on the host. Works in the release flavor -- no console is involved | Rust only |
 | doctor  | check: the host facts, one line each. fix: repairs what the uid can (the sub-id delegation, absent goldens via build), deletes nothing. verify: recomputes each golden digest against its manifest, and the recorded layer digests of a machine (verify <machine>) | Rust only |
 | probe   | The cryogenic diagnostics (cella-probe): wallclock, freeze-thaw-clock, sregs | Rust only |
