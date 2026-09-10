@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # The field install, explicitly release: the binary has no console --
-# no console.log, no console.sock, no enter. One-time host setup for
-# Fedora: installs the system packages the build and the other
-# scripts/ depend on, then checks /dev/kvm access. Every step is
-# idempotent, so it's safe to re-run after e.g. a fresh install or a
-# new machine. The lab flavor never installs (ruled 2026-09-02):
-# the lab is the checkout, target/lab/* is its home, and this
-# field install is the only install.
+# no console.log, no console.sock, no enter, no interactive inspect.
+# One-time host setup for Fedora: installs the system packages the
+# build and the other scripts/ depend on, then checks /dev/kvm
+# access. Every step is idempotent, so it's safe to re-run after
+# e.g. a fresh install or a new machine.
 #
-# Usage: scripts/setup/install.sh
+# --lab additionally installs the lab flavor (the lab cargo
+# profile: console on) as the -debug-suffixed binaries beside the
+# field set (ruled 2026-09-09, superseding 2026-09-02's
+# lab-never-installs). The suffix is the shim's sibling rule:
+# cella-debug execs only -debug personas, thus the two flavors
+# never shadow each other on PATH.
+#
+# Usage: scripts/setup/install.sh [--lab]
 set -euo pipefail
+
+LAB=0
+if [ "${1:-}" = "--lab" ]; then LAB=1; fi
 
 if ! command -v dnf &>/dev/null; then
     echo "cella: install.sh only supports Fedora (dnf not found)" >&2
@@ -78,13 +86,20 @@ fi
 # dependency cache stays; only cella's crates are cleaned.
 for crate in $(sed -n 's/^name = "\(cella[a-z-]*\)"/\1/p' crates/*/Cargo.toml | sort -u); do
     cargo clean --release -p "$crate" 2>/dev/null || true
+    if [ "$LAB" = 1 ]; then cargo clean --profile lab -p "$crate" 2>/dev/null || true; fi
 done
 cargo build --release
+if [ "$LAB" = 1 ]; then cargo build --profile lab; fi
 # Every persona is its own binary since the split (1.6.13): the
 # shim routes, the personas own their verbs, and the shakedown
 # confines each inode. No binary carries a capability (1.6.14e).
+# The lab set installs -debug-suffixed: the flavored shim execs
+# only flavored siblings, and the flavor shows in every invocation.
 for name in cella cella-machine cella-vmm cella-gateway cella-universe cella-build cella-doctor cella-network cella-probe; do
     install -D -m 0755 "target/release/$name" "$HOME/.cella/bin/$name"
+    if [ "$LAB" = 1 ]; then
+        install -D -m 0755 "target/lab/$name" "$HOME/.cella/bin/$name-debug"
+    fi
 done
 # The build inputs (kernel fragments, init scripts) install beside
 # the workshop: an installed binary builds the goldens from any
@@ -111,4 +126,11 @@ case ":$PATH:" in
     ;;
 esac
 echo "cella: installed -> $HOME/.cella/bin/cella"
+if [ "$LAB" = 1 ]; then
+    echo "cella: lab flavor installed -> $HOME/.cella/bin/cella-debug (console on)"
+elif [ -x "$HOME/.cella/bin/cella-debug" ]; then
+    # Telling, not doing: a plain install never touches the lab set.
+    echo "cella: lab versions of cella cli, i.e. cella-debug etc, were detected." \
+         "Please run make install-lab or scripts/setup/install.sh --lab to refresh the lab install."
+fi
 echo "cella: the thin CLIs installed -- run: $NEXT"

@@ -1350,10 +1350,12 @@ pub fn connect_console(name: &str) -> Result<std::os::unix::net::UnixStream, Str
 /// the whole of enter, and the attach machinery below is compiled out.
 #[cfg(not(debug_assertions))]
 pub fn enter(_name: &str) -> Result<(), String> {
+    // One verbatim message for every lab-only verb (enter, inspect):
+    // keep the two stubs in sync.
     Err(
-        "enter is a debug affordance -- a release machine is dark: no console \
-         exists, and the machine is observed through files, verbs, and the \
-         chronicle"
+        "only available for lab installs, use cella extract <machine> <path> \
+         instead. To install lab version, run scripts/setup/install.sh --lab. \
+         Then run cella-debug enter|inspect <vm>"
             .to_string(),
     )
 }

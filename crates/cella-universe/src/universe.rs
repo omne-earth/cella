@@ -184,10 +184,12 @@ pub fn archive(vm: &str) -> Result<(), String> {
 /// attempt is still witnessed (main.rs), and no appliance spins up.
 #[cfg(not(debug_assertions))]
 pub fn inspect(_vm: &str) -> Result<(), String> {
+    // One verbatim message for every lab-only verb (enter, inspect):
+    // keep the two stubs in sync.
     Err(
-        "inspect's interactive attach is a lab affordance -- a release host \
-         extracts evidence (cella extract <machine> <path>), or carries the \
-         rock to a lab checkout"
+        "only available for lab installs, use cella extract <machine> <path> \
+         instead. To install lab version, run scripts/setup/install.sh --lab. \
+         Then run cella-debug enter|inspect <vm>"
             .to_string(),
     )
 }

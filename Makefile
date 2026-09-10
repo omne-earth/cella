@@ -28,7 +28,7 @@ BUSYBOX_VERSION ?= 1.37.0
 GUEST_BASH_VERSION ?= 5.3
 export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
 
-.PHONY: help build build-lab install debug check lint fmt fmt-check \
+.PHONY: help build build-lab install install-lab debug check lint fmt fmt-check \
         unit-test integration-test selftest test test-all \
         init golden golden-nested  \
         boot enter freeze thaw remove doctor \
@@ -68,7 +68,7 @@ help:
 	echo "cella -- build, lint, and test targets"
 	echo ""
 	echo "Build:"
-	$(call help_section,build|build-lab|install|debug|check|lint|fmt|fmt-check)
+	$(call help_section,build|build-lab|install|install-lab|debug|check|lint|fmt|fmt-check)
 	echo ""
 	echo "Tests that need no /dev/kvm (unit + integration, run anywhere):"
 	$(call help_section,unit-test|integration-test|selftest|test|test-jail|test-seccomp|test-seccomp-vmm-kvm|test-seccomp-personas|test-seccomp-gateway|test-seccomp-universe|test-seccomp-build|test-seccomp-doctor|test-seccomp-network|test-seccomp-probe|test-seccomp-machine|test-machine|test-one-door|test-witness)
@@ -140,6 +140,12 @@ debug:
 install:
 	$(LOG)
 	$(SCRIPTS)/setup/install.sh
+
+## The field flavor plus the lab flavor: the console-on binaries land
+## beside the field set as <name>-debug (scripts/setup/install.sh --lab)
+install-lab:
+	$(LOG)
+	$(SCRIPTS)/setup/install.sh --lab
 
 
 ## cargo check, no codegen
