@@ -724,20 +724,16 @@ lines:
 logs-clean:
 	$(LOG)
 	cd $(LOGDIR)
-	keep=$$(ls -1 *.log 2>/dev/null | sort | awk '{ t = $$0; sub(/-[0-9]{8}-[0-9]{6}\.log$$/, "", t); newest[t] = $$0 } END { for (k in newest) print newest[k] }')
+	# One directory per run: keep the newest run (this one -- the
+	# LOG macro just created it), delete the older runs, and sweep
+	# any flat *.log strays from the pre-run-directory layout.
 	deleted=0
-	own=$$(basename "$$CELLA_LOG_FILE")
-	for f in $$(ls -1 *.log 2>/dev/null); do
-		if [ "$$f" = "$$own" ]; then
-			continue
-		fi
-		case " $$(echo $$keep) " in
-		*" $$f "*) ;;
-		*) rm -f "$$f"; deleted=$$((deleted + 1)) ;;
-		esac
+	for d in $$(ls -1d */ 2>/dev/null | sort); do
+		if [ "$$d" = "$(CELLA_RUN)/" ]; then continue; fi
+		rm -rf "$$d"; deleted=$$((deleted + 1))
 	done
-	kept=$$(echo "$$keep" | grep -c . || true)
-	echo "cella: kept $$kept log(s), one for each target, and deleted $$deleted older log(s)"
+	rm -f *.log 2>/dev/null || true
+	echo "cella: kept the current run ($(CELLA_RUN)), deleted $$deleted older run(s)"
 
 ## cargo clean
 clean:
