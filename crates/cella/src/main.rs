@@ -15,7 +15,7 @@ fn persona_for(verb: &str) -> Option<&'static str> {
         "create" | "start" | "stop" | "enter" | "freeze" | "thaw" | "destroy" | "list" | "info"
         | "selftest" => "cella-machine",
         "gateway" => "cella-gateway",
-        "branch" | "archive" | "inspect" => "cella-universe",
+        "branch" | "archive" | "inspect" | "extract" => "cella-universe",
         "build" => "cella-build",
         "doctor" => "cella-doctor",
         "network" => "cella-network",
@@ -71,6 +71,9 @@ fn print_help() {
     println!("  cella gateway <machine> <verb>                     operate the border: show, release, refuse, inspect, open, close");
     println!(
         "  cella branch <machine> <new> | archive <machine> | inspect <machine>  operate on machines as artifacts"
+    );
+    println!(
+        "  cella extract <machine> <guest-path>               copy evidence out as tar on stdout"
     );
     println!(
         "  cella doctor check|fix|verify|harvest           examine, repair, and audit the host"

@@ -83,10 +83,17 @@ With cella, the same task becomes bake, run, collect:
    the chronicle are the only live observations, and the network
    is judged (the section below).
 3. **Collect.** The run ends (the guest halts, or the timeout
-   stops it). `cella inspect` mounts the still disk read-only,
-   and the verifier reads the task's declared artifacts -- for
-   example `artifacts = ["/app/report.json"]` from task.toml --
-   from the evidence view, never from a live machine.
+   stops it -- and the extract appliance signals through a
+   trailer on its scratch disk, which the host polls; it never
+   waits on a guest exit). `cella extract` copies the task's declared
+   artifacts out of the still disk as a tar stream -- for
+   example `cella extract <vm> /app/report.json` for
+   `artifacts = ["/app/report.json"]` from task.toml -- and
+   `cella extract <vm> /` carries the whole rootfs between exec
+   cycles. The disk is read inside a throwaway appliance, never
+   mounted on the host; numeric uid/gid, modes, and links
+   survive; every read lands in the audit book. The verifier
+   reads evidence, never a live machine.
 
 The trade is deliberate. A live workload can lie to its examiner
 interactively; a still disk cannot answer at all, only be read.
@@ -105,9 +112,10 @@ conversation, and the freeze makes the evidence exact.
    image. No container engine, runtime, or spec exists
    at run time: cella boots a kernel and an ext4, nothing else.
 4. **The verifier reads evidence, not a live machine.** There is
-   no exec-into. When the run ends, `cella inspect` mounts the
-   disk read-only, and the verifier reads the artifacts (for
-   example /app/report.json) from that view.
+   no exec-into. When the run ends, `cella extract` streams the
+   artifacts (for example /app/report.json) out of the still
+   disk as tar; the disk is read in a throwaway appliance, never
+   on the host, and never as a machine.
 
 ## The steps
 

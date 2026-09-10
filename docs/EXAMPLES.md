@@ -168,3 +168,22 @@ members wanting one broadcast domain meet at a switch guest with
 N wire nics (a planned appliance flavor). Fan-out is therefore
 always judged and always witnessed -- there is no unjudged hub
 anywhere in a cella topology.
+
+### E7 -- The sealed run, collected
+
+The collection model end to end (docs/integration/TITANIUM.md):
+the workload is baked into the image, the run is sealed, and the
+results leave as evidence -- no exec-into exists at any point.
+
+```
+cella create trial --net world     # the workload is in the image
+cella start trial                  # runs sealed; parks judge the border
+# ... the guest halts, or freeze stops the instant ...
+cella extract trial /app/report.json > report.tar   # the artifact
+cella extract trial / > rootfs.tar                  # the whole tree
+```
+
+The disk is read inside a throwaway appliance, never on the host;
+numeric uid/gid, modes, and links ride the tar; each extract
+lands in the machine's audit book. A live workload can lie to its
+examiner -- a still disk can only be read.

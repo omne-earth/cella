@@ -234,6 +234,7 @@ version = "0.1.0"
 dependencies = [
  "cella-libs",
  "libc",
+ "sha2",
 ]
 
 [[package]]

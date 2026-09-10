@@ -206,3 +206,198 @@ pub fn inspect(vm: &str) -> Result<(), String> {
     let _ = machine::destroy(&inspector);
     entered
 }
+
+/// extract <vm> <guest-path>: copy evidence out of a still machine
+/// as a tar stream on stdout. The mechanism is inspect's appliance
+/// without the human: a temporary machine named <vm>-extractor
+/// boots the stock rootfs with the evidence at /rock and a blank
+/// scratch disk as a third virtio-blk; its init tars the named path
+/// onto the raw scratch, writes a trailer (byte length + sha256, or
+/// the failure's reason) to sector 0 last, and halts. The host
+/// polls for the trailer, stops the appliance, checks the digest,
+/// and streams -- a missing or wrong trailer is an error, never a
+/// truncated tar passed off as evidence. No console takes part: the
+/// verb works in the field flavor. The read is witnessed like every
+/// verb (main.rs).
+pub fn extract(vm: &str, path: &str) -> Result<(), String> {
+    if !machine::machine_dir(vm).exists() {
+        return Err(format!("no machine named {vm:?}"));
+    }
+    refuse_running(vm, "extract")?;
+    if !path.starts_with('/') {
+        return Err(format!("the guest path must be absolute: {path:?}"));
+    }
+    if path.contains(char::is_whitespace) {
+        // The path rides the kernel command line.
+        return Err(format!("the guest path cannot contain spaces: {path:?}"));
+    }
+    let extractor = format!("{vm}-extractor");
+    // A stale extractor from an interrupted run goes away first.
+    if machine::machine_dir(&extractor).exists() {
+        if machine::is_running(&extractor) {
+            machine::stop(&extractor)?;
+        }
+        machine::destroy(&extractor)?;
+    }
+    // stdout is the tar and nothing else: the lifecycle prints of
+    // create/start/destroy move to stderr for the whole verb, and
+    // the stream writes to the saved descriptor directly.
+    // SAFETY: dup/dup2 on the process's own standard descriptors.
+    let saved_stdout = unsafe { libc::dup(1) };
+    if saved_stdout < 0 {
+        return Err("saving stdout failed".to_string());
+    }
+    unsafe { libc::dup2(2, 1) };
+    let restore = |fd: i32| {
+        // SAFETY: restoring the saved descriptor.
+        unsafe {
+            libc::dup2(fd, 1);
+            libc::close(fd);
+        }
+    };
+    let evidence = machine::machine_dir(vm).join("disk.img");
+    let evidence_len = match fs::metadata(&evidence) {
+        Ok(md) => md.len(),
+        Err(e) => {
+            restore(saved_stdout);
+            return Err(e.to_string());
+        }
+    };
+    let scratch = machine::machine_dir(&extractor).join("scratch.img");
+    let mut m = machine::defaults();
+    m.name = extractor.clone();
+    m.attach = evidence.to_str().unwrap().to_string();
+    m.scratch = scratch.to_str().unwrap().to_string();
+    m.extract = path.to_string();
+    machine::create(&m)?;
+    // The scratch: sparse, sized for the worst case -- a tar of the
+    // whole evidence plus headers -- and the 512-byte trailer sector.
+    let scratch_len = evidence_len + evidence_len / 8 + (1 << 20) + 512;
+    let f = fs::File::create(&scratch).map_err(|e| format!("creating the scratch: {e}"))?;
+    f.set_len(scratch_len).map_err(|e| e.to_string())?;
+    drop(f);
+    let done = (|| -> Result<(), String> {
+        machine::start(&extractor)?;
+        // The job's end is the trailer on the scratch -- a fact on
+        // disk, not a message. The guest resets when it finishes,
+        // but a reset is not a reliable exit (the kernel may boot
+        // again instead of shutting the VMM down), thus the host
+        // polls the trailer and stops the appliance itself. The
+        // budget scales with the evidence.
+        let budget = std::time::Duration::from_secs(60 + evidence_len / (4 << 20));
+        let t0 = std::time::Instant::now();
+        loop {
+            if trailer_present(&scratch) {
+                let _ = machine::stop(&extractor);
+                break;
+            }
+            if !machine::is_running(&extractor) {
+                // The appliance ended on its own: the trailer check
+                // below decides whether the job finished first.
+                break;
+            }
+            if t0.elapsed() > budget {
+                let _ = machine::stop(&extractor);
+                return Err(format!(
+                    "the extractor did not finish within {}s",
+                    budget.as_secs()
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        stream_scratch(&scratch, saved_stdout)
+    })();
+    let _ = machine::destroy(&extractor);
+    restore(saved_stdout);
+    done
+}
+
+/// Does sector 0 of the scratch carry the trailer's magic yet? The
+/// guest writes the trailer last, in one 512-byte write; its
+/// presence means the tar stands complete. The full parse and the
+/// digest check happen in stream_scratch.
+fn trailer_present(scratch: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = fs::File::open(scratch) else {
+        return false;
+    };
+    let mut magic = [0u8; 14];
+    // Either verdict: "cella-extract-1" is a finished tar,
+    // "cella-extract-0" a job that failed and says why.
+    f.read_exact(&mut magic).is_ok() && &magic == b"cella-extract-"
+}
+
+/// Verify the trailer of a finished extract and stream the tar to
+/// the saved stdout descriptor (fd 1 carries the lifecycle prints
+/// during the verb). Sector 0 carries "cella-extract-1 <len>
+/// <sha256>"; the tar's bytes start at offset 512. The digest is
+/// checked before one byte leaves.
+fn stream_scratch(scratch: &Path, out_fd: i32) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let mut f = fs::File::open(scratch).map_err(|e| e.to_string())?;
+    let mut sector = [0u8; 512];
+    f.read_exact(&mut sector).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&sector);
+    let text = text.trim_end_matches('\0');
+    let mut words = text.split_whitespace();
+    match words.next() {
+        Some("cella-extract-1") => {}
+        Some("cella-extract-0") => {
+            let why = text["cella-extract-0".len()..].trim().trim_end();
+            return Err(format!("the extract job failed in the guest: {why}"));
+        }
+        _ => {
+            return Err(
+                "the extractor left no trailer -- the job died before it finished".to_string(),
+            )
+        }
+    }
+    let len: u64 = words
+        .next()
+        .and_then(|w| w.parse().ok())
+        .ok_or("the trailer names no length")?;
+    let sum = words.next().ok_or("the trailer names no digest")?;
+    // Pass one: the digest, before anything streams.
+    f.seek(SeekFrom::Start(512)).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut left = len;
+    let mut buf = vec![0u8; 1 << 20];
+    while left > 0 {
+        let n = buf.len().min(left as usize);
+        f.read_exact(&mut buf[..n]).map_err(|e| e.to_string())?;
+        hasher.update(&buf[..n]);
+        left -= n as u64;
+    }
+    let got = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    if got != sum {
+        return Err(format!(
+            "the tar does not match its trailer (trailer {sum}, read {got}) -- \
+             the scratch is corrupt, nothing streams"
+        ));
+    }
+    // Pass two: the bytes, to the saved descriptor.
+    f.seek(SeekFrom::Start(512)).map_err(|e| e.to_string())?;
+    // SAFETY: a fresh dup of the saved stdout; the File owns and
+    // closes the duplicate, never the original.
+    let dup = unsafe { libc::dup(out_fd) };
+    if dup < 0 {
+        return Err("duplicating the output descriptor failed".to_string());
+    }
+    // SAFETY: dup is a valid, owned descriptor.
+    let mut out = unsafe { <fs::File as std::os::fd::FromRawFd>::from_raw_fd(dup) };
+    let mut left = len;
+    while left > 0 {
+        let n = buf.len().min(left as usize);
+        f.read_exact(&mut buf[..n]).map_err(|e| e.to_string())?;
+        out.write_all(&buf[..n])
+            .map_err(|e| format!("writing stdout: {e}"))?;
+        left -= n as u64;
+    }
+    out.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}

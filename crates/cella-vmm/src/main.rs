@@ -36,6 +36,14 @@ const NET_IRQ: u32 = 6;
 // family).
 const ATTACH_MMIO_BASE: u64 = 0xd000_2000;
 const ATTACH_IRQ: u32 = 7;
+// The scratch disk of the extract verb: a third virtio-blk, writable
+// -- the guest tars the evidence onto it raw. Its address is its own
+// (between nic1's 0xd0003000 and nic2's 0xd0005000), but the IRQ is
+// nic0's: a machine never carries a scratch and a nic together --
+// create refuses the pair, and an extractor is airgapped by
+// construction (docs/LIFECYCLE.md).
+const SCRATCH_MMIO_BASE: u64 = 0xd000_4000;
+const SCRATCH_IRQ: u32 = 6;
 
 static FREEZE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static VALVE_KICKED: AtomicBool = AtomicBool::new(false);
@@ -60,6 +68,9 @@ struct Args {
     /// A second disk, read-only at the device, always: the rock of
     /// the inspect verb. No flag makes it writable.
     attach_ro: Option<PathBuf>,
+    /// A third disk, writable: the scratch of the extract verb --
+    /// the guest writes the evidence tar and the trailer onto it.
+    scratch: Option<PathBuf>,
     /// The nics, in order: eth0 is the first. --edge-fd N wraps an
     /// inherited backend fd -- the connection to the machine's own
     /// translator (1.6.14e). It repeats; order is interface order.
@@ -76,6 +87,7 @@ fn parse_args() -> Args {
     let mut disk = None;
     let mut disk_ro = false;
     let mut attach_ro = None;
+    let mut scratch = None;
     let mut nics: Vec<i32> = Vec::new();
     let mut mac = [0x02, 0xfc, 0x00, 0x00, 0x00, 0x01];
     let mut kernel = None;
@@ -95,6 +107,7 @@ fn parse_args() -> Args {
             "--disk" => disk = Some(PathBuf::from(next())),
             "--disk-ro" => disk_ro = true,
             "--attach-ro" => attach_ro = Some(PathBuf::from(next())),
+            "--scratch" => scratch = Some(PathBuf::from(next())),
             "--edge-fd" => nics.push(
                 next()
                     .parse()
@@ -118,7 +131,7 @@ fn parse_args() -> Args {
                     .unwrap_or_else(|_| usage_error("--mem-mb must be a number"))
             }
             "-h" | "--help" => usage_error(
-                "cella --state-dir DIR --disk PATH [--attach-ro PATH] [--edge-fd N] [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
+                "cella --state-dir DIR --disk PATH [--attach-ro PATH] [--scratch PATH] [--edge-fd N] [--kernel PATH --cmdline STR --mem-mb N] [--mac AA:BB:CC:DD:EE:FF] [--disk-ro]",
             ),
             other => usage_error(&format!("unknown argument: {other}")),
         }
@@ -129,6 +142,7 @@ fn parse_args() -> Args {
         disk: disk.unwrap_or_else(|| usage_error("--disk is required")),
         disk_ro,
         attach_ro,
+        scratch,
         nics,
         mac,
         kernel,
@@ -285,6 +299,16 @@ fn main() {
             ATTACH_MMIO_BASE,
             MMIO_LEN,
             MmioTransport::new(Box::new(attached), irq_raiser.clone(), ATTACH_IRQ),
+        ));
+    }
+    if let Some(path) = &args.scratch {
+        // Writable: the extract job's output rides this device raw.
+        let scratch = Block::new(path, false)
+            .unwrap_or_else(|e| fatal(&format!("open scratch disk {path:?}: {e}")));
+        mmio_devices.push((
+            SCRATCH_MMIO_BASE,
+            MMIO_LEN,
+            MmioTransport::new(Box::new(scratch), irq_raiser.clone(), SCRATCH_IRQ),
         ));
     }
     // The network is optional, and a machine takes N nics: eth<i>

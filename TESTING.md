@@ -60,7 +60,7 @@ seccomp list, and SELinux domain. Each part runs standalone.
 | `make smoke-cella-machine` | cella-machine | thaw, machine (selftest), clean, nested-boot (3 variants) |
 | `make smoke-cella-gateway` | cella-gateway | ping, udp, collide, gateway, gateway-cli, inspection, ledger, chain |
 | `make smoke-cella-network` | cella-network | wire, world, multinet, translator-port-neg |
-| `make smoke-cella-probe` | cella-probe | witness, universe, probe-inception |
+| `make smoke-cella-probe` | cella-probe | witness, universe, extract, probe-inception |
 
 The order is blame direction: ground first (doctor), then the VMM,
 then the verbs, then the border, then the wires, then the
@@ -98,6 +98,7 @@ target, and `make help` renders it. The map from gate to law:
 | `smoke-nested-boot` | cella hosts cella, three network variants, at real nesting depth | scripts/test/nested-boot.sh |
 | `smoke-machine` | the lifecycle cycle end to end: cella selftest | via cella selftest |
 | `smoke-universe` | branch, archive, inspect: machines as artifacts, rocks stay rocks | scripts/test/universe.sh |
+| `smoke-extract` | evidence leaves as a faithful tar: numeric uid/gid, modes, and links survive, the trailer refuses a truncated stream, a running machine refuses the verb, and the audit book records the read | scripts/test/extract.sh |
 | `smoke-witness` | every verb is an event, in the right book, with uid, gid, persona | scripts/test/witness.sh |
 | `probe-inception` | the cryogenic clock, one nesting level down | via cella probe |
 | `smoke-engine` (engine-w1..w5) | the world-engine seam: the stream stands, decisions land, stillness on engine halt, the frozen machine, two judges (docs/WORLD-ENGINE.md, "The gates") | scripts/test/engine.sh |
@@ -106,7 +107,7 @@ Design detail lives with the law: docs/NETWORK-MODEL.md (the
 membrane), docs/ROOTLESS-NETWORK.md (the translator),
 docs/FREEZE-THAW.md (time), docs/DEVICE-STATE.md (AC1-AC5),
 docs/NESTED-BOOT.md (the recursion), docs/EXAMPLES.md (the
-shapes, E1-E6).
+shapes, E1-E7).
 
 ## Logs
 

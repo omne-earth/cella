@@ -113,7 +113,7 @@ The machine is dark before `open`. After `open`, each crossing
 parks and waits: `show` lists the holds with their ids, `release`
 lets one through, and `refuse` denies one -- the workload gets an
 immediate network error, not a hung connection. The worked
-shapes, E1-E6, are in docs/EXAMPLES.md.
+shapes, E1-E7, are in docs/EXAMPLES.md.
 
 ## The verbs
 
@@ -124,6 +124,7 @@ cella freeze <machine> | thaw <machine> | stop <machine> | destroy <machine>
 cella list | info <machine> | selftest
 cella gateway <machine> show | release <id> | refuse <id> | inspect <id> | open | close
 cella branch <machine> <new-machine> | archive <machine> | inspect <machine>
+cella extract <machine> <guest-path>
 cella doctor check | fix | verify
 ```
 

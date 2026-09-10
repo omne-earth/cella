@@ -117,6 +117,7 @@ stateDiagram-v2
 | branch  | Copies a still machine: a frozen source yields a frozen twin, a stopped source a fresh-bootable copy, a rock a rock. Records the layer digests | Rust only |
 | archive | Turns a still machine into a rock: storage layers stay, runtime state goes, the manifest latches | Rust only |
 | inspect | Attaches the disk of a still machine to a throwaway appliance, read-only; the detach destroys the appliance | Rust only |
+| extract | Copies evidence out of a still machine as a tar stream on stdout: the named guest path (or /) read inside a throwaway appliance, never mounted on the host. Works in the release flavor -- no console is involved | Rust only |
 | doctor  | check: the host facts, one line each. fix: repairs what the uid can (the sub-id delegation, absent goldens via build), deletes nothing. verify: recomputes each golden digest against its manifest, and the recorded layer digests of a machine (verify <machine>) | Rust only |
 | probe   | The cryogenic diagnostics (cella-probe): wallclock, freeze-thaw-clock, sregs | Rust only |
 | network | The translator (cella-network edge <machine>, N.T.1): one per machine, spawned by start; not an operator's verb | Rust only |
@@ -131,7 +132,7 @@ is its manifest and its disk, nothing else.
 ## The universe family
 
 `cella-universe` owns the operations on machines as artifacts:
-branch, archive, and inspect. Every operation records the sha3-256
+branch, archive, inspect, and extract. Every operation records the sha3-256
 of each storage layer it touches into the manifest of the machine
 it produces; `list` shows a short disk digest, `info` the full
 set, and `doctor verify <machine>` recomputes them.
@@ -166,6 +167,26 @@ verb refuses.
   of a frozen source is its crash-consistent instant. The terminal
   attaches; a detach destroys the inspector. The source never
   changes: a frozen source stays thaw-able, a rock stays a rock.
+- **extract <machine> <guest-path>** -- copy evidence out of any
+  still machine as a tar stream on stdout; `extract <machine> /`
+  is the whole rootfs. The verb takes no flags: a file is a shell
+  redirection. The mechanism is inspect's appliance without the
+  human: a temporary machine named `<machine>-extractor` boots the
+  stock rootfs with the evidence at /rock (the same ro, noexec,
+  nosuid, nodev, norecovery mount) and a blank scratch disk as a
+  third virtio-blk. The guest init tars the named path to the raw
+  scratch (offset 512), writes a trailer to sector 0 last -- the
+  byte length and the sha256 on success, the reason on failure --
+  and halts. The host polls for the trailer (a fact on disk, not a
+  message: the canonical kernel has no power-off device, and an
+  exit is not a reliable signal), stops the appliance, verifies
+  the digest, and streams the tar -- an absent or disagreeing
+  trailer is a failure (exit 1, the reason on stderr), never a
+  truncated tar passed off as evidence. Numeric uid/gid, modes,
+  and links survive; the read is witnessed in the audit book; the
+  source never changes. No console takes part, thus the verb works
+  in the release flavor -- unlike enter, and unlike inspect's
+  interactive attach.
 
 ram.img inspection stays host-side (the file is ordinary); a real
 tool earns its place later.
@@ -197,7 +218,15 @@ $HOME/.cella/
     state                        the freeze sidecar, present only while frozen
     pid                          the VMM pid, present only while running
     console.sock                 the serial console, present only while running
-    console.log                  the console transcript, append-only
+                                 (the lab flavor alone; a release machine has
+                                 no console at all)
+    console.log                  the console transcript, append-only (the lab
+                                 flavor alone)
+    audit                        the machine's verb book: every verb is an
+                                 event, chained, append-only
+    scratch.img                  present only in a <machine>-extractor, for
+                                 the life of one extract (the tar and its
+                                 trailer)
     vmm.log                      the stderr of the VMM (operator instrumentation)
     valve                        N.F.1, the valve posture, one word (born
                                  closed; the gateway CLI alone writes it)

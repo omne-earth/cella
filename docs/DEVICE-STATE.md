@@ -149,7 +149,11 @@ them.
 ## The design: the transport block (v7, then v8, then v9)
 
 The sidecar gains one block per transport, in device order (block,
-then net when present):
+then net when present). The appliance disks stay outside this
+format: the attach (vdb, the inspect/extract evidence) and the
+scratch (vdc, the extract output) belong to throwaway appliances
+that are never frozen, thus their transports never reach a
+sidecar. Per transport:
 
 - device status (u32)
 - queue select (u32)
@@ -276,4 +280,7 @@ id, and a thaw, driven by the test as the stand-in engine.
 - In-flight request draining: nothing is ever in flight (see above).
 - Device hotplug, config-space changes, multi-queue: the transports
   are static, single-queue, and the config generation is constant.
+- The appliance transports: the attach (vdb, read-only evidence)
+  and the extract scratch (vdc, writable) exist only in throwaway
+  inspectors and extractors, which are never frozen.
 - The serial device: its registers already ride the sidecar (v6).

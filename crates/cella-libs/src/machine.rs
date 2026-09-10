@@ -66,6 +66,16 @@ pub struct Manifest {
     /// A path to a disk attached read-only as a second virtio-blk
     /// (the rock of the inspect verb), or "none".
     pub attach: String,
+    /// A path to a writable scratch disk as a third virtio-blk (the
+    /// output of the extract verb), or "none". The scratch has its
+    /// own MMIO address (0xd0004000) but shares nic0's IRQ (6), thus
+    /// a machine never carries a scratch and a nic together --
+    /// create refuses the pair, and the extractor is airgapped by
+    /// construction.
+    pub scratch: String,
+    /// The guest path the extract job tars from /rock, or "none".
+    /// Rides the kernel command line, thus no spaces.
+    pub extract: String,
 }
 
 /// Read one field of a flat JSON object: a quoted string or a bare
@@ -101,6 +111,8 @@ pub fn defaults() -> Manifest {
         root: "rw".into(),
         diag: "off".into(),
         attach: "none".into(),
+        scratch: "none".into(),
+        extract: "none".into(),
     };
     let path = home().join("config.json");
     let Ok(s) = fs::read_to_string(&path) else {
@@ -140,8 +152,8 @@ pub fn defaults() -> Manifest {
 impl Manifest {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\n  \"name\": \"{}\",\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\",\n  \"diag\": \"{}\",\n  \"attach\": \"{}\"\n}}\n",
-            self.name, self.kernel, self.rootfs, self.mem_mb, self.net, self.root, self.diag, self.attach
+            "{{\n  \"name\": \"{}\",\n  \"kernel\": \"{}\",\n  \"rootfs\": \"{}\",\n  \"mem_mb\": {},\n  \"net\": \"{}\",\n  \"root\": \"{}\",\n  \"diag\": \"{}\",\n  \"attach\": \"{}\",\n  \"scratch\": \"{}\",\n  \"extract\": \"{}\"\n}}\n",
+            self.name, self.kernel, self.rootfs, self.mem_mb, self.net, self.root, self.diag, self.attach, self.scratch, self.extract
         )
     }
 
@@ -166,6 +178,9 @@ impl Manifest {
             // Absent in older manifests: default off.
             diag: json_field(s, "diag").unwrap_or("off").to_string(),
             attach: json_field(s, "attach").unwrap_or("none").to_string(),
+            // Absent in older manifests: default none.
+            scratch: json_field(s, "scratch").unwrap_or("none").to_string(),
+            extract: json_field(s, "extract").unwrap_or("none").to_string(),
         })
     }
 }
@@ -328,6 +343,16 @@ pub fn create(m: &Manifest) -> Result<(), String> {
             m.name
         ));
     }
+    // The airgap invariant, enforced, not assumed: the scratch disk
+    // shares nic0's IRQ (6), thus a machine never carries a scratch
+    // and a nic together. Only the extractor sets scratch, and the
+    // extractor is airgapped by construction -- a hand-written
+    // manifest does not get to collide silently.
+    if m.scratch != "none" && m.net != "none" {
+        return Err("a machine cannot carry a scratch disk and a nic together \
+             (the scratch shares nic0's IRQ; an extractor is airgapped)"
+            .to_string());
+    }
     let dir = machine_dir(&m.name);
     if dir.exists() {
         return Err(format!(
@@ -474,11 +499,21 @@ fn cmdline_for(m: &Manifest) -> String {
     if m.attach != "none" {
         // The attached rock is the second virtio-blk (/dev/vdb),
         // read-only at the device; the inspector runs airgapped.
-        return format!(
+        // The extract job adds the scratch as the third (/dev/vdc,
+        // the first nic slot -- no extractor carries a nic) and
+        // names the guest path on the command line.
+        let mut line = format!(
             "{base} root=/dev/vda {} virtio_mmio.device=4K@0xd0000000:5 \
              virtio_mmio.device=4K@0xd0002000:7",
             m.root
         );
+        if m.scratch != "none" {
+            line.push_str(&format!(
+                " virtio_mmio.device=4K@0xd0004000:6 cella_extract={}",
+                m.extract
+            ));
+        }
+        return line;
     }
     if m.net == "none" {
         return format!(
@@ -1001,6 +1036,11 @@ fn spawn(name: &str, done_word: &str) -> Result<(), String> {
     }
     if m.attach != "none" {
         cmd.args(["--attach-ro", &m.attach]);
+    }
+    if m.scratch != "none" {
+        // Inside the machine's own directory, thus inside the jail's
+        // existing read-write bind.
+        cmd.args(["--scratch", &m.scratch]);
     }
     cmd.args(["--mem-mb", &m.mem_mb.to_string()]);
     if cfg!(debug_assertions) {
@@ -1618,6 +1658,8 @@ mod tests {
             root: "rw".into(),
             diag: "off".into(),
             attach: "none".into(),
+            scratch: "none".into(),
+            extract: "none".into(),
         }
     }
 

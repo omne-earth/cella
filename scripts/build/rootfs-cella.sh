@@ -17,6 +17,36 @@ if [ -b /dev/vdb ]; then
         && echo "cella-rootfs: evidence mounted at /rock (ro, noexec)" \
         || echo "cella-rootfs: /dev/vdb present but the mount failed"
 fi
+# The extract verb attaches a blank scratch disk as /dev/vdc and
+# names a guest path on the kernel command line. The job runs with
+# no console and no shell: tar the evidence at the path onto the raw
+# scratch (offset 512), write the trailer to sector 0 last, and
+# halt. The canonical kernel has no power-off device, and a reset
+# may boot the kernel again instead of ending the VMM -- thus the
+# job halts, and the host, polling for the trailer, stops the
+# appliance itself. The trailer names the byte length and the
+# sha256; a
+# missing or wrong trailer tells the host the job died -- a crash
+# here can never pass off a truncated tar as evidence. The source
+# is read-only, thus the three tar passes see the same bytes.
+if [ -b /dev/vdc ] && grep -q 'cella_extract=' /proc/cmdline; then
+    P=$(sed -n 's/.*cella_extract=\([^ ]*\).*/\1/p' /proc/cmdline)
+    T='cella-extract-0 the job died mid-tar'
+    if [ -n "$P" ] && [ -e "/rock$P" ]; then
+        LEN=$(tar -cf - -C /rock ".$P" 2>/dev/null | wc -c)
+        SUM=$(tar -cf - -C /rock ".$P" 2>/dev/null | sha256sum | cut -d' ' -f1)
+        if [ "$LEN" -gt 0 ] \
+            && tar -cf - -C /rock ".$P" 2>/dev/null \
+               | dd of=/dev/vdc bs=512 seek=1 conv=notrunc 2>/dev/null; then
+            T="cella-extract-1 $LEN $SUM"
+        fi
+    else
+        T="cella-extract-0 no such path under /rock: $P"
+    fi
+    printf '%s\n' "$T" | dd of=/dev/vdc bs=512 count=1 conv=sync,notrunc 2>/dev/null
+    sync
+    poweroff -f
+fi
 echo "cella-rootfs: init running (pid $$)"
 # The serial console is also the shell of the user. The heartbeat and
 # the diagnostic listings therefore print only when the kernel command

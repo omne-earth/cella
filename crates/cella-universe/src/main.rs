@@ -4,7 +4,7 @@
 mod seccomp;
 mod universe;
 
-const VERBS: &[&str] = &["branch", "archive", "inspect"];
+const VERBS: &[&str] = &["branch", "archive", "inspect", "extract"];
 
 fn fatal(msg: &str) -> ! {
     eprintln!("cella: fatal: {msg}");
@@ -23,7 +23,7 @@ fn main() {
     }
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(verb) = argv.first().cloned() else {
-        usage_error("usage: cella-universe <branch|archive|inspect> ...")
+        usage_error("usage: cella-universe <branch|archive|inspect|extract> ...")
     };
     // inspect runs unconfined at this layer (1.6.14b): it starts its
     // throwaway appliance through machine::start, whose spawn needs
@@ -32,7 +32,9 @@ fn main() {
     // as cella-machine's start/thaw; the appliance VMM's own filter
     // bounds the sensitive work, and the join's confine-after-fork
     // closes this layer too (deal-breaker 3).
-    if verb != "inspect" {
+    // extract shares inspect's physics: it starts its throwaway
+    // appliance through machine::start, thus the same exemption.
+    if verb != "inspect" && verb != "extract" {
         seccomp::install().unwrap_or_else(|e| fatal(&format!("seccomp: {e}")));
     }
     if !VERBS.contains(&verb.as_str()) {
@@ -58,6 +60,10 @@ fn main() {
         "inspect" => match args {
             [vm] => universe::inspect(vm),
             _ => Err("usage: cella inspect <vm>".to_string()),
+        },
+        "extract" => match args {
+            [vm, path] => universe::extract(vm, path),
+            _ => Err("usage: cella extract <vm> <guest-path>  (tar on stdout)".to_string()),
         },
         _ => unreachable!(),
     };

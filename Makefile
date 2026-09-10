@@ -42,6 +42,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-world smoke-rootless smoke-translator-port-neg \
         smoke-ping smoke-udp smoke-collide smoke-inspection \
         smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
+        smoke-extract \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
         test-jail test-seccomp test-seccomp-vmm-kvm test-seccomp-personas \
@@ -97,7 +98,7 @@ SMOKE_TARGETS := smoke smoke-debug smoke-release \
         smoke-nested-boot-www smoke-machine smoke-clean \
         smoke-gateway smoke-gateway-cli smoke-wire smoke-world \
         smoke-rootless smoke-translator-port-neg smoke-multinet \
-        smoke-universe smoke-ledger smoke-chain \
+        smoke-universe smoke-ledger smoke-chain smoke-extract \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
         smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 engine-w5 \
@@ -488,6 +489,14 @@ smoke-universe: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/universe.sh
 
+## Evidence leaves a still machine as a faithful tar: bytes, uid/gid,
+## modes, and symlinks survive; the trailer refuses a truncated
+## stream; running refuses the verb; the book records each read
+## (scripts/test/extract.sh)
+smoke-extract: build golden
+	$(LOG)
+	$(SCRIPTS)/test/extract.sh
+
 ## No datagram leaves undecided, proven from within the guest: closed drops
 ## UDP, open parks it (the park is the freeze), a refusal delivers nothing;
 ## the guest's own ICMP lapses the same way (scripts/test/udp.sh)
@@ -579,7 +588,7 @@ smoke-cella-network: smoke-wire smoke-world smoke-multinet \
 
 ## cella-probe's part: the witness doors, the universe, and the deep clock
 ## probe
-smoke-cella-probe: smoke-witness smoke-universe probe-inception
+smoke-cella-probe: smoke-witness smoke-universe smoke-extract probe-inception
 
 # --- The battery, sliced by flavor ---------------------------------
 #
@@ -601,7 +610,7 @@ smoke-debug: smoke-shell smoke-boot smoke-gateway smoke-gateway-cli \
 ## chronicle
 smoke-release: smoke-thaw smoke-machine smoke-rootless \
         smoke-translator-port-neg smoke-witness smoke-collide smoke-ping \
-        smoke-chain smoke-clean doctor
+        smoke-chain smoke-extract smoke-clean doctor
 
 ## The whole battery: the no-KVM checks first (fail fast), then the dark
 ## half against the field flavor, then the console half against the lab

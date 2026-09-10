@@ -17,9 +17,10 @@ message Message {
   }
 }
 
-// The witnessed border: every verb is an event, show and inspect
-// included. The chronicle stays the operations ledger; the verbs
-// get their own audit stream in this same language. The operator
+// The witnessed border: every verb is an event, show, inspect,
+// and extract included -- an evidence read is on the record like
+// any other act. The chronicle stays the operations ledger; the
+// verbs get their own audit stream in this same language. The operator
 // acts in host time -- a CLI has no guest clock -- thus the audit
 // stream carries the host clock alone. Machine-scoped verbs append
 // to machines/<vm>/audit; the placeless verbs to the audit file at

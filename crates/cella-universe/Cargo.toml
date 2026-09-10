@@ -11,3 +11,5 @@ path = "src/main.rs"
 [dependencies]
 cella-libs = { workspace = true, features = ["machine", "audit", "seccomp"] }
 libc = { workspace = true }
+# The extract trailer: sha256, to match the guest's sha256sum.
+sha2 = { workspace = true }

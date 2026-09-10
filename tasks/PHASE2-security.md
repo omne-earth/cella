@@ -160,6 +160,42 @@ lives in tasks/PHASE1-core.md.
       matches the build.
 - [x] 2.2 docs/EXAMPLES.md notes that nested layers must use
       distinct knock ports (2026-09-03, the knockable example).
+- [ ] 2.5 cella extract (proposed 2026-09-09, for the titanium
+      collection model): a fourth universe verb -- `cella extract
+      <machine> <guest-path>` emits the evidence at that path from
+      the still disk as a tar stream on stdout; `/` is the whole
+      rootfs. No flags: a file is a shell redirection. The
+      mechanism is inspect's appliance without the human: the
+      `<machine>-extractor` boots the stock rootfs, the evidence
+      mounts at /rock exactly as inspect mounts it, the guest init
+      tars the named path to the raw scratch (offset 512), writes
+      the trailer to sector 0 last (byte length + sha256 on
+      success, the reason on failure), and halts; the host polls
+      for the trailer (ruled by physics 2026-09-09: the canonical
+      kernel has no power-off device, and a reset may boot again
+      rather than end the VMM -- an exit is not a reliable
+      signal), stops the appliance, verifies the digest, and
+      streams -- a bad trailer is exit 1 with the reason, never a
+      truncated tar. Still machines only (running is the one
+      refusal, the family rule); frozen counts as still
+      (norecovery already handles the dirty journal). Witnessed as
+      a plain Audit event (verb=extract) -- no proto change
+      required. No console anywhere, thus the verb works in the
+      field flavor: this deliberately breaks inspect's accidental
+      lab coupling rather than inheriting it. Settled by the
+      implementation: (a) the trailer lives at sector 0, written
+      last, with a failure variant; (b) the scratch is
+      source-disk-sized plus slack, sparse; (d) the gate asserts
+      numeric uid/gid against the golden's builder ids, and link
+      fidelity (busybox installs hardlinks, and they ride as
+      links). Open: (c) whether the tar digest also rides in the
+      audit args, or earns a typed field later; (e) the trust
+      boundary -- the tar is workload-authored bytes: the trailer
+      proves the job completed, not that the tar is honest, and a
+      consumer unpacks it with traversal protections (no absolute
+      paths, no .., no symlink-following out of the target).
+      Landed 2026-09-09 with scripts/test/extract.sh green; the
+      titanium doc rides the same commit.
 - [ ] 2.3 cella selftest picks a random knock port (the gates
       already do; the selftest still pins 1709).
 
