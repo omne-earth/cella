@@ -141,7 +141,10 @@ pub fn serve_dns_once(sock: &UdpSocket, self_ip: Ipv4Addr) {
 
 /// The production resolver: ask the upstream provider, cache with
 /// TTL honesty.
-pub fn upstream_resolver(upstream: Ipv4Addr) -> impl Fn(&str) -> Result<Ipv4Addr, String> {
+pub fn upstream_resolver(
+    upstream: Ipv4Addr,
+    upstream_port: u16,
+) -> impl Fn(&str) -> Result<Ipv4Addr, String> {
     let cache = std::sync::Mutex::new(dns::Cache::new(Duration::from_secs(300)));
     move |name: &str| {
         let now = Instant::now();
@@ -153,7 +156,7 @@ pub fn upstream_resolver(upstream: Ipv4Addr) -> impl Fn(&str) -> Result<Ipv4Addr
             .map_err(|e| e.to_string())?;
         let id = (std::process::id() as u16) ^ (now.elapsed().subsec_nanos() as u16);
         let q = dns::build_query(id, name);
-        sock.send_to(&q, (upstream, 53))
+        sock.send_to(&q, (upstream, upstream_port))
             .map_err(|e| e.to_string())?;
         let mut buf = [0u8; 512];
         let (n, _) = sock
@@ -171,7 +174,7 @@ pub fn run(cfg: Config) -> Result<(), String> {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let roots = Arc::new(roots);
-    let resolve: Arc<Resolver> = Arc::new(upstream_resolver(cfg.upstream_dns));
+    let resolve: Arc<Resolver> = Arc::new(upstream_resolver(cfg.upstream_dns, cfg.upstream_port));
     let maps = Arc::new(cfg.maps.clone());
 
     // The interceptor's ear.

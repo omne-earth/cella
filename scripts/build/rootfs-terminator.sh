@@ -29,7 +29,7 @@ else
     echo "cella-terminator: no member wire (eth1 absent)"
 fi
 
-DNS=$(sed -n 's/.*cella_dns=\([0-9.]*\).*/\1/p' /proc/cmdline)
+DNS=$(sed -n "s/.*cella_dns=\([0-9.:]*\).*/\1/p" /proc/cmdline)
 LISTEN=$(sed -n 's/.*cella_listen=\([0-9,]*\).*/\1/p' /proc/cmdline)
 MAPS=$(sed -n 's/.*cella_map=\([^ ]*\).*/\1/p' /proc/cmdline)
 {
@@ -44,14 +44,25 @@ MAPS=$(sed -n 's/.*cella_map=\([^ ]*\).*/\1/p' /proc/cmdline)
 } > /etc/cella-terminator.conf
 echo "cella-terminator: configured (dns ${DNS:-9.9.9.9}, listen ${LISTEN:-443,80})"
 
-# The one service, under the house respawn loop. The pair CA sits
-# at /etc/cella/pair-ca.{pem,key}, baked at image build; the key
-# never leaves this image.
+# The one service, under the house respawn loop, in the
+# background. The pair CA sits at /etc/cella/pair-ca.{pem,key},
+# baked at image build; the key never leaves this image.
+(
+    N=0
+    while true; do
+        N=$((N+1))
+        echo "cella-terminator: generation $N starting"
+        /bin/cella-terminator /etc/cella-terminator.conf
+        echo "cella-terminator: generation $N exited with $?"
+        sleep 1
+    done
+) &
+# The console shell, the house pattern: the lab drives the gates
+# through it, and the field discards the bytes.
 N=0
 while true; do
     N=$((N+1))
-    echo "cella-terminator: generation $N starting"
-    /bin/cella-terminator /etc/cella-terminator.conf
-    echo "cella-terminator: generation $N exited with $?"
-    sleep 1
+    echo "cella-shell: getty generation $N starting"
+    /bin/getty -n -l /bin/sh 115200 ttyS0
+    echo "cella-shell: getty generation $N exited with $?"
 done

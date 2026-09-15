@@ -24,6 +24,9 @@ pub struct PortMap {
 pub struct Config {
     pub wire_ip: Ipv4Addr,
     pub upstream_dns: Ipv4Addr,
+    /// The upstream's port: 53 in the field; a gate's unprivileged
+    /// responder rides higher.
+    pub upstream_port: u16,
     /// TCP ports the proxy listens on for named flows (TLS by SNI
     /// on any of them; plain HTTP by Host on any of them).
     pub listen: Vec<u16>,
@@ -41,7 +44,7 @@ pub fn load(path: &Path) -> Result<Config, String> {
 
 pub fn parse(text: &str) -> Result<Config, String> {
     let mut wire_ip = None;
-    let mut upstream = None;
+    let mut upstream: Option<(Ipv4Addr, u16)> = None;
     let mut listen: Vec<u16> = Vec::new();
     let mut ca_cert = None;
     let mut ca_key = None;
@@ -58,7 +61,16 @@ pub fn parse(text: &str) -> Result<Config, String> {
         match key.trim() {
             "wire_ip" => wire_ip = Some(parse_ip(value).map_err(|e| format!("line {n}: {e}"))?),
             "upstream_dns" => {
-                upstream = Some(parse_ip(value).map_err(|e| format!("line {n}: {e}"))?)
+                let v = value.trim();
+                let (ip, port) = match v.rsplit_once(':') {
+                    Some((ip, p)) => (
+                        ip,
+                        p.parse()
+                            .map_err(|_| format!("line {n}: unreadable port {p:?}"))?,
+                    ),
+                    None => (v, 53u16),
+                };
+                upstream = Some((parse_ip(ip).map_err(|e| format!("line {n}: {e}"))?, port));
             }
             "listen" => {
                 for p in value.split(',') {
@@ -92,9 +104,11 @@ pub fn parse(text: &str) -> Result<Config, String> {
             k => return Err(format!("line {n}: unknown key {k:?}")),
         }
     }
+    let (upstream_dns, upstream_port) = upstream.ok_or("upstream_dns is mandatory")?;
     Ok(Config {
         wire_ip: wire_ip.ok_or("wire_ip is mandatory")?,
-        upstream_dns: upstream.ok_or("upstream_dns is mandatory")?,
+        upstream_dns,
+        upstream_port,
         listen: if listen.is_empty() {
             vec![443, 80]
         } else {
@@ -121,6 +135,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.wire_ip, Ipv4Addr::new(10, 77, 7, 1));
+        assert_eq!(
+            (c.upstream_dns, c.upstream_port),
+            (Ipv4Addr::new(9, 9, 9, 9), 53)
+        );
+        let c2 = parse("wire_ip=10.0.0.1\nupstream_dns=127.0.0.1:5353\n").unwrap();
+        assert_eq!(
+            (c2.upstream_dns, c2.upstream_port),
+            (Ipv4Addr::LOCALHOST, 5353)
+        );
         assert_eq!(c.listen, vec![443, 80]);
         assert_eq!(
             c.maps,
