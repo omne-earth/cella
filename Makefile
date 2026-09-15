@@ -48,6 +48,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         membrane-memory-mm6 \
         smoke-tls-terminator tls-terminator-t1 tls-terminator-t2 \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
+        tls-terminator-t6 \
         golden-terminator \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
@@ -110,6 +111,7 @@ SMOKE_TARGETS := smoke smoke-debug smoke-release \
         membrane-memory-mm6 \
         smoke-tls-terminator tls-terminator-t1 tls-terminator-t2 \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
+        tls-terminator-t6 \
         golden-terminator \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
@@ -574,9 +576,15 @@ tls-terminator-t5: build-lab golden golden-terminator
 	$(LOG)
 	$(SCRIPTS)/test/tls-terminator.sh t5
 
-## The terminated pair's family, the interceptor first
+tls-terminator-t6: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t6
+
+## The terminated pair's family, the interceptor first; t6 is the
+## named world (https://example.com) and SKIPs without internet
 smoke-tls-terminator: tls-terminator-t1 tls-terminator-t2 \
-        tls-terminator-t3 tls-terminator-t4 tls-terminator-t5
+        tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
+        tls-terminator-t6
 
 ## The membrane-memory family, the door first (mm1-mm4 ride it)
 smoke-membrane-memory: membrane-memory-mm5 membrane-memory-mm1 \
