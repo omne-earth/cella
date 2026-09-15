@@ -101,7 +101,7 @@ fn main() {
         print_help();
         std::process::exit(0);
     }
-    // The flag interface (--state-dir, --dump-ledger, --dump-state,
+    // The flag interface (--state-dir, --dump, --dump-state,
     // --print-default-cmdline, --selftest-seccomp) is the VMM's
     // alone: leading-dash invocations route there.
     if first.starts_with("--") {
