@@ -26,7 +26,6 @@ pub struct Question {
 }
 
 pub const QTYPE_A: u16 = 1;
-pub const QTYPE_AAAA: u16 = 28;
 
 /// Parse a query packet: id + first question. None for anything
 /// this codec does not read (truncated, compressed names in the
@@ -228,6 +227,8 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const QTYPE_AAAA: u16 = 28;
 
     #[test]
     fn a_query_round_trips_and_the_answer_points_home() {

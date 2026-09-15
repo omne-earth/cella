@@ -3,8 +3,8 @@
 //! names itself by Host; a nameless port routes only by static
 //! map; anything else is refused -- never guessed.
 
-use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::io::Write;
+use std::net::{Ipv4Addr, TcpListener, TcpStream, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -214,6 +214,7 @@ pub fn run(cfg: Config) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::ca;
+    use std::io::Read;
 
     fn pair_minter(tag: &str) -> (Minter, String) {
         let (ca_pem, key_pem) = ca::mint_pair_ca(tag).unwrap();
@@ -251,7 +252,7 @@ mod tests {
                         let _ = tls.write_all(b"world");
                         let _ = tls.write_all(&buf);
                     }
-                    let _ = tls.conn.send_close_notify();
+                    tls.conn.send_close_notify();
                     let _ = tls.flush();
                 });
             }
