@@ -15,6 +15,8 @@ pub mod seq;
 pub mod ledger;
 #[cfg(feature = "wire")]
 pub mod memory;
+
+pub mod names;
 #[cfg(feature = "wire")]
 pub mod proto;
 

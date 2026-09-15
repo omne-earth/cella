@@ -79,10 +79,15 @@ pub struct Net {
     /// bound to it, newest answer winning. Read at park time to
     /// stamp Destination.host (the proto's promise). Testimony,
     /// not truth: it records what adjudicated answers claimed at
-    /// this membrane. Runtime-only, deliberately: a thaw wakes
-    /// with an empty ratchet (the sidecar stays v9), and the next
-    /// resolution re-teaches it.
+    /// this membrane. Durable through the freeze via the names
+    /// file (cella_libs::names, beside the ledger; the sidecar
+    /// stays v9): a park is the freeze, and the freeze a park
+    /// causes must not erase the name that would stamp the next
+    /// park of the same flow.
     resolved: std::collections::HashMap<[u8; 4], String>,
+    /// Where learned bindings persist; None (tests) keeps the
+    /// ratchet runtime-only.
+    names_path: Option<std::path::PathBuf>,
 }
 
 /// One held ingress flow: the frames of every inbound frame that
@@ -149,7 +154,12 @@ impl Net {
         edge: Edge,
         mac: [u8; 6],
         guest_clock: Arc<dyn GuestClock>,
+        names_path: Option<std::path::PathBuf>,
     ) -> std::io::Result<Self> {
+        let resolved = names_path
+            .as_deref()
+            .map(cella_libs::names::read_names)
+            .unwrap_or_default();
         Ok(Net {
             edge,
             mac,
@@ -162,7 +172,8 @@ impl Net {
             inbound_bytes: 0,
             inbound_dropped: 0,
             deliver_queue: std::collections::VecDeque::new(),
-            resolved: std::collections::HashMap::new(),
+            resolved,
+            names_path,
         })
     }
 
@@ -597,6 +608,9 @@ impl VirtioDevice for Net {
                                     "cella: the ratchet learns {host} = {}.{}.{}.{}",
                                     ip[0], ip[1], ip[2], ip[3]
                                 );
+                                if let Some(p) = &self.names_path {
+                                    cella_libs::names::append_name(p, &host, ip);
+                                }
                             }
                         }
                     }
