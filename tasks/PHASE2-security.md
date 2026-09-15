@@ -160,6 +160,40 @@ lives in tasks/PHASE1-core.md.
       matches the build.
 - [x] 2.2 docs/EXAMPLES.md notes that nested layers must use
       distinct knock ports (2026-09-03, the knockable example).
+- [ ] 2.8 The timeline rewrite at the terminator (proposed
+      2026-09-15; roadmap item 7). The terminator holds plaintext
+      on both legs and is therefore the one boundary where
+      application-layer timestamps can be translated into the
+      member's frame. The member's frame is already available:
+      every park carries guest_ns beside host_ns, and the member
+      leg itself carries usable hints. World side operates in
+      world time, unchanged. Member side, the terminator
+      rewrites unsigned application-layer times in responses
+      (Date, Expires, Retry-After, cookie lifetimes) into the
+      member's frame, extending the cryogenic claim through the
+      application layer. Three boundaries, stated:
+      (a) Signed time cannot be rewritten. JWT iat/exp, signed
+      cookies, and timestamps under a MAC break their signatures
+      if modified. The rewrite covers plain headers only, and
+      the signed leakage remains, documented -- until the
+      Augmenting World Engine is ready: an engine that supplies
+      part of the world also signs that part, and can re-issue
+      its own artifacts in the member's frame. The signed leak
+      then shrinks to exactly the artifacts of the world the
+      engine does not control.
+      (b) Certificate validity is the corollary and needs
+      handling regardless of this item: a long-frozen member
+      validates the terminator's minted leaf against its own
+      past clock, so the leaf's notBefore must reach generously
+      into the past. This is correctness, not a feature; it is
+      recorded in 2.7 (c) and implemented in the minter.
+      (c) The offset source is the design fork to rule before
+      implementation: per-flow inference from what the member
+      leg carries (no new plumbing, approximate) versus
+      engine-fed precision (the engine knows both clocks
+      exactly; feeding the terminator requires a new hint kind
+      -- vocabulary growth and an Accord bump).
+      Blocked on: 2.7 shipping.
 - [ ] 2.7 The terminator (proposed 2026-09-15, branch
       feat/gateway-tls-terminator; P1 -- the TLS-EOF blocker):
       the one network appliance, an ordinary cella machine
@@ -178,7 +212,13 @@ lives in tasks/PHASE1-core.md.
       exported beside the golden, digested in the manifest, and
       baked by the member's builder into its trust store: the
       middle is the architecture, consented at image build,
-      stated loudly in docs/integration/TLS-TERMINATOR.md;
+      stated loudly in docs/integration/TLS-TERMINATOR.md; and
+      minted leaves carry generous validity into the past
+      (2026-09-15, the frozen-member corollary): a member that
+      slept a year validates the leaf against its own past
+      clock, thus notBefore reaches far behind and notAfter far
+      ahead -- the leaf's window is the pair's lifetime, not the
+      world's calendar;
       (d) the names live at the appliance -- the terminator
       resolves and caches for its members (resolv.conf points at
       its wire address), upstream a configured provider ip over
