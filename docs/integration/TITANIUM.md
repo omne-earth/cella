@@ -17,14 +17,39 @@ walks live per topic, and titanium follows them unchanged:
 
 - `allow_internet = false` -- `--net none`: no membrane, no
   crossings, no engine. Start here; most tasks need nothing else.
+
+  ```sh
+  cella create trial --kernel task --rootfs <task-name> --net none
+  cella start trial
+  ```
+
 - `allow_internet = true` -- a world nic with a port map
   (docs/EXAMPLES.md, E1-E2), titanium's engine on the seam, and
   the task's policy checked in beside the task as its source
   (titanium's own file; cella reads no policy -- the wire is the
   contract).
-- `artifacts = [...]` -- the collect step's extract paths.
+
+  ```sh
+  cella create trial --kernel task --rootfs <task-name> --net world:8080/tcp
+  cella start trial
+  cella gateway trial open
+  cella-engine trial --dial <engine-addr> &   # titanium's engine judges
+  ```
+
+- `artifacts = ["/app/report.json"]` -- the collect step's extract
+  paths, against a still machine.
+
+  ```sh
+  cella stop trial
+  cella extract trial /app/report.json > report.tar
+  ```
+
 - Resource keys (`mem_mb`, `storage_mb`) -- create flags and the
   ext4 sizing at conversion.
+
+  ```sh
+  cella create trial --kernel task --rootfs <task-name> --mem-mb 2048 --net none
+  ```
 
 ## What the move buys, and costs
 
