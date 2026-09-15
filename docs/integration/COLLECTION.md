@@ -16,10 +16,25 @@ cella, the same job becomes bake, run, collect:
 1. **Bake.** The agent and its configuration enter the image at
    build time (docs/integration/ROOTFS.md); the init shim starts
    them. Nothing is installed after boot.
+
+   ```sh
+   podman build -t task-image environment/     # or any builder
+   <converter> task-image                      # -> ~/.cella/rootfs/<name>/
+   cella doctor verify                         # the manifest must judge it
+   ```
+
 2. **Run.** The machine runs sealed: the console transcript (lab
    flavor) and the chronicle are the only live observations, and
    the network is judged
    (docs/integration/MEMBRANE-MEMORY.md).
+
+   ```sh
+   cella create trial --kernel <kernel-flavor> --rootfs <name> --net world
+   cella start trial
+   cella gateway trial open
+   cella-engine trial --dial <engine-addr> &   # the bridge, one per machine
+   ```
+
 3. **Collect.** The run ends -- the guest halts, or the timeout
    stops it. `cella extract` requires a still machine (stopped,
    frozen, or archived; running is the one refusal, the universe
@@ -27,8 +42,9 @@ cella, the same job becomes bake, run, collect:
    still disk as a tar stream:
 
    ```sh
-   cella extract <vm> /app/report.json > report.tar
-   cella extract <vm> / > rootfs.tar     # the whole tree
+   cella stop trial      # or: cella freeze trial -- still is the requirement
+   cella extract trial /app/report.json > report.tar
+   cella extract trial / > rootfs.tar    # the whole tree
    ```
 
    The disk is read inside a throwaway appliance, never mounted
