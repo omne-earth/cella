@@ -60,8 +60,10 @@ message Accord {
 // membrane stamps it from the DNS answers it itself delivered
 // (the name ratchet), a hostile resolver can bind any name to
 // any ip, and the judge weighs it as testimony. The ratchet is
-// runtime-only: a thaw wakes it empty, and the next delivered
-// resolution re-teaches it.
+// durable: learned bindings persist in the machine's names file
+// (network/names) and a thaw wakes knowing them -- the freeze a
+// park causes must not erase the name that would stamp the next
+// park of the same flow. A newer answer supersedes an older one.
 message Destination {
   string host = 1;
   bytes ip = 2;

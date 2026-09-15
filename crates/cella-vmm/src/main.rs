@@ -334,8 +334,13 @@ fn main() {
         mac[5] = mac[5].wrapping_add(i as u8);
         let edge = devices::virtio::edge::Edge::from_fd(*nic)
             .unwrap_or_else(|e| fatal(&format!("open edge fd {nic}: {e}")));
-        let net = Net::new(edge, mac, guest_clock.clone())
-            .unwrap_or_else(|e| fatal(&format!("nic on fd {nic}: {e}")));
+        let net = Net::new(
+            edge,
+            mac,
+            guest_clock.clone(),
+            Some(args.state_dir.join("network").join("names")),
+        )
+        .unwrap_or_else(|e| fatal(&format!("nic on fd {nic}: {e}")));
         let net_fd = net.edge_fd();
         mmio_devices.push((
             NET_MMIO_BASE + (i as u64) * 0x2000,

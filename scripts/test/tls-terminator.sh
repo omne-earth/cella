@@ -208,8 +208,17 @@ t3)
     # resolved name as testimony (proto Destination.host).
     "$BIN" --dump "$CELLA_HOME/machines/$TERM_VM/network/ledger" | grep -q "host=w.test" \
         || { echo "FAIL: no park carries the resolved name"; evidence; exit 1; }
+    # The ratchet is durable: a freeze must not erase the name that
+    # would stamp the next park (the names file survives the thaw).
+    "$BIN" freeze "$TERM_VM" >/dev/null || { echo "FAIL: the appliance would not freeze"; exit 1; }
+    "$BIN" thaw "$TERM_VM" >/dev/null || { echo "FAIL: the appliance would not thaw"; exit 1; }
+    type_mem "wget -q -O- http://$GW:8080/ >/dev/null; echo re-don\"e\""
+    wait_console "$MEM_VM" "re-done" 60 || { echo "FAIL: the post-thaw fetch never returned"; evidence; exit 1; }
+    named=$("$BIN" --dump "$CELLA_HOME/machines/$TERM_VM/network/ledger" | grep -c "host=w.test")
+    [ "$named" -ge 2 ] \
+        || { echo "FAIL: the ratchet forgot at the thaw ($named named park)"; evidence; exit 1; }
     echo "  member -> appliance map -> resolved name -> host world, spliced"
-    echo "  and the world-leg park testifies host=w.test"
+    echo "  and the parks testify host=w.test through a freeze ($named of them)"
     echo; echo "PASS: t3 -- the nameless splice"
     ;;
 
