@@ -1,0 +1,19 @@
+[package]
+name = "cella-terminator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cella-terminator"
+path = "src/main.rs"
+
+# Guest userland only (tasks/PHASE2-security.md, 2.7 (g)): this
+# crate ships inside the terminator image like busybox does. It is
+# not a persona -- no witness door, no install, no shim row -- and
+# its TLS stack stays quarantined here, linked by no other binary.
+[dependencies]
+rustls = { workspace = true }
+rcgen = { workspace = true }
+webpki-roots = { workspace = true }
+rustls-pemfile = { workspace = true }
