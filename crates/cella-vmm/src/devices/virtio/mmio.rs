@@ -306,10 +306,11 @@ impl MmioTransport {
         self.device.drain_ledger_events()
     }
 
-    /// True when any frame parked since the last take (joins
-    /// included) -- the freeze trigger of the one-shot rule.
-    pub fn take_parked_flag(&mut self) -> bool {
-        self.device.take_parked_flag()
+    /// The destinations that parked since the last take (joins
+    /// included) -- the freeze trigger of the one-shot rule, named
+    /// so the membrane's memory can be consulted per destination.
+    pub fn take_parked_dests(&mut self) -> Vec<cella_libs::proto::Destination> {
+        self.device.take_parked_dests()
     }
 
     /// The ids of the operations the device holds.

@@ -57,7 +57,7 @@ pub struct Net {
     /// True when any frame parked since the last take: a frame that
     /// joins an existing operation emits no ledger event, and the
     /// park is the freeze for joins too (the one-shot rule).
-    parked_flag: bool,
+    parked_dests: Vec<proto::Destination>,
     /// The inbound lane: frames the world pushed under an open
     /// valve, held for a decision. An incoming hold never freezes
     /// the machine -- the world's knock is not the machine's own
@@ -149,7 +149,7 @@ impl Net {
             parked: Vec::new(),
             guest_clock,
             pending_ledger: Vec::new(),
-            parked_flag: false,
+            parked_dests: Vec::new(),
             inbound: Vec::new(),
             inbound_bytes: 0,
             inbound_dropped: 0,
@@ -318,7 +318,7 @@ impl Net {
     /// docs/NETWORK-MODEL.md, "one decision per new part of the
     /// world").
     fn park(&mut self, dest: Dest, head_index: u16, frame: Vec<u8>) {
-        self.parked_flag = true;
+        self.parked_dests.push(dest.to_message());
         if let Some(op) = self.parked.iter_mut().find(|op| op.dest == dest) {
             if cfg!(debug_assertions) {
                 eprintln!("cella: parked egress to {dest} (joined)");
@@ -458,8 +458,8 @@ impl VirtioDevice for Net {
         std::mem::take(&mut self.pending_ledger)
     }
 
-    fn take_parked_flag(&mut self) -> bool {
-        std::mem::take(&mut self.parked_flag)
+    fn take_parked_dests(&mut self) -> Vec<proto::Destination> {
+        std::mem::take(&mut self.parked_dests)
     }
 
     fn held_op_ids(&self) -> Vec<Vec<u8>> {

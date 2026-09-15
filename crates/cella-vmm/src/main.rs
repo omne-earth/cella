@@ -486,7 +486,10 @@ fn main() {
         // on a vCPU exit, and an idle guest in HLT can hold one
         // back for seconds; the chronicle must not lag the edge.
         let ledger_path = args.state_dir.join("network").join("ledger");
-        let _ = flush_ledger(&mut mmio_devices, &ledger_path);
+        // The thaw edge never re-freezes on its own flush: these are
+        // the edge's own Released/Lapsed events, not new parks, and
+        // any genuinely new park lands in the run loop's flush.
+        let _ = flush_ledger(&mut mmio_devices, &ledger_path, &[]);
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
         // PVCLOCK_GUEST_STOPPED in the pvclock page, and the flag tells
         // the guest that it was stopped. The freeze must not exist for
@@ -579,8 +582,15 @@ fn run_loop(
     ledger_path: &std::path::Path,
     mem_size_bytes: u64,
 ) {
+    // The membrane's memory (N.F.7), read at boot and on every kick.
+    let memory_path = state_dir.join("membrane-memory");
+    let mut standing = cella_libs::memory::read_standing(&memory_path, epoch_seconds());
     loop {
         if VALVE_KICKED.swap(false, Ordering::SeqCst) {
+            // The membrane's memory (N.F.7): re-read on every kick --
+            // a landing just happened, or an entry may have expired.
+            // The file is the one store; this is a cache of it.
+            standing = cella_libs::memory::read_standing(&memory_path, epoch_seconds());
             // The live path carries the valve edges and the
             // inbound lane. Egress decisions stage and the thaw
             // edge alone applies them (under one-shot a running
@@ -591,12 +601,13 @@ fn run_loop(
             // "The two automata").
             apply_valve_record(state_dir, mmio_devices);
             apply_ingress_verdicts(state_dir, mmio_devices, mem);
+            apply_egress_verdicts_live(state_dir, mmio_devices, mem);
             // The live path's own flush: resolve_ingress's Released
             // or Lapsed event exists only in memory until this
             // writes it, and the loop's other flush waits on the
             // next vcpu_fd.run() -- which blocks indefinitely against
             // an idle guest that a refusal (rightly) never wakes.
-            if flush_ledger(mmio_devices, ledger_path) {
+            if flush_ledger(mmio_devices, ledger_path, &standing) {
                 eprintln!("cella: parked -- the machine freezes (one-shot)");
                 FREEZE_REQUESTED.store(true, Ordering::SeqCst);
             }
@@ -673,10 +684,10 @@ fn run_loop(
         // One-shot: the park is the freeze. The pass completes (the
         // whole TX batch drained above, thus every destination of
         // the batch parked), the ledger flushes, and the machine
-        // stops before the guest runs again. No accumulation exists:
-        // latency is spent frozen, never waiting awake, and the
-        // engine always works against a frozen machine.
-        if flush_ledger(mmio_devices, ledger_path) {
+        // stops before the guest runs again -- unless the membrane
+        // remembers the destination (N.F.7): a remembered park
+        // waits live, and the decision applies on the kick.
+        if flush_ledger(mmio_devices, ledger_path, &standing) {
             eprintln!("cella: parked -- the machine freezes (one-shot)");
             FREEZE_REQUESTED.store(true, Ordering::SeqCst);
         }
@@ -691,6 +702,7 @@ fn run_loop(
 fn flush_ledger(
     mmio_devices: &mut [(u64, u64, MmioTransport)],
     ledger_path: &std::path::Path,
+    standing: &[cella_libs::memory::Standing],
 ) -> bool {
     let mut events = Vec::new();
     for (_, _, t) in mmio_devices.iter_mut() {
@@ -698,11 +710,19 @@ fn flush_ledger(
     }
     // The freeze trigger: any parked frame, not any Parked event. A
     // frame that joins an existing held operation emits no event,
-    // and the park is the freeze for joins too (the one-shot rule).
-    let mut parked_any = false;
+    // and the park is the freeze for joins too (the one-shot rule)
+    // -- unless a standing memory names the destination with
+    // skip_freeze (N.F.7): then that park waits live, and only an
+    // un-remembered destination stops the machine.
+    let now_s = epoch_seconds();
+    let mut freeze_needed = false;
     for (_, _, t) in mmio_devices.iter_mut() {
-        if t.take_parked_flag() {
-            parked_any = true;
+        for dest in t.take_parked_dests() {
+            if cella_libs::memory::skips_freeze(standing, &dest, now_s) {
+                eprintln!("cella: the membrane remembers -- the park waits live");
+            } else {
+                freeze_needed = true;
+            }
         }
     }
     for event in events {
@@ -710,7 +730,42 @@ fn flush_ledger(
             eprintln!("cella: ledger append failed: {e}");
         }
     }
-    parked_any
+    freeze_needed
+}
+
+/// The host clock in epoch seconds: the membrane-memory expiry
+/// arithmetic runs in the judge's time, deliberately.
+fn epoch_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// The egress lane's decisions, applied live: with a standing
+/// memory the machine can hold egress while running (the park
+/// waited live), thus the kick must deliver egress verdicts too --
+/// a no-op when nothing is held, which is every machine before
+/// memory existed.
+fn apply_egress_verdicts_live(
+    state_dir: &std::path::Path,
+    mmio_devices: &mut [(u64, u64, MmioTransport)],
+    mem: &vm_memory::GuestMemoryMmap,
+) {
+    let messages = ledger::read_all(&state_dir.join("verdict")).unwrap_or_default();
+    let mut decisions: std::collections::HashMap<Vec<u8>, proto::Decision> =
+        std::collections::HashMap::new();
+    for msg in &messages {
+        if let Some(proto::message::Body::Decision(d)) = &msg.body {
+            decisions.insert(d.id.clone(), d.clone());
+        }
+    }
+    if decisions.is_empty() {
+        return;
+    }
+    for (_, _, t) in mmio_devices.iter_mut() {
+        t.apply_decisions(&decisions, mem);
+    }
 }
 
 /// Read pending host stdin bytes into the serial device. Non-blocking:

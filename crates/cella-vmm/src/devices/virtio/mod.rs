@@ -89,12 +89,15 @@ pub trait VirtioDevice: Send {
     fn drain_ledger_events(&mut self) -> Vec<cella_libs::proto::Event> {
         Vec::new()
     }
-    /// True when any frame parked since the last take. A frame that
-    /// joins an existing operation emits no ledger event, thus the
-    /// freeze trigger cannot key on events alone: the park is the
-    /// freeze, joins included (the one-shot rule).
-    fn take_parked_flag(&mut self) -> bool {
-        false
+    /// The destinations that parked since the last take, joins
+    /// included. A frame that joins an existing operation emits no
+    /// ledger event, thus the freeze trigger cannot key on events
+    /// alone: the park is the freeze, joins included (the one-shot
+    /// rule) -- unless every parked destination is remembered with
+    /// skip_freeze (N.F.7), which is why the trigger carries the
+    /// destinations, not a bare flag.
+    fn take_parked_dests(&mut self) -> Vec<cella_libs::proto::Destination> {
+        Vec::new()
     }
     /// The ids of the operations this device holds, both lanes,
     /// for the bookkeeping lapse at the thaw edge (see
