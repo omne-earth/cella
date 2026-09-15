@@ -382,6 +382,7 @@ pub fn verify(target: Option<(&str, &str)>) -> u32 {
         ("rootfs", "canonical"),
         ("rootfs", "cella"),
         ("rootfs", "gateway"),
+        ("rootfs", "terminator"),
         ("rootfs", "nested"),
         ("rootfs", "inception"),
     ];

@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# smoke-tls-terminator: the terminated pair (docs/NETWORK-MODEL.md,
+# "The terminator"). Both machines boot the terminator golden: the
+# appliance serves, and the member borrows the image's probe voice
+# and the shared pair trust. One criterion per invocation:
+#   t1  the interceptor: every name resolves to the appliance
+#   t2  termination: the member's handshake verifies a minted leaf
+#       against the baked pair CA (world dead: exit 3, the local
+#       proof that interception, minting, and SNI all hold)
+#   t3  the nameless splice: a static map carries plain TCP to a
+#       host-side world through the resolved name
+#   t4  the cache: the second flow asks the upstream nothing
+#   t5  the unauthorized middle: a probe trusting a different
+#       anchor refuses the handshake
+set -uo pipefail
+
+T="${1:-}"
+case "$T" in
+t1|t2|t3|t4|t5) ;;
+*) echo "usage: tls-terminator.sh <t1|t2|t3|t4|t5>"; exit 2 ;;
+esac
+
+cd "$(dirname "$0")/../.."
+BIN=target/lab/cella
+ENG=target/lab/cella-engine
+WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
+DIAL_PORT=$(( (RANDOM % 8976) + 1024 ))
+DNS_PORT=$(( (RANDOM % 8976) + 1024 ))
+HTTP_PORT=$(( (RANDOM % 8976) + 1024 ))
+# The world services live on the host's LAN address: from a guest,
+# 127.0.0.1 is the guest's own loopback and never leaves the wire.
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
+[ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-lab"; exit 0; }
+[ -f "$ENG" ] || { echo "SKIP: $ENG not built -- run: make build-lab"; exit 0; }
+"$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:terminator || exit 0
+
+say() { echo; echo "==> $1"; }
+GW=10.77.0.1        # the appliance, member side (pair 0 convention)
+MEMBER_IP=10.77.0.2
+
+REAL_HOME="${CELLA_HOME:-$HOME/.cella}"
+export CELLA_HOME=$(mktemp -d /tmp/cella-tlsterm.XXXXXX)
+mkdir -p "$CELLA_HOME/kernel/canonical" "$CELLA_HOME/rootfs/terminator"
+cp "$REAL_HOME/kernel/canonical/bzImage" "$CELLA_HOME/kernel/canonical/"
+cp "$REAL_HOME/rootfs/terminator/rootfs.ext4" "$CELLA_HOME/rootfs/terminator/"
+
+TERM_VM=appliance
+MEM_VM=member
+WIRE="pair$RANDOM"
+DNS_COUNT="$CELLA_HOME/dns-count"
+MOTOR_PID=""; BT_PID=""; BM_PID=""; DNS_PID=""; HTTP_PID=""
+evidence() {
+    echo "-- member console:"; tail -25 "$CELLA_HOME/machines/$MEM_VM/console.log" 2>/dev/null | cat -v
+    echo "-- appliance console:"; tail -25 "$CELLA_HOME/machines/$TERM_VM/console.log" 2>/dev/null | cat -v
+    echo "-- motor (full):"; cat "$MOTOR_LOG" 2>/dev/null; echo "-- member probe lines:"; grep -a "probe" "$CELLA_HOME/machines/$MEM_VM/console.log" 2>/dev/null | cat -v
+}
+teardown() {
+    for p in "$BT_PID" "$BM_PID" "$MOTOR_PID" "$DNS_PID" "$HTTP_PID"; do
+        [ -n "$p" ] && kill "$p" 2>/dev/null || true
+    done
+    if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then
+        for m in "$TERM_VM" "$MEM_VM"; do "$BIN" stop "$m" >/dev/null 2>&1 || true; done
+        echo "kept: $CELLA_HOME"
+        return
+    fi
+    for m in "$TERM_VM" "$MEM_VM"; do
+        "$BIN" stop "$m" >/dev/null 2>&1 || true
+        "$BIN" destroy "$m" >/dev/null 2>&1 || true
+    done
+    rm -rf "$CELLA_HOME"
+}
+trap teardown EXIT
+type_term() { (printf '%s\n' "$1"; sleep 2) | timeout 25 "$BIN" enter "$TERM_VM" >/dev/null; }
+type_mem() { (printf '%s\n' "$1"; sleep 2) | timeout 25 "$BIN" enter "$MEM_VM" >/dev/null; }
+mem_log() { grep -a "$1" "$CELLA_HOME/machines/$MEM_VM/console.log"; }
+thaw_all() {
+    for m in "$TERM_VM" "$MEM_VM"; do
+        [ -f "$CELLA_HOME/machines/$m/state" ] && "$BIN" thaw "$m" >/dev/null 2>&1 || true
+    done
+}
+wait_console() { # <vm> <marker> <secs>
+    local deadline=$((SECONDS + $3))
+    until grep -aq "$2" "$CELLA_HOME/machines/$1/console.log" 2>/dev/null; do
+        [ $SECONDS -lt $deadline ] || return 1
+        thaw_all
+        sleep 1
+    done
+}
+
+# The host-side world: an upstream resolver that answers 127.0.0.1
+# for every name and counts its questions, and a plain HTTP page.
+python3 - "$DNS_PORT" "$DNS_COUNT" "$HOST_IP" <<'PYEOF' &
+import socket, sys
+port, cnt, host = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind((host, port))
+n = 0
+while True:
+    d, a = s.recvfrom(512)
+    n += 1
+    open(cnt, "w").write(str(n))
+    ans = d[:2] + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00" + d[12:]
+    ans += b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04" + bytes(int(o) for o in host.split("."))
+    s.sendto(ans, a)
+PYEOF
+DNS_PID=$!
+mkdir -p "$CELLA_HOME/www" && echo "the-world-answers" > "$CELLA_HOME/www/index.html"
+(cd "$CELLA_HOME/www" && exec python3 -m http.server "$HTTP_PORT" --bind "$HOST_IP" >/dev/null 2>&1) &
+HTTP_PID=$!
+
+say "$T: stand the pair, the judge, and the host world"
+"$BIN" create "$TERM_VM" --rootfs terminator --net "world:$WORLD_PORT/udp,wire:$WIRE" >/dev/null
+"$BIN" create "$MEM_VM" --rootfs terminator --net "wire:$WIRE" >/dev/null
+"$BIN" start "$TERM_VM" >/dev/null
+"$BIN" start "$MEM_VM" >/dev/null
+MOTOR_LOG="$CELLA_HOME/motor.log"
+# Destination grants, standing from stream-open. The terminator
+# image pins its reply ports to 50000-50007 (the consistent reply
+# port), so the appliance's replies to the member are eight exact
+# destinations -- enumerable at policy time, no ephemeral naming.
+GRANTS="--grant arp:600 \
+    --grant $GW:443/tcp:600 \
+    --grant $GW:53/udp:600 \
+    --grant $GW:8080/tcp:600 \
+    --grant $HOST_IP:$DNS_PORT/udp:600 \
+    --grant $HOST_IP:$HTTP_PORT/tcp:600 \
+    --grant $HOST_IP:443/tcp:600"
+for p in $(seq 50000 50007); do
+    GRANTS="$GRANTS --grant $MEMBER_IP:$p/tcp:600 --grant $MEMBER_IP:$p/udp:600"
+done
+# shellcheck disable=SC2086
+"$ENG" motor --listen "127.0.0.1:$DIAL_PORT" --allow "*:*" $GRANTS \
+    > "$MOTOR_LOG" 2>&1 &
+MOTOR_PID=$!
+sleep 1
+grep -q "motor: listening" "$MOTOR_LOG" || { echo "FAIL: the motor never listened"; exit 1; }
+"$ENG" "$TERM_VM" --dial "127.0.0.1:$DIAL_PORT" > "$CELLA_HOME/bridge-term.log" 2>&1 &
+BT_PID=$!
+"$ENG" "$MEM_VM" --dial "127.0.0.1:$DIAL_PORT" > "$CELLA_HOME/bridge-mem.log" 2>&1 &
+BM_PID=$!
+sleep 2
+"$BIN" gateway "$TERM_VM" open >/dev/null
+"$BIN" gateway "$MEM_VM" open >/dev/null
+sleep 1
+
+wait_console "$TERM_VM" "cella-shell: getty" 30 || { echo "FAIL: the appliance never offered a console"; exit 1; }
+wait_console "$MEM_VM" "cella-shell: getty" 30 || { echo "FAIL: the member never offered a console"; exit 1; }
+
+say "  configure the pair (the gates' console hand; the field uses cmdline knobs)"
+# The appliance: gate-local upstream and the t3 map, then respawn.
+type_term "printf 'wire_ip=$GW\nupstream_dns=$HOST_IP:$DNS_PORT\nlisten=443,80\nmap=8080:w.test:$HTTP_PORT\n' > /etc/cella-terminator.conf; pkill cella-terminator; echo conf-o\"k\""
+wait_console "$TERM_VM" "conf-ok" 30 || { echo "FAIL: the appliance took no configuration"; exit 1; }
+# The member: its wire address and its resolver.
+type_mem "ip link set lo up; ip addr add $MEMBER_IP/24 dev eth0; ip link set eth0 up; echo nameserver $GW > /etc/resolv.conf; printf 'wire_ip=127.0.0.1\nupstream_dns=9.9.9.9\n' > /etc/cella-terminator.conf; pkill cella-terminator; echo net-o\"k\""
+wait_console "$MEM_VM" "net-ok" 30 || { echo "FAIL: the member took no address"; exit 1; }
+
+case "$T" in
+
+t1)
+    say "t1: every name resolves to the appliance"
+    type_mem "nslookup w.test $GW 2>&1; echo ns-don\"e\""
+    wait_console "$MEM_VM" "ns-done" 40 || { echo "FAIL: the lookup never returned"; exit 1; }
+    mem_log "$GW" | grep -qv "nameserver" || true
+    grep -a -A1 "Name:" "$CELLA_HOME/machines/$MEM_VM/console.log" | grep -q "$GW" \
+        || mem_log "Address.*$GW" >/dev/null \
+        || { echo "FAIL: the answer was not the appliance"; echo "-- the member's last words:"; tail -15 "$CELLA_HOME/machines/$MEM_VM/console.log" | cat -v; exit 1; }
+    echo "  the interceptor answered home"
+    echo; echo "PASS: t1 -- the resolver is the interceptor"
+    ;;
+
+t2)
+    say "t2: the minted leaf verifies against the baked pair CA"
+    type_mem "/bin/cella-terminator --probe w.test 443 $GW /etc/cella/pair-ca.pem; echo probe-r\"c\"=\$?"
+    wait_console "$MEM_VM" "probe-rc=" 60 || { echo "FAIL: the probe never returned"; exit 1; }
+    mem_log "probe: verified w.test" >/dev/null \
+        || { echo "FAIL: the handshake did not verify"; evidence; exit 1; }
+    mem_log "probe-rc=3" >/dev/null \
+        || { echo "FAIL: expected exit 3 (verified, world dead) -- $(mem_log 'probe-rc=' | tail -1)"; exit 1; }
+    echo "  interception, SNI, minting, and the pair trust all hold"
+    echo; echo "PASS: t2 -- termination verified"
+    ;;
+
+t3)
+    say "t3: the static map splices plain TCP to the world"
+    type_mem "wget -q -O- http://$GW:8080/ ; echo wget-r\"c\"=\$?"
+    wait_console "$MEM_VM" "wget-rc=" 60 || { echo "FAIL: the fetch never returned"; exit 1; }
+    mem_log "the-world-answers" >/dev/null \
+        || { echo "FAIL: the world's page never arrived"; evidence; exit 1; }
+    echo "  member -> appliance map -> resolved name -> host world, spliced"
+    echo; echo "PASS: t3 -- the nameless splice"
+    ;;
+
+t4)
+    say "t4: the cache asks the upstream once"
+    type_mem "wget -q -O- http://$GW:8080/ >/dev/null; echo one-don\"e\""
+    wait_console "$MEM_VM" "one-done" 60 || { echo "FAIL: the first fetch never returned"; exit 1; }
+    first=$(cat "$DNS_COUNT" 2>/dev/null || echo 0)
+    [ "$first" -ge 1 ] || { echo "FAIL: the upstream was never asked"; evidence; exit 1; }
+    type_mem "wget -q -O- http://$GW:8080/ >/dev/null; echo two-don\"e\""
+    wait_console "$MEM_VM" "two-done" 60 || { echo "FAIL: the second fetch never returned"; exit 1; }
+    second=$(cat "$DNS_COUNT")
+    [ "$second" -eq "$first" ] \
+        || { echo "FAIL: the cache leaked a question ($first -> $second)"; exit 1; }
+    echo "  $first upstream question(s) total; the second flow asked nothing"
+    echo; echo "PASS: t4 -- TTL-honest caching"
+    ;;
+
+t5)
+    say "t5: an anchor that is not the pair's refuses the middle"
+    # The config file is not a certificate: an empty trust store,
+    # and the handshake must fail -- the member's protection.
+    type_mem "/bin/cella-terminator --probe w.test 443 $GW /etc/cella-terminator.conf; echo probe-r\"c\"=\$?"
+    wait_console "$MEM_VM" "probe-rc=" 60 || { echo "FAIL: the probe never returned"; exit 1; }
+    if mem_log "probe: verified" >/dev/null; then
+        echo "FAIL: a foreign anchor verified the middle"; exit 1
+    fi
+    mem_log "probe-rc=1" >/dev/null \
+        || { echo "FAIL: expected exit 1 -- $(mem_log 'probe-rc=' | tail -1)"; exit 1; }
+    echo "  no pair trust, no middle: the handshake refused"
+    echo; echo "PASS: t5 -- the unauthorized middle is refused"
+    ;;
+esac

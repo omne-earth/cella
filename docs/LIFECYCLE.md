@@ -301,6 +301,7 @@ toolbox. The repository carries the build inputs, not the artifacts.
 | rootfs | cella     | + a shell on the serial console; diagnostics only when the command line asks |
 | rootfs | nested    | + a static cella and the canonical inner assets |
 | rootfs | gateway   | canonical + the appliance init: agent side from cella_pair=, plain forwarding (docs/EXAMPLES.md, E3 and E5) |
+| rootfs | terminator | canonical + the resolver-cache and the terminate-and-splice proxy (the cella-terminator crate, static); the pair CA key baked at build, ca.pem exported beside the golden and digested in the manifest (docs/NETWORK-MODEL.md, "The terminator") |
 | rootfs | inception | nested + the static cella-probe |
 
 ## Process management, daemonless

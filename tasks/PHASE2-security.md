@@ -160,7 +160,124 @@ lives in tasks/PHASE1-core.md.
       matches the build.
 - [x] 2.2 docs/EXAMPLES.md notes that nested layers must use
       distinct knock ports (2026-09-03, the knockable example).
-- [ ] 2.6 The membrane's memory (proposed 2026-09-15, branch
+- [ ] 2.8 The timeline rewrite at the terminator (proposed
+      2026-09-15; roadmap item 7). The terminator holds plaintext
+      on both legs and is therefore the one boundary where
+      application-layer timestamps can be translated into the
+      member's frame. The member's frame is already available:
+      every park carries guest_ns beside host_ns, and the member
+      leg itself carries usable hints. World side operates in
+      world time, unchanged. Member side, the terminator
+      rewrites unsigned application-layer times in responses
+      (Date, Expires, Retry-After, cookie lifetimes) into the
+      member's frame, extending the cryogenic claim through the
+      application layer. Three boundaries, stated:
+      (a) Signed time cannot be rewritten. JWT iat/exp, signed
+      cookies, and timestamps under a MAC break their signatures
+      if modified. The rewrite covers plain headers only, and
+      the signed leakage remains, documented -- until the
+      Augmenting World Engine is ready: an engine that supplies
+      part of the world also signs that part, and can re-issue
+      its own artifacts in the member's frame. The signed leak
+      then shrinks to exactly the artifacts of the world the
+      engine does not control.
+      (b) Certificate validity is the corollary and needs
+      handling regardless of this item: a long-frozen member
+      validates the terminator's minted leaf against its own
+      past clock, so the leaf's notBefore must reach generously
+      into the past. This is correctness, not a feature; it is
+      recorded in 2.7 (c) and implemented in the minter.
+      (c) The offset source is the design fork to rule before
+      implementation: per-flow inference from what the member
+      leg carries (no new plumbing, approximate) versus
+      engine-fed precision (the engine knows both clocks
+      exactly; feeding the terminator requires a new hint kind
+      -- vocabulary growth and an Accord bump).
+      Blocked on: 2.7 shipping.
+- [x] 2.7 The terminator (proposed 2026-09-15, landed 2026-09-15,
+      branch feat/gateway-tls-terminator; P1 -- the TLS-EOF
+      blocker; all four phases shipped, tls-terminator-t1..t5
+      green in the full smoke battery):
+      the one network appliance, an ordinary cella machine
+      wearing the `terminator` rootfs flavor in the pair seat
+      (member on a wire, world on the other nic). The rulings:
+      (a) two legs -- the member's peer is always its terminator
+      (that leg's patience is ours; a member freezes mid-
+      handshake for as long as judgment takes), and the world
+      leg is the terminator's own connection at wire speed;
+      (b) terminate-and-splice on every TCP port -- a peeked TLS
+      ClientHello terminates (SNI -> leaf minted at runtime from
+      the pair CA -> world-leg TLS of the terminator's own),
+      anything else byte-splices, which alone moves peer-patience
+      off the member for all TCP; (c) the pair CA -- key baked
+      into the terminator image at build, never exported; ca.pem
+      exported beside the golden, digested in the manifest, and
+      baked by the member's builder into its trust store: the
+      middle is the architecture, consented at image build,
+      stated loudly in docs/integration/TLS-TERMINATOR.md; and
+      minted leaves carry generous validity into the past
+      (2026-09-15, the frozen-member corollary): a member that
+      slept a year validates the leaf against its own past
+      clock, thus notBefore reaches far behind and notAfter far
+      ahead -- the leaf's window is the pair's lifetime, not the
+      world's calendar;
+      (d) the names live at the appliance -- the terminator
+      resolves and caches for its members (resolv.conf points at
+      its wire address), upstream a configured provider ip over
+      judged, remembered UDP (roadmap 5 lands in a guest);
+      (e) just another machine -- no freeze exemption, no
+      attentiveness contract: the judge's standing memory (2.6)
+      keeps 443 and the provider live, a terminator freeze kills
+      a mid-flight world session honestly, and what slips
+      through is an upstream retry; (f) busybox, not systemd --
+      one static proxy under the house init's respawn loop; a
+      systemd variant, if ever, is an integrator's build, not
+      cella's golden; (g) the cella-terminator crate is a new
+      category, guest userland only -- no witness door (doors
+      stay 7), no install, no shim row, no persona gate; it
+      ships inside the image like busybox; (h) the proto gains
+      nothing -- frames are frames, and 2.6's vocabulary
+      suffices; (i) the shakedown surface, enumerated before it
+      is entered (2026-09-15). The host surface grows by zero:
+      no new binary, socket, door, or capability -- a fully
+      compromised proxy still stands inside a jailed, judged
+      cella machine. The guest-internal fire, itemized: (1) the
+      proxy parses attacker bytes from both directions -- a
+      hostile member's ClientHello and a hostile world's
+      responses -- which is why it is memory-safe rustls, never
+      a C daemon; (2) the CA key lives in the image but is
+      pair-scoped: stealing it mints certs trusted only by
+      members that baked this pair's cert -- traffic already
+      routed through the very box the thief had to own; one
+      pair, one CA, one blast radius, and no pair's CA is ever
+      baked into an unrelated member; (3) the resolver-cache is
+      a poisoning surface: upstream rides the translator's
+      per-flow sockets (5-tuple bound), and cache discipline --
+      TTL honesty, no glue trust -- is a gate assertion;
+      (4) rustls and rcgen enter the tree: pinned in the
+      lockfile, and the built artifact is digested in the golden
+      manifest like every artifact, judged by doctor verify;
+      (5) the plaintext concentration is the consented design,
+      and the shakedown confirms the proxy never writes payload
+      anywhere durable -- no payload logs, nothing on disk
+      beyond the DNS cache; (j) interception is the resolver
+      (ruled 2026-09-15): it answers every member query with the
+      terminator's own wire address, the real name rides in the
+      SNI or the Host header, and the proxy resolves upstream at
+      connect time -- no netfilter (the canonical kernel stays
+      quiet), no redirect, no proxy variables in members; a
+      nameless bare-TCP flow routes only by a static per-port
+      map, because a matcher that never guesses cannot route a
+      nameless flow. webpki-roots joins rustls and rcgen in the
+      pinned, manifest-digested supply chain: the world leg
+      verifies its peers against compiled-in roots, never
+      blindly. Gates: smoke-tls-terminator =
+      tls-terminator-t1..tN (scripts/test/tls-terminator.sh),
+      the split-with-aggregate pattern. Phases: A docs (this
+      entry rides them), B the proxy crate with no-KVM units,
+      C the image build and the CA export, D the gates.
+- [x] 2.6 The membrane's memory (proposed 2026-09-15, landed
+      2026-09-15, branch
       feat/membrane-memory): the judge leaves standing memory at
       the membrane -- one MembraneMemory entry per destination in
       the memory file (N.F.7), written by the gateway persona like
@@ -223,6 +340,24 @@ lives in tasks/PHASE1-core.md.
       (the live park, isolation, self-expiry, the live refusal,
       the witnessed door, the fail-closed edges), the existing
       battery untouched as the backward-compatibility proof.
+      Addendum, ruled 2026-09-15 -- the consistent reply port:
+      the ephemeral-reply-port freeze (a service's answer goes
+      to a port no policy can enumerate) is solved guest-side,
+      not membrane-side: the client machine pins
+      ip_local_port_range to a narrow agreed window (the
+      terminator image bakes 50000-50007) and the judge grants
+      the window as exact destinations on the serving membrane.
+      Matching stays destination-only. The symmetric
+      (either-end) match was considered the same day and
+      rejected: an egress frame's source is sender-authored, so
+      source-matching hands any granted machine a standing
+      freeze-evasion channel (stamp a granted endpoint as the
+      source of junk egress, stay live while refused);
+      destination is routing, unforgeable for benefit, and
+      non-compliance with the window just freezes, fail-closed.
+      Proven on the terminator wire (tls-terminator-t1..t5
+      green on destination-only matching with the baked
+      window).
 - [ ] 2.5 cella extract (proposed 2026-09-09, for the titanium
       collection model): a fourth universe verb -- `cella extract
       <machine> <guest-path>` emits the evidence at that path from

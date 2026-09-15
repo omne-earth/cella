@@ -46,6 +46,9 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-membrane-memory membrane-memory-mm1 membrane-memory-mm2 \
         membrane-memory-mm3 membrane-memory-mm4 membrane-memory-mm5 \
         membrane-memory-mm6 \
+        smoke-tls-terminator tls-terminator-t1 tls-terminator-t2 \
+        tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
+        golden-terminator \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
         test-jail test-seccomp test-seccomp-vmm-kvm test-seccomp-personas \
@@ -105,6 +108,9 @@ SMOKE_TARGETS := smoke smoke-debug smoke-release \
         smoke-membrane-memory membrane-memory-mm1 membrane-memory-mm2 \
         membrane-memory-mm3 membrane-memory-mm4 membrane-memory-mm5 \
         membrane-memory-mm6 \
+        smoke-tls-terminator tls-terminator-t1 tls-terminator-t2 \
+        tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
+        golden-terminator \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
         smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 engine-w5 \
@@ -538,6 +544,40 @@ membrane-memory-mm6: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/membrane-memory.sh mm6
 
+## The terminator golden: built on demand by the tls gates
+golden-terminator: build
+	$(LOG)
+	$(CELLA_DEV) build rootfs terminator
+
+## t1: the interceptor -- every member name resolves to the appliance
+tls-terminator-t1: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t1
+
+## t2: termination -- the minted leaf verifies against the baked pair CA
+tls-terminator-t2: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t2
+
+## t3: the nameless splice -- a static map carries plain TCP to the world
+tls-terminator-t3: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t3
+
+## t4: the cache -- the second flow asks the upstream nothing
+tls-terminator-t4: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t4
+
+## t5: the unauthorized middle -- a foreign anchor refuses the handshake
+tls-terminator-t5: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t5
+
+## The terminated pair's family, the interceptor first
+smoke-tls-terminator: tls-terminator-t1 tls-terminator-t2 \
+        tls-terminator-t3 tls-terminator-t4 tls-terminator-t5
+
 ## The membrane-memory family, the door first (mm1-mm4 ride it)
 smoke-membrane-memory: membrane-memory-mm5 membrane-memory-mm1 \
         membrane-memory-mm2 membrane-memory-mm3 membrane-memory-mm4 \
@@ -668,7 +708,7 @@ smoke-release: smoke-thaw smoke-machine smoke-rootless \
 
 ## The whole battery: the no-KVM checks first (fail fast), then the dark
 ## half against the field flavor, then the console half against the lab
-smoke: test smoke-release smoke-debug smoke-membrane-memory
+smoke: test smoke-release smoke-debug smoke-membrane-memory smoke-tls-terminator
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="

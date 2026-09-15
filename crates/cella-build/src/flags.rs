@@ -56,6 +56,9 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
         ("rootfs", "gateway") => {
             crate::orchestrate::rootfs_gateway(&rootfs_path(flavor), &rootfs_path("canonical"))
         }
+        ("rootfs", "terminator") => {
+            crate::orchestrate::rootfs_terminator(&rootfs_path(flavor), &rootfs_path("canonical"))
+        }
         ("rootfs", "nested") => crate::orchestrate::rootfs_nested(&rootfs_path(flavor)),
         ("rootfs", "inception") => crate::orchestrate::rootfs_inception(&rootfs_path(flavor)),
         _ => Err(format!(
@@ -80,11 +83,19 @@ fn stale_inputs(axis: &str, flavor: &str, out: &Path) -> Result<Option<String>, 
             b.join("kernel-fragment.config"),
             b.join("kernel-fragment-nested.config"),
         ],
-        _ => vec![
-            b.join(format!("rootfs-{flavor}.sh")),
-            b.join("rootfs.sh"),
-            b.join("busybox-fragment.config"),
-        ],
+        _ => {
+            let mut v = vec![
+                b.join(format!("rootfs-{flavor}.sh")),
+                b.join("rootfs.sh"),
+                b.join("busybox-fragment.config"),
+            ];
+            if flavor == "terminator" {
+                // The pair's identity: a changed cert is a changed
+                // pair, and the manifest must say so.
+                v.push(out.parent().unwrap().join("ca.pem"));
+            }
+            v
+        }
     };
     for input in inputs {
         if !input.is_file() {
@@ -116,11 +127,17 @@ fn write_golden_manifest(axis: &str, flavor: &str, artifact: &Path) -> Result<()
             b.join("kernel-fragment.config"),
             b.join("kernel-fragment-nested.config"),
         ],
-        _ => vec![
-            b.join(format!("rootfs-{flavor}.sh")),
-            b.join("rootfs.sh"),
-            b.join("busybox-fragment.config"),
-        ],
+        _ => {
+            let mut v = vec![
+                b.join(format!("rootfs-{flavor}.sh")),
+                b.join("rootfs.sh"),
+                b.join("busybox-fragment.config"),
+            ];
+            if flavor == "terminator" {
+                v.push(artifact.parent().unwrap().join("ca.pem"));
+            }
+            v
+        }
     };
     let input_refs: Vec<&Path> = inputs.iter().map(|p| p.as_path()).collect();
     cella_libs::golden::write_manifest(artifact, axis, flavor, &sources, &input_refs)?;

@@ -12,6 +12,9 @@ walks live per topic, and titanium follows them unchanged:
 - docs/integration/COLLECTION.md -- bake, run, collect: the
   verifier reads evidence through `cella extract` (a still
   machine only), never a live machine.
+- docs/integration/TLS-TERMINATOR.md -- the one network
+  appliance: TLS and names across cryogenic time, the consented
+  pair CA, the honest freeze.
 
 ## The task.toml mapping
 
@@ -23,17 +26,22 @@ walks live per topic, and titanium follows them unchanged:
   cella start trial
   ```
 
-- `allow_internet = true` -- a world nic with a port map
-  (docs/EXAMPLES.md, E1-E2), titanium's engine on the seam, and
-  the task's policy checked in beside the task as its source
-  (titanium's own file; cella reads no policy -- the wire is the
-  contract).
+- `allow_internet = true` -- the terminated pair
+  (docs/integration/TLS-TERMINATOR.md, docs/EXAMPLES.md E9):
+  the task machine on a wire, the terminator on the world,
+  titanium's engine judging both borders, and the task's policy
+  checked in beside the task as its source (titanium's own file;
+  cella reads no policy -- the wire is the contract). The task
+  image bakes the pair ca.pem and points resolv.conf at the
+  terminator (ROOTFS.md, the pair-trust step).
 
   ```sh
-  cella create trial --kernel task --rootfs <task-name> --net world:8080/tcp
-  cella start trial
-  cella gateway trial open
-  cella-engine trial --dial <engine-addr> &   # titanium's engine judges
+  cella create term --rootfs terminator --net world,wire:trial
+  cella create trial --kernel task --rootfs <task-name> --net wire:trial
+  cella start term && cella start trial
+  cella gateway term open && cella gateway trial open
+  cella-engine term --dial <engine-addr> &    # titanium's engine judges
+  cella-engine trial --dial <engine-addr> &   # both borders
   ```
 
 - `artifacts = ["/app/report.json"]` -- the collect step's extract

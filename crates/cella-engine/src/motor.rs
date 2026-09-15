@@ -9,6 +9,12 @@ use tokio_stream::StreamExt;
 
 struct Motor {
     allow: Vec<(Vec<u8>, u32)>,
+    /// Standing grants, emitted once when a bridge's stream opens:
+    /// (ip-or-empty-for-arp, port, proto, keep_open seconds).
+    /// Symmetric by the membrane's law -- one endpoint grant covers
+    /// its flows in both directions, replies included. The proto
+    /// matters: matching is exact, and 53/udp is not 53/tcp.
+    grant: Vec<(Vec<u8>, u32, u32, u64)>,
     /// The example's memory rule: (ip-or-empty-for-arp, port,
     /// keep_open seconds). A released park matching one also gets
     /// a membrane_memory Decision -- the whole seam, demonstrated.
@@ -26,9 +32,56 @@ impl pb::engine_server::Engine for Motor {
         let mut events = req.into_inner();
         let allow = self.allow.clone();
         let remember = self.remember.clone();
+        let grant = self.grant.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            while let Some(Ok(ev)) = events.next().await {
+            // The standing grants land before the first verdict: a
+            // memory rides the Decision oneof like any other word.
+            for (ip, port, proto, keep_open) in &grant {
+                let destination = if ip.is_empty() {
+                    pb::Destination {
+                        host: String::new(),
+                        ip: Vec::new(),
+                        port: 0,
+                        proto: 0,
+                        ethertype: 0x0806,
+                        mac: Vec::new(),
+                    }
+                } else {
+                    pb::Destination {
+                        host: String::new(),
+                        ip: ip.clone(),
+                        port: *port,
+                        proto: *proto,
+                        ethertype: 0x0800,
+                        mac: Vec::new(),
+                    }
+                };
+                let d = pb::Decision {
+                    id: Vec::new(),
+                    decision: Some(pb::decision::Decision::MembraneMemory(pb::MembraneMemory {
+                        destination: Some(destination),
+                        skip_freeze: true,
+                        keep_open: *keep_open,
+                        written: 0,
+                    })),
+                };
+                println!("motor: grant standing (keep_open={keep_open}s)");
+                if tx.send(Ok(d)).await.is_err() {
+                    return;
+                }
+            }
+            while let Some(next) = events.next().await {
+                let ev = match next {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        // A stream error is worth a line, not a
+                        // silent end: the bridge retries frames,
+                        // the motor keeps listening.
+                        println!("motor: stream error: {e}");
+                        continue;
+                    }
+                };
                 let Some(pb::event::Event::Parked(op)) = ev.event else {
                     // Completions and looks are evidence, not questions.
                     println!("motor: event (not a park)");
@@ -156,6 +209,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut listen = None;
     let mut allow = Vec::new();
     let mut remember = Vec::new();
+    let mut grant = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -163,6 +217,32 @@ pub fn run(args: &[String]) -> Result<(), String> {
             "--allow" => {
                 let v = it.next().ok_or("--allow needs ip:port")?;
                 allow.push(parse_allow(v)?);
+            }
+            "--grant" => {
+                // ip:port/proto:keep_open_s or arp:keep_open_s -- a
+                // standing symmetric endpoint grant, sent at
+                // stream-open. Exact means exact: the proto rides.
+                let v = it
+                    .next()
+                    .ok_or("--grant needs ip:port/proto:secs or arp:secs")?;
+                let (head, secs) = v
+                    .rsplit_once(':')
+                    .ok_or_else(|| format!("grant {v:?}: want ip:port/proto:secs or arp:secs"))?;
+                let keep_open: u64 = secs.parse().map_err(|e| format!("grant {v:?}: {e}"))?;
+                if head == "arp" {
+                    grant.push((Vec::new(), 0, 0, keep_open));
+                } else {
+                    let (addr, protoword) = head
+                        .rsplit_once('/')
+                        .ok_or_else(|| format!("grant {v:?}: no /proto"))?;
+                    let proto: u32 = match protoword {
+                        "tcp" => 6,
+                        "udp" => 17,
+                        n => n.parse().map_err(|e| format!("grant {v:?}: {e}"))?,
+                    };
+                    let (ip, port) = parse_allow(addr)?;
+                    grant.push((ip, port, proto, keep_open));
+                }
             }
             "--remember" => {
                 // ip:port:keep_open_s, or arp:keep_open_s -- the
@@ -198,6 +278,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .add_service(pb::engine_server::EngineServer::new(Motor {
                 allow,
                 remember,
+                grant,
             }))
             .serve(addr)
             .await

@@ -3,8 +3,12 @@
 The decision record for how a cella machine touches the world.
 Accepted 2026-09-01. Revised 2026-09-03: the rootless network
 (1.6.14e) is the shipped architecture, and the appliance phases
-are descoped (ruled 2026-09-02). The mechanism's design record is
-docs/ROOTLESS-NETWORK.md; this document states the law.
+are descoped (ruled 2026-09-02). Revised 2026-09-15: roadmap
+items 2-5 land as appliance-image and engine property -- the
+terminator (see "The terminator") -- and the ruling stands: not
+cella's core to build, and cella's core is untouched. The
+mechanism's design record is docs/ROOTLESS-NETWORK.md; this
+document states the law.
 
 The diagrams share one identifier space, prefixed N: N.G is the
 guest, N.M the membrane (the VMM), N.T the translator, N.H the
@@ -37,7 +41,8 @@ each membrane judges its own frames.
 - **The world side.** The translator answers ARP and the gateway's
   echo at the edge. It carries ICMP, UDP, and TCP through plain
   host sockets. DNS is UDP like any other; no resolver stands in
-  the path.
+  the frame path (the terminator appliance may *be* a resolver --
+  a guest at the far end of a wire, never the path itself).
 
 - **The wire side.** A wire joins exactly two machines. Pairing is
   two manifests that name the same wire; the translators meet at
@@ -362,6 +367,60 @@ interface carries an unmanaged mode.
 - A forwarding topology (a gateway guest between wires) costs a
   judged crossing at every membrane it traverses, deliberately.
 
+## The terminator
+
+The one network appliance (ruled 2026-09-15): an ordinary cella
+machine wearing the `terminator` rootfs flavor, in the pair seat
+-- a member on a wire, the world on the other nic -- that splits
+every TCP connection in two and owns the names.
+
+- **Two legs.** The member's peer is always its terminator: that
+  leg's patience is ours, and a member may freeze mid-handshake
+  for as long as judgment takes. The world leg is the
+  terminator's own connection, made at wire speed; the world peer
+  never meets a freeze the terminator itself does not take.
+- **Terminate and splice, every TCP port.** The proxy peeks the
+  member leg's first bytes: a TLS ClientHello is terminated --
+  the SNI names the world peer, a leaf is minted from the pair
+  CA, and the world leg is TLS of the terminator's own -- and
+  anything else is a plain byte splice, which alone moves
+  peer-patience off the member for every TCP protocol.
+- **The pair CA, consented.** The CA key is baked into the
+  terminator image at build and never leaves it; the CA cert
+  exports beside the golden, and a member trusts it because its
+  builder baked it into the trust store. The middle is the
+  architecture, chosen at image build, on the record
+  (docs/integration/TLS-TERMINATOR.md states it loudly).
+- **The names live at the appliance -- and the resolver is the
+  interceptor.** Members point resolv.conf at the terminator's
+  wire address, and the resolver answers every query with that
+  same address: the member connects to the terminator believing
+  it is the world, and the real name rides in the connection
+  itself -- the SNI for TLS on any port, the Host header for
+  plain HTTP. The proxy resolves the real address at connect
+  time, upstream over the world nic as ordinary judged UDP to a
+  configured provider, cached at the appliance. No netfilter, no
+  redirect, no proxy variables in members: the canonical kernel
+  stays quiet, and interception is an answer, not a rule. A flow
+  that carries no name (a bare TCP port that is neither TLS nor
+  HTTP) is served only by a static per-port map in the
+  terminator's configuration -- a matcher that never guesses
+  cannot route a nameless flow. Roadmap item 5 lands here, in a
+  guest.
+- **Just another machine.** No lifecycle exception exists: the
+  terminator parks, freezes, and thaws like any machine, and the
+  judge's standing memory (N.F.7) keeps its hot paths -- 443 and
+  the DNS provider -- deciding live. The honest consequence: a
+  world-leg session does not survive a terminator freeze
+  mid-flight. Memory makes such freezes rare on remembered
+  paths; what slips through is an upstream retry, never a broken
+  promise.
+- **In-image machinery, not cella's.** The proxy and the resolver
+  are guest userland (the cella-terminator crate: a new category
+  -- no witness door, no install, no shim row; it ships only
+  inside the image, like busybox). The proto gains nothing:
+  frames are frames, and the engine's vocabulary suffices.
+
 ## Roadmap
 
 Cella ends as the enforcement primitive: every crossing named,
@@ -372,13 +431,17 @@ the world engine, not to cella.
 1. The engine: `service Engine` receives the Event stream and
    answers with Decisions -- the judge becomes a program.
 2. The appliance pair: a gateway machine between a member and the
-   world, judging as a resident.
+   world, judging as a resident. (Landed 2026-09-15 as the
+   terminator -- see "The terminator"; no resident exemption,
+   just a machine.)
 3. TCP termination at the appliance: the member's peer is always
    its appliance, and world-side flows survive any freeze length.
+   (Landed with the terminator, as terminate-and-splice.)
 4. TLS against a pair CA: the appliance terminates, the member
-   trusts its own CA from birth.
+   trusts its own CA from birth. (Landed with the terminator.)
 5. DNS as a service: resolution becomes a parkable operation on a
-   name.
+   name. (Landed at the appliance: the terminator resolves and
+   caches; the upstream is judged, remembered UDP.)
 6. Ownership of peer patience: the engine manages what the
    world's timeouts will bear.
 7. The timeline rewrite: application-layer timestamps translated

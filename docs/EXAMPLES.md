@@ -214,3 +214,38 @@ time), and the next park freezes again: the cryogenic default
 resumes on its own. Every landing carries the written stamp and
 a witnessed audit entry; every crossing, remembered or not,
 stands in the chronicle.
+
+### E9 -- The terminated pair
+
+TLS across cryogenic time (docs/NETWORK-MODEL.md, "The
+terminator"): the member's peer is its appliance, and the names
+live there too.
+
+```
+cella create term --rootfs terminator --net world,wire:pair
+cella create member --net wire:pair
+cella start term && cella start member
+cella gateway term open && cella gateway member open
+cella-engine term --dial <engine-addr> &     # one bridge per machine;
+cella-engine member --dial <engine-addr> &   # the judge remembers
+```
+
+```mermaid
+graph LR
+    A["member (any image, pair CA in its trust store)"]
+    B["term (terminator image: proxy + resolver, CA key)"]
+    W(("the world"))
+    A ---|"wire pair (N.H.4)"| B
+    B ---|"world nic, judged and remembered"| W
+```
+
+The engine's standing memory on term's border keeps the hot paths
+live -- the 443 destinations and the DNS provider's
+ip:53/udp -- so the world leg runs at wire speed. The member's
+handshake crosses only the wire: its peer is the terminator,
+whose patience is configured, and the member can freeze
+mid-flight for as long as judgment takes. Plain TCP splices
+without termination; TLS terminates on the SNI's minted leaf.
+The terminator itself freezes like any machine: a mid-flight
+world session dies honestly when it does, and the memory makes
+that rare.

@@ -171,12 +171,18 @@ pub fn run(vm: &str, dial: &str) -> Result<(), String> {
                     let mut bytes = Vec::new();
                     if f.read_to_end(&mut bytes).is_ok() {
                         let events = events_in(&bytes);
-                        for e in events.iter().skip(sent) {
-                            if tx.send(e.clone()).await.is_err() {
-                                return;
+                        // A read can land mid-append and see a torn
+                        // final frame; the count then dips below the
+                        // cursor. Never rewind: send only past the
+                        // high-water mark.
+                        if events.len() > sent {
+                            for e in events.iter().skip(sent) {
+                                if tx.send(e.clone()).await.is_err() {
+                                    return;
+                                }
                             }
+                            sent = events.len();
                         }
-                        sent = events.len();
                     }
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -185,6 +191,7 @@ pub fn run(vm: &str, dial: &str) -> Result<(), String> {
 
         // Decisions land as they arrive. The bridge never filters,
         // reorders, or defaults: the engine's word, verbatim.
+        eprintln!("bridge: {vm_name} connected to {dial}");
         while let Some(d) = inbound
             .message()
             .await
@@ -192,6 +199,7 @@ pub fn run(vm: &str, dial: &str) -> Result<(), String> {
         {
             land(&vm_name, d)?;
         }
+        eprintln!("bridge: {vm_name} stream ended");
         tail.abort();
         Ok(())
     })
