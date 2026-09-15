@@ -12,12 +12,15 @@
 #   t4  the cache: the second flow asks the upstream nothing
 #   t5  the unauthorized middle: a probe trusting a different
 #       anchor refuses the handshake
+#   t6  the named world: https://example.com end to end -- real
+#       DNS, real world-leg TLS against the pinned roots, minted
+#       leaf on the member leg (SKIPs without internet)
 set -uo pipefail
 
 T="${1:-}"
 case "$T" in
-t1|t2|t3|t4|t5) ;;
-*) echo "usage: tls-terminator.sh <t1|t2|t3|t4|t5>"; exit 2 ;;
+t1|t2|t3|t4|t5|t6) ;;
+*) echo "usage: tls-terminator.sh <t1|t2|t3|t4|t5|t6>"; exit 2 ;;
 esac
 
 cd "$(dirname "$0")/../.."
@@ -33,6 +36,10 @@ HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head 
 [ -f "$BIN" ] || { echo "SKIP: $BIN not built -- run: make build-lab"; exit 0; }
 [ -f "$ENG" ] || { echo "SKIP: $ENG not built -- run: make build-lab"; exit 0; }
 "$BIN" doctor gate kvm bwrap golden:kernel:canonical golden:rootfs:terminator || exit 0
+if [ "$T" = t6 ]; then
+    timeout 5 bash -c 'exec 3<>/dev/tcp/example.com/443' 2>/dev/null \
+        || { echo "SKIP: no route to example.com -- the named world needs the internet"; exit 0; }
+fi
 
 say() { echo; echo "==> $1"; }
 GW=10.77.0.1        # the appliance, member side (pair 0 convention)
@@ -124,12 +131,17 @@ GRANTS="--grant arp:600 \
     --grant $GW:8080/tcp:600 \
     --grant $HOST_IP:$DNS_PORT/udp:600 \
     --grant $HOST_IP:$HTTP_PORT/tcp:600 \
-    --grant $HOST_IP:443/tcp:600"
+    --grant $HOST_IP:443/tcp:600 \
+    --grant 9.9.9.9:53/udp:600"
 for p in $(seq 50000 50007); do
     GRANTS="$GRANTS --grant $MEMBER_IP:$p/tcp:600 --grant $MEMBER_IP:$p/udp:600"
 done
+# The named world (t6): the world-leg 443 destination is unknowable
+# at policy time, so a released 443 park plants its own exact
+# memory -- the remember rule, port-wildcarded.
 # shellcheck disable=SC2086
 "$ENG" motor --listen "127.0.0.1:$DIAL_PORT" --allow "*:*" $GRANTS \
+    --remember "*:443:600" \
     > "$MOTOR_LOG" 2>&1 &
 MOTOR_PID=$!
 sleep 1
@@ -147,8 +159,14 @@ wait_console "$TERM_VM" "cella-shell: getty" 30 || { echo "FAIL: the appliance n
 wait_console "$MEM_VM" "cella-shell: getty" 30 || { echo "FAIL: the member never offered a console"; exit 1; }
 
 say "  configure the pair (the gates' console hand; the field uses cmdline knobs)"
-# The appliance: gate-local upstream and the t3 map, then respawn.
-type_term "printf 'wire_ip=$GW\nupstream_dns=$HOST_IP:$DNS_PORT\nlisten=443,80\nmap=8080:w.test:$HTTP_PORT\n' > /etc/cella-terminator.conf; pkill cella-terminator; echo conf-o\"k\""
+# The appliance: gate-local upstream and the t3 map -- except t6,
+# which faces the real world: the true upstream, no map.
+if [ "$T" = t6 ]; then
+    APPLIANCE_CONF="wire_ip=$GW\nupstream_dns=9.9.9.9\nlisten=443,80\n"
+else
+    APPLIANCE_CONF="wire_ip=$GW\nupstream_dns=$HOST_IP:$DNS_PORT\nlisten=443,80\nmap=8080:w.test:$HTTP_PORT\n"
+fi
+type_term "printf '$APPLIANCE_CONF' > /etc/cella-terminator.conf; pkill cella-terminator; echo conf-o\"k\""
 wait_console "$TERM_VM" "conf-ok" 30 || { echo "FAIL: the appliance took no configuration"; exit 1; }
 # The member: its wire address and its resolver.
 type_mem "ip link set lo up; ip addr add $MEMBER_IP/24 dev eth0; ip link set eth0 up; echo nameserver $GW > /etc/resolv.conf; printf 'wire_ip=127.0.0.1\nupstream_dns=9.9.9.9\n' > /etc/cella-terminator.conf; pkill cella-terminator; echo net-o\"k\""
@@ -186,7 +204,12 @@ t3)
     wait_console "$MEM_VM" "wget-rc=" 60 || { echo "FAIL: the fetch never returned"; exit 1; }
     mem_log "the-world-answers" >/dev/null \
         || { echo "FAIL: the world's page never arrived"; evidence; exit 1; }
+    # The name ratchet: the appliance's world-leg park carries the
+    # resolved name as testimony (proto Destination.host).
+    "$BIN" --dump "$CELLA_HOME/machines/$TERM_VM/network/ledger" | grep -q "host=w.test" \
+        || { echo "FAIL: no park carries the resolved name"; evidence; exit 1; }
     echo "  member -> appliance map -> resolved name -> host world, spliced"
+    echo "  and the world-leg park testifies host=w.test"
     echo; echo "PASS: t3 -- the nameless splice"
     ;;
 
@@ -218,5 +241,17 @@ t5)
         || { echo "FAIL: expected exit 1 -- $(mem_log 'probe-rc=' | tail -1)"; exit 1; }
     echo "  no pair trust, no middle: the handshake refused"
     echo; echo "PASS: t5 -- the unauthorized middle is refused"
+    ;;
+
+t6)
+    say "t6: the named world -- https://example.com through the pair"
+    type_mem "/bin/cella-terminator --probe example.com 443 $GW /etc/cella/pair-ca.pem; echo probe-r\"c\"=\$?"
+    wait_console "$MEM_VM" "probe-rc=" 120 || { echo "FAIL: the probe never returned"; evidence; exit 1; }
+    mem_log "probe: verified example.com" >/dev/null \
+        || { echo "FAIL: the member-leg handshake did not verify"; evidence; exit 1; }
+    mem_log "probe-rc=0" >/dev/null \
+        || { echo "FAIL: expected exit 0 (the world answered) -- $(mem_log 'probe-rc=' | tail -1)"; evidence; exit 1; }
+    echo "  real name, real roots, minted leaf: the whole seam against the world"
+    echo; echo "PASS: t6 -- the named world"
     ;;
 esac

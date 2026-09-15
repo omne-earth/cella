@@ -142,10 +142,15 @@ impl pb::engine_server::Engine for Motor {
                 // freeze-thaw churn per denied attempt.
                 {
                     let matched = remember.iter().find(|(r_ip, r_port, _)| {
-                        if r_ip.is_empty() {
-                            arp && ethertype == 0x0806
-                        } else {
-                            *r_ip == ip && *r_port == port
+                        match (r_ip.is_empty(), *r_port) {
+                            // arp:secs -- the L2 rule.
+                            (true, 0) => arp && ethertype == 0x0806,
+                            // *:port -- any released park on this
+                            // port plants its own exact memory (the
+                            // named-world case: the destination is
+                            // unknowable at policy time).
+                            (true, p) => !ip.is_empty() && p == port,
+                            (false, _) => *r_ip == ip && *r_port == port,
                         }
                     });
                     if let Some((_, _, keep_open)) = matched {
@@ -245,8 +250,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 }
             }
             "--remember" => {
-                // ip:port:keep_open_s, or arp:keep_open_s -- the
-                // example's one memory rule shape.
+                // ip:port:keep_open_s, arp:keep_open_s, or
+                // *:port:keep_open_s (any released park on the
+                // port plants its own exact memory) -- the
+                // example's memory rule shapes.
                 let v = it
                     .next()
                     .ok_or("--remember needs ip:port:secs or arp:secs")?;
