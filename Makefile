@@ -504,37 +504,37 @@ smoke-universe: build-lab golden
 ## mm1 (docs/NETWORK-MODEL.md, "The membrane's memory"): the live
 ## park -- a standing memory with skip_freeze holds the machine
 ## running through an egress park, and the decision applies live
-membrane-memory-mm1: build golden
+membrane-memory-mm1: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/membrane-memory.sh mm1
 
 ## mm2: isolation -- an un-remembered destination still freezes;
 ## memory never leaks across entries
-membrane-memory-mm2: build golden
+membrane-memory-mm2: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/membrane-memory.sh mm2
 
 ## mm3: self-expiry -- keep_open lapses, and the next park freezes;
 ## the cryogenic default resumes on its own
-membrane-memory-mm3: build golden
+membrane-memory-mm3: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/membrane-memory.sh mm3
 
 ## mm4: the live refusal -- instant error, no freeze-thaw churn,
 ## and the Lapsed entry carries the author's reason
-membrane-memory-mm4: build golden
+membrane-memory-mm4: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/membrane-memory.sh mm4
 
 ## mm5: the door -- the memory file lands from the engine seam on
 ## the kick, and the write is witnessed
-membrane-memory-mm5: build golden
+membrane-memory-mm5: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/membrane-memory.sh mm5
 
 ## mm6: the fail-closed edges -- a zero or malformed entry is inert,
 ## and a thaw re-reads without resurrecting an expired memory
-membrane-memory-mm6: build golden
+membrane-memory-mm6: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/membrane-memory.sh mm6
 

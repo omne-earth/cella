@@ -80,11 +80,14 @@ impl pb::engine_server::Engine for Motor {
                 if tx.send(Ok(d)).await.is_err() {
                     return;
                 }
-                // The memory rule, demonstrated: a released park the
-                // rule names also plants a standing memory -- the
-                // park's own exact destination, skip_freeze, a
-                // window. The bridge stamps written at the landing.
-                if allowed {
+                // The memory rule, demonstrated: a park the rule
+                // names also plants a standing memory -- the park's
+                // own exact destination, skip_freeze, a window. The
+                // bridge stamps written at the landing. The rule
+                // fires on refusals too: a standing refusal with
+                // skip_freeze is the instant-error row, no
+                // freeze-thaw churn per denied attempt.
+                {
                     let matched = remember.iter().find(|(r_ip, r_port, _)| {
                         if r_ip.is_empty() {
                             arp && ethertype == 0x0806

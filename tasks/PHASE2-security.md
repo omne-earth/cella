@@ -219,8 +219,10 @@ lives in tasks/PHASE1-core.md.
       (scripts/test/membrane-memory.sh: the live park, isolation,
       expiry, the live refusal with its reason, the engine-seam
       door witnessed, the fail-closed edges), chained into make smoke
-      as its own family; scaffolding lands NOT IMPLEMENTED and
-      each gate fails until its implementation lands.
+      as its own family. Landed 2026-09-15: all six gates green
+      (the live park, isolation, self-expiry, the live refusal,
+      the witnessed door, the fail-closed edges), the existing
+      battery untouched as the backward-compatibility proof.
 - [ ] 2.5 cella extract (proposed 2026-09-09, for the titanium
       collection model): a fourth universe verb -- `cella extract
       <machine> <guest-path>` emits the evidence at that path from

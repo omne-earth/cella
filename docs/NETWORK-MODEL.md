@@ -224,7 +224,9 @@ risk window is real-world time -- a freeze does not preserve it.
 Fail-closed throughout: an abandoned memory cannot outlive its
 window, eternal is not expressible, and an absent file, an absent
 entry, or a zero field decode to the default: the park is the
-freeze.
+freeze. The file is append-only, never compacted: every byte in
+it is a ruling the judge chose to make, and the machine's death
+deletes it with everything else.
 
 ### The egress walk -- the machine's own action
 
