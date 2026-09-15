@@ -94,9 +94,10 @@ graph LR
   the translator from a tap.
 
 - **One directory.** `machines/<name>/` holds the network's whole
-  state: the valve record, the verdict file, the ledger at
-  `network/ledger`, and the translator's edge.sock, edge.pid, and
-  edge.log. Branch, archive, and destroy carry it as one tree.
+  state: the valve record, the verdict file, the membrane's
+  memory, the ledger at `network/ledger`, and the translator's
+  edge.sock, edge.pid, and edge.log. Branch, archive, and destroy
+  carry it as one tree.
 
 ### N4 -- the files, their writers and readers
 
@@ -115,8 +116,12 @@ graph LR
     F4["N.F.4 edge.sock"]
     F5["N.F.5 edge.pid"]
     F6["N.F.6 edge.log"]
+    F7["N.F.7 membrane-memory"]
+    Bp["W.B.1 the bridge (see docs/WORLD-ENGINE.md)"]
     X1p -->|"writes the posture"| F1
     M1p -->|"reads"| F1
+    Bp -->|"lands the judge's memory<br/>(the engine seam alone)"| F7
+    M1p -->|"reads on the kick"| F7
     X1p -->|"appends decisions"| F2
     M1p -->|"reads on the kick"| F2
     M1p -->|"appends the chronicle"| F3
@@ -166,7 +171,7 @@ stateDiagram-v2
         open --> closed: cella gateway close
     }
     state "the machine (frozen by N.M.1)" as A {
-        running --> frozen: its own egress parks
+        running --> frozen: its own egress parks<br/>(no memory stands, N.F.7)
         frozen --> running: thaw -- a fresh epoch,<br/>nothing inherited
     }
 ```
@@ -187,9 +192,39 @@ The park is the freeze:
 1. The VMM completes the TX batch in hand (the ring size bounds
    the holds).
 2. It flushes the ledger.
-3. It freezes before the guest runs again.
+3. It freezes before the guest runs again -- unless a standing
+   memory names the destination with skip_freeze (N.F.7, below):
+   then the machine keeps running and the decision applies live.
 4. A release delivers the operation; a refusal lapses it
    cleanly, and the park order advances.
+
+### The membrane's memory (N.F.7)
+
+The judge can leave standing memory at the membrane: one entry per
+destination, framed MembraneMemory messages in the membrane-memory file,
+read on the kick. The write surface is the engine seam alone, and
+no operator verb writes it -- memory is the judge's property, not
+the CLI's: a memory rides the Decide stream (Accord version 4)
+and lands through the bridge (W.B.1, docs/WORLD-ENGINE.md), which
+stamps, appends, kicks, and witnesses. The judge is a gRPC rule
+engine, whoever implements it; its policy source is its own
+business, outside cella. A memory
+affects freezing, never crossing: skip_freeze parks the matching
+egress and keeps the machine running while the decision arrives --
+for these crossings there is no gap, there is ordinary waiting, and
+the guest sees the latency, deliberately. Every crossing still
+parks, still gets its id and its decision, and still lands in the
+chronicle: release and refuse stay the judge's alone. An entry
+stands while now < written + keep_open -- the bridge stamps
+written at the write, host clock, and expiry is absolute: any
+membrane at any read computes it, nothing re-anchors at a thaw,
+and an expired memory stays expired. The window burns in host
+time, deliberately: the memory is the judge's property, and its
+risk window is real-world time -- a freeze does not preserve it.
+Fail-closed throughout: an abandoned memory cannot outlive its
+window, eternal is not expressible, and an absent file, an absent
+entry, or a zero field decode to the default: the park is the
+freeze.
 
 ### The egress walk -- the machine's own action
 
@@ -200,13 +235,21 @@ release walks it out through N.T.1.
 sequenceDiagram
     participant G1 as N.G.1 guest
     participant M1 as N.M.1 virtio-net
+    participant F7 as N.F.7 membrane-memory
     participant X1 as N.X.1 cella-gateway
     participant T1 as N.T.1 / N.T.2 / N.T.3 translator
     participant H as N.H.1-N.H.4 host sockets
     G1->>M1: TX frame
     Note over M1: valve (N.F.1) closed: the frame drops here.<br/>No park, no ledger, no freeze.
     M1->>M1: park by primitive key,<br/>append the park to the ledger (N.F.3)
-    Note over M1: the park is the freeze:<br/>the TX batch completes, then stillness.
+    M1->>F7: a standing memory for this destination?
+    alt no memory stands -- the default
+        F7-->>M1: nothing remembered
+        Note over M1: the park is the freeze:<br/>the TX batch completes, then stillness.
+    else skip_freeze stands, inside its keep_open window
+        F7-->>M1: the entry
+        Note over M1: the machine keeps running --<br/>the decision applies live, no stillness.
+    end
     X1->>M1: release ID: append to the verdict (N.F.2),<br/>kick by SIGWINCH
     M1->>T1: the frame, over the edge fd
     alt world nic (N.T.2)

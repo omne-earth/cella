@@ -113,7 +113,7 @@ The machine is dark before `open`. After `open`, each crossing
 parks and waits: `show` lists the holds with their ids, `release`
 lets one through, and `refuse` denies one -- the workload gets an
 immediate network error, not a hung connection. The worked
-shapes, E1-E7, are in docs/EXAMPLES.md.
+shapes, E1-E8, are in docs/EXAMPLES.md.
 
 ## The verbs
 

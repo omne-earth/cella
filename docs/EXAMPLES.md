@@ -187,3 +187,30 @@ The disk is read inside a throwaway appliance, never on the host;
 numeric uid/gid, modes, and links ride the tar; each extract
 lands in the machine's audit book. A live workload can lie to its
 examiner -- a still disk can only be read.
+
+### E8 -- The remembered machine
+
+Membrane memory end to end, gRPC-only (docs/NETWORK-MODEL.md,
+"The membrane's memory"): the judge is a rule engine at the seam,
+and the first park pays the freeze.
+
+```
+cella create trial --net world
+cella start trial
+cella gateway trial open
+# the judge: any gRPC rule engine (titanium implements its own;
+# cella-engine motor is the worked example the gates use)
+cella-engine trial --dial 127.0.0.1:1709 &
+```
+
+The walk: the guest's first ARP parks and the machine freezes --
+the engine meets the park through the stream, answers Release
+plus a membrane memory (skip_freeze, keep_open=60m), and the
+bridge lands both: the thaw delivers, and the membrane now
+remembers. Later ARP parks match the standing entry and the
+machine keeps running, decided live. Sixty minutes pass, the
+memory expires by its own arithmetic (written + keep_open, host
+time), and the next park freezes again: the cryogenic default
+resumes on its own. Every landing carries the written stamp and
+a witnessed audit entry; every crossing, remembered or not,
+stands in the chronicle.

@@ -28,10 +28,21 @@ graph LR
     LG -->|"tailed"| B
     B -->|"stream Event"| E
     E -->|"stream Decision"| B
-    B -->|"appends Decisions"| VD
+    B -->|"appends Decisions; lands the judge's<br/>membrane-memory (N.F.7)"| VD
     B -->|"the kick, SIGWINCH"| M1
     VD -->|"read on the kick"| M1
 ```
+
+The judge is a gRPC rule engine, whoever implements it, and the
+membrane memory is gRPC-only: a memory rides the Decision oneof
+(Accord version 4), and the bridge lands it in the machine's
+membrane-memory file with the same stamp and witness as any
+landing. The engine's policy source is its own business, outside
+cella. The motor is a worked example, never a production
+component: the smallest complete rule engine, existing so an
+implementer of a real one (titanium implements its own) can read
+the whole protocol in one file -- and so the gates have a
+deterministic stand-in. The seam is the only shared thing.
 
 Three layers, one vocabulary:
 

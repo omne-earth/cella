@@ -110,7 +110,7 @@ stateDiagram-v2
 | create  | Stages a named machine from the golden artifacts. No process starts | Rust only |
 | start   | Runs the machine. Detaches, writes the pid, signals readiness | Rust only |
 | stop    | Ends the machine as fast as possible, and clears the transients: ram.img, the pid file, the console socket, and any stale sidecar. An emergency maneuver: in-flight state is disposable, and the next start boots fresh from the disk | Rust only |
-| freeze  | Stops the machine and preserves the in-flight state: RAM, vCPU, clocks, devices, held operations. A machine with an open valve also freezes itself on a park (docs/NETWORK-MODEL.md, "The membrane": the park is the freeze). The next thaw resumes the same instant | Rust only |
+| freeze  | Stops the machine and preserves the in-flight state: RAM, vCPU, clocks, devices, held operations. A machine with an open valve also freezes itself on a park (docs/NETWORK-MODEL.md, "The membrane": the park is the freeze) -- unless the membrane's standing memory names the destination with skip_freeze (N.F.7): then the machine waits live for the decision. The next thaw resumes the same instant | Rust only |
 | thaw    | Resumes a frozen machine | Rust only |
 | enter   | Attaches the terminal to the serial console -- the lab flavor alone (debug-assertions on). The release binary is built without the console codepath: no console.sock, no console.log, no attach machinery, and enter is absent from its help (a residual stub only explains that the machine is dark, observed through files, verbs, and the chronicle). An exit of the guest shell detaches | Rust only |
 | destroy | Deletes the machine and its artifacts, once and for all | Rust only |
@@ -231,6 +231,9 @@ $HOME/.cella/
     vmm.log                      the stderr of the VMM (operator instrumentation)
     valve                        N.F.1, the valve posture, one word (born
                                  closed; the gateway CLI alone writes it)
+    membrane-memory              N.F.7, the membrane's standing memory: framed
+                                 MembraneMemory entries, self-expiring; absent
+                                 means the park is the freeze
     verdict                      N.F.2, framed Decision messages, appended by
                                  the gateway CLI, read by the VMM on the kick
     network/ledger               N.F.3, the chronicle: Parked, Released,

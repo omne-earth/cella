@@ -160,6 +160,67 @@ lives in tasks/PHASE1-core.md.
       matches the build.
 - [x] 2.2 docs/EXAMPLES.md notes that nested layers must use
       distinct knock ports (2026-09-03, the knockable example).
+- [ ] 2.6 The membrane's memory (proposed 2026-09-15, branch
+      feat/membrane-memory): the judge leaves standing memory at
+      the membrane -- one MembraneMemory entry per destination in
+      the memory file (N.F.7), written by the gateway persona like
+      the valve, read on the kick. skip_freeze parks the matching
+      egress and keeps the machine running while the decision
+      arrives (outgoing only: ingress never freezes); keep_open is
+      the entry's window in plain seconds (the policy grammar
+      carries unit sugar, titanium-side), anchored at the
+      membrane's read. Rulings settled in design: (a) a memory
+      affects freezing, never crossing -- release and refuse stay
+      the judge's alone, every crossing still parks, ids, and
+      chronicles; (b) every proto zero decodes to the cryogenic
+      default, thus absent file = absent entry = zero field =
+      today's behavior, and the existing battery is the
+      backward-compatibility proof, unchanged; (c) fail-closed
+      expiry, ruled absolute (2026-09-15): the bridge stamps
+      written (epoch seconds) at the write, an entry stands while
+      now < written + keep_open, any membrane at any read
+      computes it, and a thaw re-anchors nothing -- an expired
+      memory stays expired (mm6). The window burns in host time,
+      deliberately: the memory is the judge's property and its
+      risk window is real-world time. An abandoned memory cannot
+      outlive its window, eternal is not expressible, and a zero
+      written or keep_open is inert; (d) the VMM obeys and expires,
+      never sets -- and the write surface is the engine seam
+      alone (ruled 2026-09-15): the bridge lands what the engine
+      grants, no CLI verb writes memory, and the transport is ruled
+      (2026-09-15): a memory rides the Decide stream as a
+      Decision -- the oneof gains membrane_memory = 4, its id
+      empty (a memory names a destination, not an operation), the
+      bridge writes the machine's membrane-memory file and kicks,
+      and Accord version 4 announces the extension so an older
+      end refuses the handshake rather than dropping entries
+      silently; (e) no
+      counter, no sidecar change -- the skip is a stateless
+      per-park predicate (sidecar stays v9); (f) the honest trade,
+      documented: a skipped freeze is ordinary waiting -- the
+      guest sees the latency, and cryogenic scope shrinks by
+      exactly the entries the judge grants. Gates:
+      (g) gRPC-only, ruled (2026-09-15, superseding the same
+      day's presider sketch): membrane memory has no CLI verb, no
+      policy file in cella, and no persona -- the judge is a gRPC
+      rule engine (titanium implements its own), its policy
+      source is its own business, and a memory reaches the
+      membrane one way: over the Decide stream, landed by the
+      bridge (the written stamp, the kick, the witness). The
+      production walk: the first park pays the freeze, the engine
+      answers Release plus a membrane_memory, later parks to the
+      remembered destination run live, and keep_open clears the
+      memory by its own arithmetic. The motor is a worked
+      example and the gates' stand-in, never a production
+      component: it grows the ability to answer with a
+      membrane_memory so the example (and the gates) exercise
+      the whole seam. Gates:
+      smoke-membrane-memory = membrane-memory-mm1..mm6
+      (scripts/test/membrane-memory.sh: the live park, isolation,
+      expiry, the live refusal with its reason, the engine-seam
+      door witnessed, the fail-closed edges), chained into make smoke
+      as its own family; scaffolding lands NOT IMPLEMENTED and
+      each gate fails until its implementation lands.
 - [ ] 2.5 cella extract (proposed 2026-09-09, for the titanium
       collection model): a fourth universe verb -- `cella extract
       <machine> <guest-path>` emits the evidence at that path from

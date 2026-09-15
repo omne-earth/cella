@@ -52,10 +52,14 @@ docs/EXAMPLES.md, E1-E2).
   allowlist_from_urls), and the container's edge enforces it --
   decided once, then flows run free.
 
-  With cella: the same task.toml policy compiles into the
-  engine's allowlist, and enforcement changes kind. Every frame
-  parks; the engine releases the allowed and refuses the rest,
-  one decision per crossing, each on the record;
+  With cella: the task's policy is titanium's own source (one
+  policy, one grammar, titanium's -- cella carries none), loaded
+  by titanium's gRPC rule engine, which answers the Event stream:
+  every frame parks; the engine releases the granted and refuses
+  the rest with the grant's reason, one decision per crossing,
+  each on the record; a grant with skip_freeze lands as a
+  membrane memory over the stream, and later crossings to that
+  destination run live until keep_open clears it.
   `allow_internet = false` is simply `--net none`. The trajectory
   gains what no other rung has: the chronicle of every crossing
   the agent attempted, including the refused ones.

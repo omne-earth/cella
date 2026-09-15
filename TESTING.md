@@ -56,6 +56,8 @@ against `target/lab`). The six per-CLI parts below are the same
 leaves cut the other way -- the blame direction: a red part names
 an accused binary, the same granularity as the per-binary jail,
 seccomp list, and SELinux domain. Each part runs standalone.
+`smoke-membrane-memory` (membrane-memory-mm1..mm6) chains behind
+the halves as its own family.
 
 | Part | Accused binary | Gates it runs |
 |---|---|---|
@@ -81,7 +83,7 @@ target, and `make help` renders it. The map from gate to law:
 | `test-seccomp` + `test-seccomp-<persona>` | the installed BPF filter kills on a forbidden syscall, per binary, for real | scripts/test/seccomp.sh |
 | `test-machine` | the registry verbs against a sandboxed CELLA_HOME | scripts/test/machine.sh |
 | `test-one-door` | exactly one TX call site writes the edge -- the decision-delivery door, statically | inline in the Makefile |
-| `test-witness` | six witness doors, one per persona; the shim owns none | inline in the Makefile |
+| `test-witness` | seven witness doors, one per persona; the shim owns none | inline in the Makefile |
 | `smoke-boot` | a real bzImage to a running init; the release flavor boots dark | scripts/test/boot.sh |
 | `smoke-shell` | a shell learns a value, freezes to files, thaws, remembers | scripts/test/shell.sh |
 | `smoke-thaw` | create, start, freeze, thaw, the one-shot sidecar, then the clock probe | scripts/test/thaw.sh |
@@ -105,13 +107,14 @@ target, and `make help` renders it. The map from gate to law:
 | `smoke-extract` | evidence leaves as a faithful tar: numeric uid/gid, modes, and links survive, the trailer refuses a truncated stream, a running machine refuses the verb, and the audit book records the read | scripts/test/extract.sh |
 | `smoke-witness` | every verb is an event, in the right book, with uid, gid, persona | scripts/test/witness.sh |
 | `probe-inception` | the cryogenic clock, one nesting level down | via cella probe |
+| `smoke-membrane-memory` (membrane-memory-mm1..mm6) | the membrane's standing memory: the live park (mm1), grant isolation (mm2), self-expiry (mm3), the live refusal with its reason (mm4), the engine-seam door witnessed (mm5), and the fail-closed edges (mm6) | scripts/test/membrane-memory.sh |
 | `smoke-engine` (engine-w1..w5) | the world-engine seam: the stream stands, decisions land, stillness on engine halt, the frozen machine, two judges (docs/WORLD-ENGINE.md, "The gates") | scripts/test/engine.sh |
 
 Design detail lives with the law: docs/NETWORK-MODEL.md (the
 membrane), docs/ROOTLESS-NETWORK.md (the translator),
 docs/FREEZE-THAW.md (time), docs/DEVICE-STATE.md (AC1-AC5),
 docs/NESTED-BOOT.md (the recursion), docs/EXAMPLES.md (the
-shapes, E1-E7).
+shapes, E1-E8).
 
 ## Logs
 
