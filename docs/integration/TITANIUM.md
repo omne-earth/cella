@@ -36,7 +36,7 @@ walks live per topic, and titanium follows them unchanged:
   terminator (ROOTFS.md, the pair-trust step).
 
   ```sh
-  cella create term --rootfs terminator --net wire:trial,world
+  cella create term --rootfs terminator --net world,wire:trial
   cella create trial --kernel task --rootfs <task-name> --net wire:trial
   cella start term && cella start trial
   cella gateway term open && cella gateway trial open

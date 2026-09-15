@@ -547,6 +547,139 @@ pub fn rootfs_gateway(golden: &Path, canonical_golden: &Path) -> Result<(), Stri
     Ok(())
 }
 
+/// The terminator rootfs (docs/NETWORK-MODEL.md, "The terminator"):
+/// the canonical tree, the terminator init, the static
+/// cella-terminator binary (built in the toolbox, crt-static, the
+/// lab profile like every in-image binary), and the pair CA --
+/// minted fresh at every build by the static binary itself (rcgen
+/// stays quarantined in its crate). The key is baked into the
+/// image and retained nowhere else; the cert exports beside the
+/// golden, and its digest in the manifest names the pair: a
+/// rebuilt terminator is a new pair, and members rebake.
+pub fn rootfs_terminator(golden: &Path, canonical_golden: &Path) -> Result<(), String> {
+    let root = repo_root();
+    let init = inputs_root().join("rootfs-terminator.sh");
+    if !init.is_file() {
+        return Err(format!(
+            "{} missing -- run from the checkout, or make install (it lays ~/.cella/build/scripts)",
+            init.display()
+        ));
+    }
+    let rbuild = cella_libs::machine::home().join("build/rootfs");
+    let rootdir = rbuild.join("root");
+    if !rootdir.is_dir() {
+        println!("cella: rootfs terminator: the canonical tree is absent, building it first");
+        rootfs_canonical(canonical_golden)?;
+    }
+
+    println!("cella: rootfs terminator: building the static proxy");
+    run_in_toolbox_quiet(
+        "static cella-terminator",
+        &root,
+        &[
+            "env",
+            "RUSTFLAGS=-C target-feature=+crt-static",
+            "cargo",
+            "build",
+            "--profile",
+            "lab",
+            "--target",
+            "x86_64-unknown-linux-gnu",
+            "-p",
+            "cella-terminator",
+        ],
+    )?;
+    let proxy = root.join("target/x86_64-unknown-linux-gnu/lab/cella-terminator");
+    if !proxy.is_file() {
+        return Err(format!("{} missing after the build", proxy.display()));
+    }
+
+    println!("cella: rootfs terminator: minting the pair CA");
+    let ca_dir = rbuild.join("terminator-ca");
+    let _ = fs::remove_dir_all(&ca_dir);
+    fs::create_dir_all(&ca_dir).map_err(|e| e.to_string())?;
+    run_in_toolbox_quiet(
+        "mint the pair CA",
+        &rbuild,
+        &[
+            proxy.to_str().unwrap(),
+            "--mint-pair-ca",
+            "golden",
+            ca_dir.to_str().unwrap(),
+        ],
+    )?;
+    for f in ["ca.pem", "ca.key"] {
+        if !ca_dir.join(f).is_file() {
+            return Err(format!("the mint left no {f}"));
+        }
+    }
+
+    println!("cella: rootfs terminator: assembling");
+    let troot = rbuild.join("root-terminator");
+    let _ = fs::remove_dir_all(&troot);
+    run(
+        "copy the root",
+        "cp",
+        &["-a", rootdir.to_str().unwrap(), troot.to_str().unwrap()],
+        None,
+    )?;
+    for (from, to, mode) in [
+        (init.clone(), troot.join("sbin/init"), 0o755),
+        (proxy.clone(), troot.join("bin/cella-terminator"), 0o755),
+        (
+            ca_dir.join("ca.pem"),
+            troot.join("etc/cella/pair-ca.pem"),
+            0o444,
+        ),
+        (
+            ca_dir.join("ca.key"),
+            troot.join("etc/cella/pair-ca.key"),
+            0o400,
+        ),
+    ] {
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::copy(&from, &to).map_err(|e| format!("copying {}: {e}", from.display()))?;
+        let mut perm = fs::metadata(&to).map_err(|e| e.to_string())?.permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perm, mode);
+        fs::set_permissions(&to, perm).map_err(|e| e.to_string())?;
+    }
+
+    let img = rbuild.join("rootfs-terminator.ext4");
+    let _ = fs::remove_file(&img);
+    let f = fs::File::create(&img).map_err(|e| e.to_string())?;
+    f.set_len(32 * 1024 * 1024).map_err(|e| e.to_string())?;
+    drop(f);
+    run_in_toolbox_quiet(
+        "mkfs",
+        &rbuild,
+        &[
+            "mkfs.ext4",
+            "-q",
+            "-F",
+            "-d",
+            troot.to_str().unwrap(),
+            img.to_str().unwrap(),
+        ],
+    )?;
+    fs::create_dir_all(golden.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = golden.with_extension("tmp");
+    fs::copy(&img, &tmp).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, golden).map_err(|e| e.to_string())?;
+    // The pair's public face, beside the golden: what members bake.
+    let ca_out = golden.parent().unwrap().join("ca.pem");
+    fs::copy(ca_dir.join("ca.pem"), &ca_out).map_err(|e| e.to_string())?;
+    // The key stays only in the image: sweep the mint dir.
+    let _ = fs::remove_dir_all(&ca_dir);
+    println!("cella: golden rootfs terminator -> {}", golden.display());
+    println!(
+        "cella: the pair's cert -> {} (members bake this)",
+        ca_out.display()
+    );
+    Ok(())
+}
+
 /// The nested kernel: the canonical fragment plus the KVM host
 /// stack, from the same pinned source, in a copied clean tree. The
 /// canonical tree stays as the canonical cache.

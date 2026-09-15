@@ -222,7 +222,7 @@ terminator"): the member's peer is its appliance, and the names
 live there too.
 
 ```
-cella create term --rootfs terminator --net wire:pair,world
+cella create term --rootfs terminator --net world,wire:pair
 cella create member --net wire:pair
 cella start term && cella start member
 cella gateway term open && cella gateway member open

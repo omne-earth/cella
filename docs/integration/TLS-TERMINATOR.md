@@ -71,7 +71,7 @@ does not route.
 3. **Stand the pair** (docs/EXAMPLES.md, E9):
 
    ```sh
-   cella create term --rootfs terminator --net wire:pair,world
+   cella create term --rootfs terminator --net world,wire:pair
    cella create member --rootfs <task-image> --net wire:pair
    cella start term && cella start member
    cella gateway term open && cella gateway member open
