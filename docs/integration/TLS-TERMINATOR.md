@@ -27,6 +27,13 @@ choose to route through the appliance. If a workload must not be
 read by its own appliance, do not bake the CA and do not route
 it through a terminator.
 
+One pair, one CA, one blast radius: never bake one pair's ca.pem
+into members of another pair. The CA key is pair-scoped by
+design -- stolen, it can mint certs trusted only by members that
+already routed their traffic through the box the thief had to
+compromise -- and cross-baking is the only way to widen that
+radius. Build one terminator golden per trust domain.
+
 ## The builder's steps
 
 1. **Build the terminator golden once per host.** The build mints

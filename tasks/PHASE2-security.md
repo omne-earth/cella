@@ -195,7 +195,30 @@ lives in tasks/PHASE1-core.md.
       stay 7), no install, no shim row, no persona gate; it
       ships inside the image like busybox; (h) the proto gains
       nothing -- frames are frames, and 2.6's vocabulary
-      suffices. Gates: smoke-tls-terminator =
+      suffices; (i) the shakedown surface, enumerated before it
+      is entered (2026-09-15). The host surface grows by zero:
+      no new binary, socket, door, or capability -- a fully
+      compromised proxy still stands inside a jailed, judged
+      cella machine. The guest-internal fire, itemized: (1) the
+      proxy parses attacker bytes from both directions -- a
+      hostile member's ClientHello and a hostile world's
+      responses -- which is why it is memory-safe rustls, never
+      a C daemon; (2) the CA key lives in the image but is
+      pair-scoped: stealing it mints certs trusted only by
+      members that baked this pair's cert -- traffic already
+      routed through the very box the thief had to own; one
+      pair, one CA, one blast radius, and no pair's CA is ever
+      baked into an unrelated member; (3) the resolver-cache is
+      a poisoning surface: upstream rides the translator's
+      per-flow sockets (5-tuple bound), and cache discipline --
+      TTL honesty, no glue trust -- is a gate assertion;
+      (4) rustls and rcgen enter the tree: pinned in the
+      lockfile, and the built artifact is digested in the golden
+      manifest like every artifact, judged by doctor verify;
+      (5) the plaintext concentration is the consented design,
+      and the shakedown confirms the proxy never writes payload
+      anywhere durable -- no payload logs, nothing on disk
+      beyond the DNS cache. Gates: smoke-tls-terminator =
       tls-terminator-t1..tN (scripts/test/tls-terminator.sh),
       the split-with-aggregate pattern. Phases: A docs (this
       entry rides them), B the proxy crate with no-KVM units,
