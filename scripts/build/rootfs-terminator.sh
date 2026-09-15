@@ -18,6 +18,15 @@ mount -t sysfs sysfs /sys
 mount -t tmpfs tmpfs /tmp
 echo "cella-terminator: init running (pid $$)"
 
+# The consistent reply port (docs/integration/MEMBRANE-MEMORY.md,
+# "The consistent reply port"): every outbound flow sources from
+# this narrow window, so the judge can name the reply destinations
+# at policy time -- eight exact grants instead of an unnameable
+# ephemeral range. Non-compliance costs nothing but liveness: a
+# port outside the window simply freezes, fail-closed.
+echo "50000 50007" > /proc/sys/net/ipv4/ip_local_port_range
+echo "cella-terminator: reply ports 50000-50007"
+
 PAIR=$(sed -n 's/.*cella_pair=\([0-9]*\).*/\1/p' /proc/cmdline)
 [ -z "$PAIR" ] && [ -e /sys/class/net/eth1 ] && PAIR=0
 WIRE_IP="10.77.${PAIR:-0}.1"
