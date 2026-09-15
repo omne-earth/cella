@@ -54,8 +54,10 @@ Nothing here is specific to any one harness.
    clears by its own arithmetic and the cryogenic default resumes.
 
 6. **What to verify**: the membrane-memory file exists after the
-   first remembered grant; `cella --dump-ledger
-   machines/<vm>/audit` shows the `membrane-memory` landings; the
+   first remembered grant; `cella --dump
+   machines/<vm>/membrane-memory` shows the entries themselves,
+   and `cella --dump machines/<vm>/audit` shows the
+   `membrane-memory` landings; the
    chronicle shows every crossing, remembered or not. The
    reference assertions are the six gates,
    `scripts/test/membrane-memory.sh mm1..mm6`

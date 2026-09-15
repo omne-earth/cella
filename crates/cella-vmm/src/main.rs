@@ -208,14 +208,19 @@ fn main() {
         dump_state(&PathBuf::from(dir));
     }
 
-    // Print the chronicle of one ledger file, one line per event.
+    // Print the chronicle of one machine file, one line per entry.
     // There is no protobuf tool in the guest or in a test script, so
-    // this option is how a gate (or a person) examines it.
-    if std::env::args().nth(1).as_deref() == Some("--dump-ledger") {
+    // this option is how a gate (or a person) examines the ledger,
+    // the audit, the verdict, or the membrane-memory file.
+    // --dump-ledger is the older name for the same verb.
+    if matches!(
+        std::env::args().nth(1).as_deref(),
+        Some("--dump" | "--dump-ledger")
+    ) {
         let path = std::env::args()
             .nth(2)
-            .unwrap_or_else(|| usage_error("--dump-ledger needs a ledger file path"));
-        dump_ledger(&PathBuf::from(path));
+            .unwrap_or_else(|| usage_error("--dump needs a file path"));
+        dump(&PathBuf::from(path));
     }
 
     let args = parse_args();
@@ -1319,16 +1324,26 @@ fn dump_state(dir: &PathBuf) -> ! {
     std::process::exit(0);
 }
 
-/// Print every framed Message of a ledger file, one line per event.
-fn dump_ledger(path: &PathBuf) -> ! {
+/// A Destination for the dump: the same words parked uses.
+fn dump_dest(d: &proto::Destination) -> String {
+    match ledger::Dest::from_message(d) {
+        ledger::Dest::Ipv4 { ip, port, .. } => {
+            format!("ip={}.{}.{}.{} port={port}", ip[0], ip[1], ip[2], ip[3])
+        }
+        l2 => format!("l2={l2}"),
+    }
+}
+
+/// Print every entry of one machine file, one line per entry. The
+/// membrane-memory file frames bare MembraneMemory messages; every
+/// other file (ledger, audit, verdict) frames Messages.
+fn dump(path: &PathBuf) -> ! {
     // A dump is a pipeline citizen: `... | grep -q` under pipefail
     // closes stdout early. A println there is a panic-abort under
     // Rust's SIGPIPE=ignore, and a SIG_DFL death is exit 141 --
     // both make pipefail report the dump, not grep. So the text is
     // built whole and written once; a broken pipe is a normal end,
     // exit 0, and the pipeline's status is the consumer's.
-    let messages =
-        ledger::read_all(path).unwrap_or_else(|e| fatal(&format!("reading {path:?}: {e}")));
     let mut out = String::new();
     macro_rules! println {
         ($($arg:tt)*) => {{
@@ -1336,6 +1351,21 @@ fn dump_ledger(path: &PathBuf) -> ! {
             out.push('\n');
         }};
     }
+    if path.file_name().and_then(|n| n.to_str()) == Some("membrane-memory") {
+        for m in cella_libs::memory::read_all(path) {
+            let dest = m.destination.as_ref().map(dump_dest).unwrap_or_default();
+            println!(
+                "memory {dest} skip_freeze={} keep_open={} written={}",
+                m.skip_freeze, m.keep_open, m.written
+            );
+        }
+        use std::io::Write;
+        let _ = std::io::stdout().write_all(out.as_bytes());
+        let _ = std::io::stdout().flush();
+        std::process::exit(0);
+    }
+    let messages =
+        ledger::read_all(path).unwrap_or_else(|e| fatal(&format!("reading {path:?}: {e}")));
     for msg in &messages {
         if let Some(proto::message::Body::Audit(a)) = &msg.body {
             println!(
@@ -1344,23 +1374,34 @@ fn dump_ledger(path: &PathBuf) -> ! {
             );
             continue;
         }
+        if let Some(proto::message::Body::Decision(d)) = &msg.body {
+            match &d.decision {
+                Some(proto::decision::Decision::Release(_)) => {
+                    println!("release id={}", ledger::hex(&d.id))
+                }
+                Some(proto::decision::Decision::Refusal(r)) => {
+                    println!("refuse id={} why={:?}", ledger::hex(&d.id), r.why)
+                }
+                // The bridge diverts a memory to the membrane-memory
+                // file, but the dump covers the wire shape anyway.
+                Some(proto::decision::Decision::MembraneMemory(m)) => {
+                    let dest = m.destination.as_ref().map(dump_dest).unwrap_or_default();
+                    println!(
+                        "memory {dest} skip_freeze={} keep_open={} written={}",
+                        m.skip_freeze, m.keep_open, m.written
+                    );
+                }
+                None => println!("(empty decision)"),
+            }
+            continue;
+        }
         let Some(proto::message::Body::Event(ev)) = &msg.body else {
-            println!("(not an event)");
+            println!("(unknown message)");
             continue;
         };
         match &ev.event {
             Some(proto::event::Event::Parked(op)) => {
-                let dest = op
-                    .destination
-                    .as_ref()
-                    .map(ledger::Dest::from_message)
-                    .map(|d| match d {
-                        ledger::Dest::Ipv4 { ip, port, .. } => {
-                            format!("ip={}.{}.{}.{} port={port}", ip[0], ip[1], ip[2], ip[3])
-                        }
-                        l2 => format!("l2={l2}"),
-                    })
-                    .unwrap_or_default();
+                let dest = op.destination.as_ref().map(dump_dest).unwrap_or_default();
                 let dir = if op.direction == proto::operation::Direction::Incoming as i32 {
                     "incoming"
                 } else {

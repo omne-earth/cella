@@ -32,19 +32,8 @@ pub struct Standing {
 /// one. An absent or unreadable file is an empty memory: the park
 /// is the freeze.
 pub fn read_standing(path: &Path, now_s: u64) -> Vec<Standing> {
-    let Ok(bytes) = std::fs::read(path) else {
-        return Vec::new();
-    };
     let mut out: Vec<Standing> = Vec::new();
-    let mut buf = bytes.as_slice();
-    while !buf.is_empty() {
-        let before = buf.len();
-        let Ok(m) = proto::MembraneMemory::decode_length_delimited(&mut buf) else {
-            break;
-        };
-        if buf.len() == before {
-            break;
-        }
+    for m in read_all(path) {
         let Some(dest) = m.destination else { continue };
         // Fail-closed arithmetic: zeros are inert, and an expiry
         // that cannot be computed does not stand.
@@ -64,6 +53,28 @@ pub fn read_standing(path: &Path, now_s: u64) -> Vec<Standing> {
             skip_freeze: m.skip_freeze,
             expires,
         });
+    }
+    out
+}
+
+/// Decode every frame in the file, in landing order, expired and
+/// inert entries included -- the raw chronicle, for `--dump` and
+/// read_standing. An absent or unreadable file is an empty memory.
+pub fn read_all(path: &Path) -> Vec<proto::MembraneMemory> {
+    let Ok(bytes) = std::fs::read(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut buf = bytes.as_slice();
+    while !buf.is_empty() {
+        let before = buf.len();
+        let Ok(m) = proto::MembraneMemory::decode_length_delimited(&mut buf) else {
+            break;
+        };
+        if buf.len() == before {
+            break;
+        }
+        out.push(m);
     }
     out
 }
