@@ -66,6 +66,71 @@ docs/EXAMPLES.md, E1-E2).
 - **Nested layers need distinct knock ports**
   (docs/EXAMPLES.md, E2).
 
+## Integrating the membrane's memory
+
+The membrane's memory (docs/NETWORK-MODEL.md, "The membrane's
+memory", N.F.7) is gRPC-only: titanium's rule engine is the one
+mind, and everything below is what its integration touches. The
+seam contract, in the order the harness meets it:
+
+1. **Implement `service Engine`** (proto/cella.proto): one RPC,
+   `Decide(stream Event) returns (stream Decision)`. The engine
+   receives every park as an Event and answers by operation id.
+   Accord version 4 is the current vocabulary; an older end
+   refuses the handshake rather than dropping what it cannot
+   carry. The worked example is `cella-engine motor`
+   (crates/cella-engine/src/motor.rs) -- the smallest complete
+   rule engine, written to be read by an implementer, never run
+   in production.
+
+2. **Answer verdicts as before**: `Decision { id, Release }` or
+   `Decision { id, Refusal { why } }`, one per park. The why is
+   the policy author's sentence; it lands verbatim in the
+   machine's chronicle (`Lapsed`).
+
+3. **Plant memory with a third answer**: a grant whose policy says
+   skip_freeze sends `Decision { id: empty, MembraneMemory {
+   destination, skip_freeze: true, keep_open } }` -- id empty
+   because a memory names a destination, not an operation. Use
+   the park's own Destination for exactness: matching at the
+   membrane is exact, (ip, port, proto) or the ethertype, no
+   wildcards. `keep_open` is plain seconds. Leave `written` at
+   zero: the bridge stamps it with the host clock at the landing,
+   and expiry is `written + keep_open`, absolute -- a freeze does
+   not stretch the window, and a zero window is inert.
+
+4. **The harness spawns only the bridge**:
+   `cella-engine <machine> --dial <engine-addr>`, one per
+   machine, machine-lifetime. The bridge tails the ledger, streams
+   Events, and lands every Decision: verdicts into the verdict
+   file, memories into `machines/<vm>/membrane-memory` (append-only
+   forever -- every byte is a ruling the engine chose to make),
+   each landing witnessed in the machine's audit book
+   (`verb=membrane-memory`, the window in the args), each followed
+   by the kick.
+
+5. **What the run then looks like**: the first crossing to any
+   destination parks and freezes -- the engine meets it through
+   the stream, and its release applies at the thaw. A crossing to
+   a remembered destination parks and waits live: the machine
+   keeps running, the guest's own timers tick (this is what keeps
+   a TLS handshake's flights inside the peer's patience), and the
+   decision applies on the kick. A remembered refusal is an
+   instant error with the why on the record -- no freeze-thaw
+   churn per denied probe. When `keep_open` lapses, the memory
+   clears by its own arithmetic and the cryogenic default
+   resumes; nothing needs to retract anything.
+
+6. **What to verify from the harness side**: the membrane-memory
+   file exists after the first remembered grant;
+   `cella --dump-ledger machines/<vm>/audit` shows the
+   `membrane-memory` landings; the chronicle shows every crossing,
+   remembered or not. The reference assertions are the six gates,
+   `scripts/test/membrane-memory.sh mm1..mm6` (`make
+   smoke-membrane-memory`) -- mm1 is the live park, mm4 the live
+   refusal, mm3/mm6 the expiry and fail-closed edges; a titanium
+   integration test can mirror them one for one.
+
 ## Not the exec model: the collection model
 
 The container rungs drive a live workload from outside. cella
