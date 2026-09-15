@@ -56,7 +56,12 @@ message Accord {
 
 // Where an operation points. The host name is present when the
 // appliance resolved it -- the ratchet acts on names; the ip is
-// what went to the wire.
+// what went to the wire. The name is testimony, not truth: the
+// membrane stamps it from the DNS answers it itself delivered
+// (the name ratchet), a hostile resolver can bind any name to
+// any ip, and the judge weighs it as testimony. The ratchet is
+// runtime-only: a thaw wakes it empty, and the next delivered
+// resolution re-teaches it.
 message Destination {
   string host = 1;
   bytes ip = 2;

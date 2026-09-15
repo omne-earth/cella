@@ -75,6 +75,14 @@ pub struct Net {
     /// stays here -- delivery is stillness until the guest offers a
     /// descriptor, never a forced write.
     deliver_queue: std::collections::VecDeque<Vec<u8>>,
+    /// The name ratchet: ip -> the name a delivered DNS answer
+    /// bound to it, newest answer winning. Read at park time to
+    /// stamp Destination.host (the proto's promise). Testimony,
+    /// not truth: it records what adjudicated answers claimed at
+    /// this membrane. Runtime-only, deliberately: a thaw wakes
+    /// with an empty ratchet (the sidecar stays v9), and the next
+    /// resolution re-teaches it.
+    resolved: std::collections::HashMap<[u8; 4], String>,
 }
 
 /// One held ingress flow: the frames of every inbound frame that
@@ -154,6 +162,7 @@ impl Net {
             inbound_bytes: 0,
             inbound_dropped: 0,
             deliver_queue: std::collections::VecDeque::new(),
+            resolved: std::collections::HashMap::new(),
         })
     }
 
@@ -241,11 +250,12 @@ impl Net {
         eprintln!("cella: parked ingress from {peer}");
         let guest_ns = self.guest_clock.now_ns();
         let id = ledger::uuid7(guest_ns);
+        let destination = self.named(&peer);
         self.pending_ledger.push(proto::Event {
             predecessor: Vec::new(),
             event: Some(proto::event::Event::Parked(proto::Operation {
                 id: id.to_vec(),
-                destination: Some(peer.to_message()),
+                destination: Some(destination),
                 guest_ns,
                 host_ns: ledger::host_ns_now(),
                 direction: proto::operation::Direction::Incoming as i32,
@@ -317,8 +327,21 @@ impl Net {
     /// -- one per operation, never one per frame (see
     /// docs/NETWORK-MODEL.md, "one decision per new part of the
     /// world").
+    /// The wire Destination for a park, host-stamped when the
+    /// ratchet holds a name for its ip -- the proto's promise:
+    /// "the host name is present when the appliance resolved it."
+    fn named(&self, dest: &Dest) -> proto::Destination {
+        let mut d = (*dest).to_message();
+        if let Dest::Ipv4 { ip, .. } = dest {
+            if let Some(host) = self.resolved.get(ip) {
+                d.host = host.clone();
+            }
+        }
+        d
+    }
+
     fn park(&mut self, dest: Dest, head_index: u16, frame: Vec<u8>) {
-        self.parked_dests.push(dest.to_message());
+        self.parked_dests.push(self.named(&dest));
         if let Some(op) = self.parked.iter_mut().find(|op| op.dest == dest) {
             if cfg!(debug_assertions) {
                 eprintln!("cella: parked egress to {dest} (joined)");
@@ -332,11 +355,12 @@ impl Net {
         // on the instant, not describe two independent reads of it.
         let guest_ns = self.guest_clock.now_ns();
         let id = ledger::uuid7(guest_ns);
+        let destination = self.named(&dest);
         self.pending_ledger.push(proto::Event {
             predecessor: Vec::new(),
             event: Some(proto::event::Event::Parked(proto::Operation {
                 id: id.to_vec(),
-                destination: Some(dest.to_message()),
+                destination: Some(destination),
                 guest_ns,
                 host_ns: ledger::host_ns_now(),
                 direction: proto::operation::Direction::Outgoing as i32,
@@ -563,6 +587,19 @@ impl VirtioDevice for Net {
                             bytes_out: 0,
                         })),
                     });
+                    // The ratchet learns from what it delivers: a
+                    // released DNS answer binds its name to its ip
+                    // for later parks to carry as testimony.
+                    for f in &op.frames {
+                        if let Some((host, ip)) = super::dnsname::answer_in_frame(f) {
+                            if self.resolved.insert(ip, host.clone()).as_deref() != Some(&host) {
+                                eprintln!(
+                                    "cella: the ratchet learns {host} = {}.{}.{}.{}",
+                                    ip[0], ip[1], ip[2], ip[3]
+                                );
+                            }
+                        }
+                    }
                     self.deliver_queue.extend(op.frames);
                     moved = true;
                 }

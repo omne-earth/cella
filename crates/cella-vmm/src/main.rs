@@ -1326,12 +1326,16 @@ fn dump_state(dir: &PathBuf) -> ! {
 
 /// A Destination for the dump: the same words parked uses.
 fn dump_dest(d: &proto::Destination) -> String {
-    match ledger::Dest::from_message(d) {
+    let mut s = match ledger::Dest::from_message(d) {
         ledger::Dest::Ipv4 { ip, port, .. } => {
             format!("ip={}.{}.{}.{} port={port}", ip[0], ip[1], ip[2], ip[3])
         }
         l2 => format!("l2={l2}"),
+    };
+    if !d.host.is_empty() {
+        s.push_str(&format!(" host={}", d.host));
     }
+    s
 }
 
 /// Print every entry of one machine file, one line per entry. The

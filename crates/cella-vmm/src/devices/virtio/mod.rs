@@ -1,4 +1,5 @@
 pub mod block;
+pub mod dnsname;
 pub mod edge;
 pub mod mmio;
 pub mod net;
