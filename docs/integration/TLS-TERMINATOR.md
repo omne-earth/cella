@@ -34,6 +34,19 @@ already routed their traffic through the box the thief had to
 compromise -- and cross-baking is the only way to widen that
 radius. Build one terminator golden per trust domain.
 
+## How interception works (so nothing feels hidden)
+
+The resolver is the interceptor: it answers every member query
+with the terminator's own wire address. The member connects to
+the terminator believing it is the world; the real name rides in
+the SNI (TLS, any port) or the Host header (plain HTTP); the
+proxy resolves the real address upstream at connect time and
+opens the world leg. No proxy environment variables, no kernel
+redirect rules, no member changes beyond the two baked lines
+below. A bare TCP flow that carries no name needs a static
+per-port map in the terminator's configuration -- name it or it
+does not route.
+
 ## The builder's steps
 
 1. **Build the terminator golden once per host.** The build mints

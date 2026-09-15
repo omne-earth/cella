@@ -218,7 +218,18 @@ lives in tasks/PHASE1-core.md.
       (5) the plaintext concentration is the consented design,
       and the shakedown confirms the proxy never writes payload
       anywhere durable -- no payload logs, nothing on disk
-      beyond the DNS cache. Gates: smoke-tls-terminator =
+      beyond the DNS cache; (j) interception is the resolver
+      (ruled 2026-09-15): it answers every member query with the
+      terminator's own wire address, the real name rides in the
+      SNI or the Host header, and the proxy resolves upstream at
+      connect time -- no netfilter (the canonical kernel stays
+      quiet), no redirect, no proxy variables in members; a
+      nameless bare-TCP flow routes only by a static per-port
+      map, because a matcher that never guesses cannot route a
+      nameless flow. webpki-roots joins rustls and rcgen in the
+      pinned, manifest-digested supply chain: the world leg
+      verifies its peers against compiled-in roots, never
+      blindly. Gates: smoke-tls-terminator =
       tls-terminator-t1..tN (scripts/test/tls-terminator.sh),
       the split-with-aggregate pattern. Phases: A docs (this
       entry rides them), B the proxy crate with no-KVM units,

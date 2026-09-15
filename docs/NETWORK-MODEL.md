@@ -391,11 +391,22 @@ every TCP connection in two and owns the names.
   builder baked it into the trust store. The middle is the
   architecture, chosen at image build, on the record
   (docs/integration/TLS-TERMINATOR.md states it loudly).
-- **The names live at the appliance.** The terminator resolves
-  and caches: members point resolv.conf at the terminator's wire
-  address, and upstream queries leave the terminator's world nic
-  as ordinary judged UDP to a configured provider. Roadmap item 5
-  lands here, in a guest.
+- **The names live at the appliance -- and the resolver is the
+  interceptor.** Members point resolv.conf at the terminator's
+  wire address, and the resolver answers every query with that
+  same address: the member connects to the terminator believing
+  it is the world, and the real name rides in the connection
+  itself -- the SNI for TLS on any port, the Host header for
+  plain HTTP. The proxy resolves the real address at connect
+  time, upstream over the world nic as ordinary judged UDP to a
+  configured provider, cached at the appliance. No netfilter, no
+  redirect, no proxy variables in members: the canonical kernel
+  stays quiet, and interception is an answer, not a rule. A flow
+  that carries no name (a bare TCP port that is neither TLS nor
+  HTTP) is served only by a static per-port map in the
+  terminator's configuration -- a matcher that never guesses
+  cannot route a nameless flow. Roadmap item 5 lands here, in a
+  guest.
 - **Just another machine.** No lifecycle exception exists: the
   terminator parks, freezes, and thaws like any machine, and the
   judge's standing memory (N.F.7) keeps its hot paths -- 443 and
