@@ -6,7 +6,7 @@
 //!   machine's ledger, stream each Event to the engine, land each
 //!   returned Decision in the verdict file, and kick the VMM. The
 //!   bridge never decides: a halted engine means holds that wait.
-//! - `cella-engine motor --listen <addr> [--allow ip:port ...]` --
+//! - `cella-engine motor --listen <addr> [--allow ip:port ...] [--remember ip:port:secs|arp:secs ...]` --
 //!   a stand-in engine for the gates: releases the allowed
 //!   destinations, refuses the rest, logs every Event.
 
@@ -25,7 +25,7 @@ pub mod pb {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: cella-engine <vm> --dial <addr> | motor --listen <addr> [--allow ip:port ...]"
+        "usage: cella-engine <vm> --dial <addr> | motor --listen <addr> [--allow ip:port ...] [--remember ip:port:secs|arp:secs ...]"
     );
     std::process::exit(2);
 }

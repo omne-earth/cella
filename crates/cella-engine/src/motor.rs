@@ -9,6 +9,10 @@ use tokio_stream::StreamExt;
 
 struct Motor {
     allow: Vec<(Vec<u8>, u32)>,
+    /// The example's memory rule: (ip-or-empty-for-arp, port,
+    /// keep_open seconds). A released park matching one also gets
+    /// a membrane_memory Decision -- the whole seam, demonstrated.
+    remember: Vec<(Vec<u8>, u32, u64)>,
 }
 
 #[tonic::async_trait]
@@ -21,6 +25,7 @@ impl pb::engine_server::Engine for Motor {
     ) -> Result<tonic::Response<Self::DecideStream>, tonic::Status> {
         let mut events = req.into_inner();
         let allow = self.allow.clone();
+        let remember = self.remember.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
             while let Some(Ok(ev)) = events.next().await {
@@ -75,6 +80,36 @@ impl pb::engine_server::Engine for Motor {
                 if tx.send(Ok(d)).await.is_err() {
                     return;
                 }
+                // The memory rule, demonstrated: a released park the
+                // rule names also plants a standing memory -- the
+                // park's own exact destination, skip_freeze, a
+                // window. The bridge stamps written at the landing.
+                if allowed {
+                    let matched = remember.iter().find(|(r_ip, r_port, _)| {
+                        if r_ip.is_empty() {
+                            arp && ethertype == 0x0806
+                        } else {
+                            *r_ip == ip && *r_port == port
+                        }
+                    });
+                    if let Some((_, _, keep_open)) = matched {
+                        let mem = pb::Decision {
+                            id: Vec::new(),
+                            decision: Some(pb::decision::Decision::MembraneMemory(
+                                pb::MembraneMemory {
+                                    destination: op.destination.clone(),
+                                    skip_freeze: true,
+                                    keep_open: *keep_open,
+                                    written: 0,
+                                },
+                            )),
+                        };
+                        println!("motor: remember keep_open={keep_open}s");
+                        if tx.send(Ok(mem)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
             }
         });
         Ok(tonic::Response::new(
@@ -117,6 +152,7 @@ fn parse_allow(s: &str) -> Result<(Vec<u8>, u32), String> {
 pub fn run(args: &[String]) -> Result<(), String> {
     let mut listen = None;
     let mut allow = Vec::new();
+    let mut remember = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -124,6 +160,23 @@ pub fn run(args: &[String]) -> Result<(), String> {
             "--allow" => {
                 let v = it.next().ok_or("--allow needs ip:port")?;
                 allow.push(parse_allow(v)?);
+            }
+            "--remember" => {
+                // ip:port:keep_open_s, or arp:keep_open_s -- the
+                // example's one memory rule shape.
+                let v = it
+                    .next()
+                    .ok_or("--remember needs ip:port:secs or arp:secs")?;
+                let (head, secs) = v
+                    .rsplit_once(':')
+                    .ok_or_else(|| format!("remember {v:?}: want ip:port:secs or arp:secs"))?;
+                let keep_open: u64 = secs.parse().map_err(|e| format!("remember {v:?}: {e}"))?;
+                if head == "arp" {
+                    remember.push((Vec::new(), 0, keep_open));
+                } else {
+                    let (ip, port) = parse_allow(head)?;
+                    remember.push((ip, port, keep_open));
+                }
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -139,7 +192,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
     rt.block_on(async move {
         println!("motor: listening on {listen}");
         tonic::transport::Server::builder()
-            .add_service(pb::engine_server::EngineServer::new(Motor { allow }))
+            .add_service(pb::engine_server::EngineServer::new(Motor {
+                allow,
+                remember,
+            }))
             .serve(addr)
             .await
             .map_err(|e| e.to_string())

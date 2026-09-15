@@ -41,18 +41,16 @@ fn events_in(bytes: &[u8]) -> Vec<pb::Event> {
 /// symmetric (docs/WORLD-ENGINE.md, "Audit"): one witnessed entry
 /// per landed decision, the same shape as an operator's release.
 fn land(vm: &str, d: pb::Decision) -> Result<(), String> {
+    // A membrane memory is not a verdict on a hold: it lands in the
+    // machine's membrane-memory file (N.F.7), never the verdict.
+    if let Some(pb::decision::Decision::MembraneMemory(m)) = &d.decision {
+        return land_memory(vm, m);
+    }
     let hex: String = d.id.iter().map(|b| format!("{b:02x}")).collect();
     let word = match &d.decision {
         Some(pb::decision::Decision::Release(_)) => "release",
         Some(pb::decision::Decision::Refusal(_)) => "refuse",
-        Some(pb::decision::Decision::MembraneMemory(_)) => {
-            // Lands with 2.6: the bridge will write the machine's
-            // membrane-memory file and kick. Until then, loud.
-            return Err(
-                "membrane-memory landing is not implemented (tasks/PHASE2-security.md, 2.6)"
-                    .to_string(),
-            );
-        }
+        Some(pb::decision::Decision::MembraneMemory(_)) => unreachable!(),
         None => "decision",
     };
     cella_libs::audit::witness(Some(vm), word, &[hex])
@@ -71,13 +69,66 @@ fn land(vm: &str, d: pb::Decision) -> Result<(), String> {
         .open(&path)
         .map_err(|e| format!("appending {path:?}: {e}"))?;
     f.write_all(&buf).map_err(|e| e.to_string())?;
+    kick(vm);
+    Ok(())
+}
+
+/// Land one standing memory: stamp `written` with the host clock
+/// (the judge's time -- expiry is absolute from here), witness the
+/// landing, append to the membrane-memory file, and kick. The file
+/// is append-only forever: every byte in it is a ruling the judge
+/// chose to make.
+fn land_memory(vm: &str, m: &pb::MembraneMemory) -> Result<(), String> {
+    let mut m = m.clone();
+    m.written = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dest = match &m.destination {
+        Some(d) if !d.ip.is_empty() => format!(
+            "{}:{}/{}",
+            d.ip.iter()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join("."),
+            d.port,
+            d.proto
+        ),
+        Some(d) => format!("0x{:04x}", d.ethertype),
+        None => "unnamed".to_string(),
+    };
+    cella_libs::audit::witness(
+        Some(vm),
+        "membrane-memory",
+        &[dest, format!("keep_open={}s", m.keep_open)],
+    )
+    .map_err(|e| format!("witnessing the landing: {e}"))?;
+    // This crate's generated type writes the same wire bytes as
+    // cella_libs' (one proto, one form): frame it directly,
+    // valve-style, no Message envelope.
+    let mut buf = Vec::with_capacity(m.encoded_len() + 4);
+    m.encode_length_delimited(&mut buf)
+        .map_err(|e| e.to_string())?;
+    let path = machine_dir(vm).join("membrane-memory");
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("appending {path:?}: {e}"))?;
+    f.write_all(&buf).map_err(|e| e.to_string())?;
+    kick(vm);
+    Ok(())
+}
+
+/// The kick: SIGWINCH to the machine's own pid, the live wire.
+fn kick(vm: &str) {
     if let Ok(pid) = std::fs::read_to_string(machine_dir(vm).join("pid")) {
         if let Ok(pid) = pid.trim().parse::<i32>() {
             // SAFETY: the machine's own pid file; SIGWINCH is the kick.
             unsafe { libc::kill(pid, libc::SIGWINCH) };
         }
     }
-    Ok(())
 }
 
 pub fn run(vm: &str, dial: &str) -> Result<(), String> {
