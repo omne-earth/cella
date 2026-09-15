@@ -46,6 +46,10 @@ message Audit {
 // release delivers one named operation, once. Version 3: the
 // Operation carries its direction -- the border judges both ways,
 // and the chronicle records which way each crossing faced.
+// Version 4: a Decision can carry a MembraneMemory (field 4) -- a
+// standing entry for the membrane's memory file, beside the
+// per-operation release and refusal. An older end refuses the
+// handshake rather than silently dropping what it cannot carry.
 message Accord {
   uint32 version = 1;
 }
@@ -135,10 +139,14 @@ message Lapsed {
 // Freezing is absent on purpose: the freeze is a machine verb,
 // and the membrane only keeps holding.
 message Decision {
+  // Empty for a membrane_memory: a memory names a destination, not
+  // an operation -- release and refuse answer a park, a memory
+  // outlives one.
   bytes id = 1;
   oneof decision {
     Release release = 2;
     Refusal refusal = 3;
+    MembraneMemory membrane_memory = 4;
   }
 }
 
@@ -162,6 +170,40 @@ message Valve {
     OPEN = 1;
   }
   V v = 1;
+}
+
+// The membrane's memory (N.F.7): one standing entry per
+// destination. The membrane-memory file frames MembraneMemory
+// messages directly, valve-style, and the membrane reads it on
+// the kick. The write surface is the engine seam alone; no
+// operator verb writes it. A memory rides the Decide stream as a
+// Decision (Accord version 4) and lands through the bridge -- the
+// written stamp, the kick, the witness. A memory
+// affects freezing, never crossing: release and refuse stay the
+// judge's alone, and every crossing still parks, gets its id, and
+// lands in the chronicle. Every zero decodes to the cryogenic
+// default -- an absent field, an absent entry, or an absent file
+// all mean today's behavior: the park is the freeze.
+message MembraneMemory {
+  Destination destination = 1;
+  // Park matching egress and keep the machine running while the
+  // decision arrives, instead of freezing. Outgoing only: an
+  // incoming park never freezes, thus there is nothing to skip.
+  bool skip_freeze = 2;
+  // Seconds -- a policy window, not a measurement. The entry
+  // stands while now < written + keep_open, then dies on its own:
+  // fail-closed, an abandoned memory cannot outlive its window,
+  // and eternal is not expressible. 0 = inert.
+  uint64 keep_open = 3;
+  // The bridge's host-clock stamp, epoch seconds, set as the entry
+  // lands in the file. Expiry is absolute and stateless -- any VMM
+  // at any read computes it, and nothing re-anchors at a thaw: an
+  // expired memory stays expired. The window burns in host time,
+  // deliberately: the memory belongs to the judge's world, and its
+  // risk window is real-world time -- a freeze does not preserve
+  // it. The VMM never writes the stamp. 0 = inert (an expiry that
+  // cannot be computed fails closed).
+  uint64 written = 4;
 }
 
 // The gRPC face of the same vocabulary, outside every VMM: the

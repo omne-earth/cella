@@ -43,6 +43,9 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-ping smoke-udp smoke-collide smoke-inspection \
         smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-extract \
+        smoke-membrane-memory membrane-memory-mm1 membrane-memory-mm2 \
+        membrane-memory-mm3 membrane-memory-mm4 membrane-memory-mm5 \
+        membrane-memory-mm6 \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
         test-jail test-seccomp test-seccomp-vmm-kvm test-seccomp-personas \
@@ -99,6 +102,9 @@ SMOKE_TARGETS := smoke smoke-debug smoke-release \
         smoke-gateway smoke-gateway-cli smoke-wire smoke-world \
         smoke-rootless smoke-translator-port-neg smoke-multinet \
         smoke-universe smoke-ledger smoke-chain smoke-extract \
+        smoke-membrane-memory membrane-memory-mm1 membrane-memory-mm2 \
+        membrane-memory-mm3 membrane-memory-mm4 membrane-memory-mm5 \
+        membrane-memory-mm6 \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
         smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 engine-w5 \
@@ -495,6 +501,48 @@ smoke-universe: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/universe.sh
 
+## mm1 (docs/NETWORK-MODEL.md, "The membrane's memory"): the live
+## park -- a standing memory with skip_freeze holds the machine
+## running through an egress park, and the decision applies live
+membrane-memory-mm1: build golden
+	$(LOG)
+	$(SCRIPTS)/test/membrane-memory.sh mm1
+
+## mm2: isolation -- an un-remembered destination still freezes;
+## memory never leaks across entries
+membrane-memory-mm2: build golden
+	$(LOG)
+	$(SCRIPTS)/test/membrane-memory.sh mm2
+
+## mm3: self-expiry -- keep_open lapses, and the next park freezes;
+## the cryogenic default resumes on its own
+membrane-memory-mm3: build golden
+	$(LOG)
+	$(SCRIPTS)/test/membrane-memory.sh mm3
+
+## mm4: the live refusal -- instant error, no freeze-thaw churn,
+## and the Lapsed entry carries the author's reason
+membrane-memory-mm4: build golden
+	$(LOG)
+	$(SCRIPTS)/test/membrane-memory.sh mm4
+
+## mm5: the door -- the memory file lands from the engine seam on
+## the kick, and the write is witnessed
+membrane-memory-mm5: build golden
+	$(LOG)
+	$(SCRIPTS)/test/membrane-memory.sh mm5
+
+## mm6: the fail-closed edges -- a zero or malformed entry is inert,
+## and a thaw re-reads without resurrecting an expired memory
+membrane-memory-mm6: build golden
+	$(LOG)
+	$(SCRIPTS)/test/membrane-memory.sh mm6
+
+## The membrane-memory family, the door first (mm1-mm4 ride it)
+smoke-membrane-memory: membrane-memory-mm5 membrane-memory-mm1 \
+        membrane-memory-mm2 membrane-memory-mm3 membrane-memory-mm4 \
+        membrane-memory-mm6
+
 ## Evidence leaves a still machine as a faithful tar: bytes, uid/gid,
 ## modes, and symlinks survive; the trailer refuses a truncated
 ## stream; running refuses the verb; the book records each read
@@ -620,7 +668,7 @@ smoke-release: smoke-thaw smoke-machine smoke-rootless \
 
 ## The whole battery: the no-KVM checks first (fail fast), then the dark
 ## half against the field flavor, then the console half against the lab
-smoke: test smoke-release smoke-debug
+smoke: test smoke-release smoke-debug smoke-membrane-memory
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="

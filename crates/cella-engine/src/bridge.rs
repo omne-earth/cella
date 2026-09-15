@@ -45,6 +45,14 @@ fn land(vm: &str, d: pb::Decision) -> Result<(), String> {
     let word = match &d.decision {
         Some(pb::decision::Decision::Release(_)) => "release",
         Some(pb::decision::Decision::Refusal(_)) => "refuse",
+        Some(pb::decision::Decision::MembraneMemory(_)) => {
+            // Lands with 2.6: the bridge will write the machine's
+            // membrane-memory file and kick. Until then, loud.
+            return Err(
+                "membrane-memory landing is not implemented (tasks/PHASE2-security.md, 2.6)"
+                    .to_string(),
+            );
+        }
         None => "decision",
     };
     cella_libs::audit::witness(Some(vm), word, &[hex])

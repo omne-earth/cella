@@ -566,6 +566,12 @@ impl VirtioDevice for Net {
                     self.deliver_queue.extend(op.frames);
                     moved = true;
                 }
+                Some(proto::decision::Decision::MembraneMemory(_)) => {
+                    // Lands with 2.6 (tasks/PHASE2-security.md): a
+                    // memory is not a verdict on a hold -- the
+                    // operation stays held, and the entry belongs in
+                    // the membrane-memory file, not the verdict.
+                }
                 Some(proto::decision::Decision::Refusal(refusal)) => {
                     self.pending_ledger.push(proto::Event {
                         predecessor: Vec::new(),
@@ -616,6 +622,12 @@ impl VirtioDevice for Net {
                         })),
                     });
                     released_frames.extend(op.frames);
+                }
+                Some(proto::decision::Decision::MembraneMemory(_)) => {
+                    // Lands with 2.6 (tasks/PHASE2-security.md): a
+                    // memory is not a verdict on a hold -- the
+                    // operation stays held, and the entry belongs in
+                    // the membrane-memory file, not the verdict.
                 }
                 Some(proto::decision::Decision::Refusal(refusal)) => {
                     self.pending_ledger.push(proto::Event {
