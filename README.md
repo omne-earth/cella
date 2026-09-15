@@ -74,13 +74,14 @@ scripts/setup/install.sh
 
 ### Build the goldens, once per host
 
-One kernel and three rootfs flavors.
+One kernel and four rootfs flavors.
 
 ```sh
 cella build kernel canonical
 cella build rootfs canonical
 cella build rootfs cella
 cella build rootfs gateway
+cella build rootfs terminator
 ```
 
 ### Prove the host
@@ -113,7 +114,7 @@ The machine is dark before `open`. After `open`, each crossing
 parks and waits: `show` lists the holds with their ids, `release`
 lets one through, and `refuse` denies one -- the workload gets an
 immediate network error, not a hung connection. The worked
-shapes, E1-E8, are in docs/EXAMPLES.md.
+shapes, E1-E9, are in docs/EXAMPLES.md.
 
 ## The verbs
 

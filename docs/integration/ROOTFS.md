@@ -57,10 +57,24 @@ Networked workloads replace `--net none` with a port map
       instruction available.
    4. Writes its output to the console and halts when the command
       exits.
-4. **Make the ext4.** Size the filesystem to the tree plus the
+4. **Bake the pair trust (terminated shapes only).** If this
+   image will reach the world through a terminator
+   (docs/integration/TLS-TERMINATOR.md), trust and names are
+   build-time acts -- the cert into the trust store, the
+   resolver at the appliance, nothing injected at run time. The
+   key never leaves the terminator image; members receive only
+   the cert.
+
+   ```sh
+   install -D -m 0444 ~/.cella/rootfs/terminator/ca.pem \
+       rootfs-tree/etc/ssl/certs/cella-pair-ca.pem
+   echo "nameserver <terminator-wire-address>" > rootfs-tree/etc/resolv.conf
+   ```
+
+5. **Make the ext4.** Size the filesystem to the tree plus the
    workload's writable headroom, `mkfs.ext4`, copy the tree in,
    and place the shim at /sbin/init.
-5. **Write the manifest.** `golden.json` beside the artifact, the
+6. **Write the manifest.** `golden.json` beside the artifact, the
    same shape as every cella golden:
 
    ```json
@@ -79,7 +93,7 @@ Networked workloads replace `--net none` with a port map
    The `input_*` keys are free to name; each records a digest of
    something that shaped the artifact. A changed input means the
    converter rebuilds, and the manifest shows why.
-6. **Verify the result.** `cella doctor verify` must pass on the
+7. **Verify the result.** `cella doctor verify` must pass on the
    new flavor before the conversion counts as done.
 
 ## Limitations

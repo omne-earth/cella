@@ -160,6 +160,46 @@ lives in tasks/PHASE1-core.md.
       matches the build.
 - [x] 2.2 docs/EXAMPLES.md notes that nested layers must use
       distinct knock ports (2026-09-03, the knockable example).
+- [ ] 2.7 The terminator (proposed 2026-09-15, branch
+      feat/gateway-tls-terminator; P1 -- the TLS-EOF blocker):
+      the one network appliance, an ordinary cella machine
+      wearing the `terminator` rootfs flavor in the pair seat
+      (member on a wire, world on the other nic). The rulings:
+      (a) two legs -- the member's peer is always its terminator
+      (that leg's patience is ours; a member freezes mid-
+      handshake for as long as judgment takes), and the world
+      leg is the terminator's own connection at wire speed;
+      (b) terminate-and-splice on every TCP port -- a peeked TLS
+      ClientHello terminates (SNI -> leaf minted at runtime from
+      the pair CA -> world-leg TLS of the terminator's own),
+      anything else byte-splices, which alone moves peer-patience
+      off the member for all TCP; (c) the pair CA -- key baked
+      into the terminator image at build, never exported; ca.pem
+      exported beside the golden, digested in the manifest, and
+      baked by the member's builder into its trust store: the
+      middle is the architecture, consented at image build,
+      stated loudly in docs/integration/TLS-TERMINATOR.md;
+      (d) the names live at the appliance -- the terminator
+      resolves and caches for its members (resolv.conf points at
+      its wire address), upstream a configured provider ip over
+      judged, remembered UDP (roadmap 5 lands in a guest);
+      (e) just another machine -- no freeze exemption, no
+      attentiveness contract: the judge's standing memory (2.6)
+      keeps 443 and the provider live, a terminator freeze kills
+      a mid-flight world session honestly, and what slips
+      through is an upstream retry; (f) busybox, not systemd --
+      one static proxy under the house init's respawn loop; a
+      systemd variant, if ever, is an integrator's build, not
+      cella's golden; (g) the cella-terminator crate is a new
+      category, guest userland only -- no witness door (doors
+      stay 7), no install, no shim row, no persona gate; it
+      ships inside the image like busybox; (h) the proto gains
+      nothing -- frames are frames, and 2.6's vocabulary
+      suffices. Gates: smoke-tls-terminator =
+      tls-terminator-t1..tN (scripts/test/tls-terminator.sh),
+      the split-with-aggregate pattern. Phases: A docs (this
+      entry rides them), B the proxy crate with no-KVM units,
+      C the image build and the CA export, D the gates.
 - [ ] 2.6 The membrane's memory (proposed 2026-09-15, branch
       feat/membrane-memory): the judge leaves standing memory at
       the membrane -- one MembraneMemory entry per destination in

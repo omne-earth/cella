@@ -108,13 +108,14 @@ target, and `make help` renders it. The map from gate to law:
 | `smoke-witness` | every verb is an event, in the right book, with uid, gid, persona | scripts/test/witness.sh |
 | `probe-inception` | the cryogenic clock, one nesting level down | via cella probe |
 | `smoke-membrane-memory` (membrane-memory-mm1..mm6) | the membrane's standing memory: the live park (mm1), grant isolation (mm2), self-expiry (mm3), the live refusal with its reason (mm4), the engine-seam door witnessed (mm5), and the fail-closed edges (mm6) | scripts/test/membrane-memory.sh |
+| `smoke-tls-terminator` (tls-terminator-t1..tN) | the terminated pair: a member's handshake survives its own freezes, the world leg runs at wire speed, plain TCP splices, the names resolve and cache at the appliance, and a terminator freeze kills a mid-flight session honestly | scripts/test/tls-terminator.sh |
 | `smoke-engine` (engine-w1..w5) | the world-engine seam: the stream stands, decisions land, stillness on engine halt, the frozen machine, two judges (docs/WORLD-ENGINE.md, "The gates") | scripts/test/engine.sh |
 
 Design detail lives with the law: docs/NETWORK-MODEL.md (the
 membrane), docs/ROOTLESS-NETWORK.md (the translator),
 docs/FREEZE-THAW.md (time), docs/DEVICE-STATE.md (AC1-AC5),
 docs/NESTED-BOOT.md (the recursion), docs/EXAMPLES.md (the
-shapes, E1-E8).
+shapes, E1-E9).
 
 ## Logs
 
