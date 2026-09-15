@@ -208,6 +208,19 @@ pub fn show(vm: &str, all: bool, direction: Option<&str>) -> Result<(), String> 
         return Err(format!("no machine named {vm:?}"));
     }
     let book = read_book(vm)?;
+    // A show is a pipeline citizen, like the dump: `... | grep -q`
+    // under pipefail closes stdout early, and a println there is a
+    // panic-abort whose unwinding dies by seccomp (SIGSYS in the
+    // gate). The text is built whole and written once; a broken
+    // pipe is a normal end, and the pipeline's status is the
+    // consumer's.
+    let mut out = String::new();
+    macro_rules! println {
+        ($($arg:tt)*) => {{
+            out.push_str(&format!($($arg)*));
+            out.push('\n');
+        }};
+    }
     match direction {
         None => println!(
             "{:<34} {:<9} {:<40} {:>6}  STATE",
@@ -263,6 +276,8 @@ pub fn show(vm: &str, all: bool, direction: Option<&str>) -> Result<(), String> 
     if held == 0 {
         println!("(no held operations)");
     }
+    use std::io::Write;
+    let _ = std::io::stdout().write_all(out.as_bytes());
     Ok(())
 }
 
