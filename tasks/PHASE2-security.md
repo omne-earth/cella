@@ -194,8 +194,10 @@ lives in tasks/PHASE1-core.md.
       exactly; feeding the terminator requires a new hint kind
       -- vocabulary growth and an Accord bump).
       Blocked on: 2.7 shipping.
-- [ ] 2.7 The terminator (proposed 2026-09-15, branch
-      feat/gateway-tls-terminator; P1 -- the TLS-EOF blocker):
+- [x] 2.7 The terminator (proposed 2026-09-15, landed 2026-09-15,
+      branch feat/gateway-tls-terminator; P1 -- the TLS-EOF
+      blocker; all four phases shipped, tls-terminator-t1..t5
+      green in the full smoke battery):
       the one network appliance, an ordinary cella machine
       wearing the `terminator` rootfs flavor in the pair seat
       (member on a wire, world on the other nic). The rulings:
@@ -274,7 +276,8 @@ lives in tasks/PHASE1-core.md.
       the split-with-aggregate pattern. Phases: A docs (this
       entry rides them), B the proxy crate with no-KVM units,
       C the image build and the CA export, D the gates.
-- [ ] 2.6 The membrane's memory (proposed 2026-09-15, branch
+- [x] 2.6 The membrane's memory (proposed 2026-09-15, landed
+      2026-09-15, branch
       feat/membrane-memory): the judge leaves standing memory at
       the membrane -- one MembraneMemory entry per destination in
       the memory file (N.F.7), written by the gateway persona like
