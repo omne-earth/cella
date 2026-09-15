@@ -53,6 +53,17 @@ Nothing here is specific to any one harness.
    churn per denied probe. When `keep_open` lapses, the memory
    clears by its own arithmetic and the cryogenic default resumes.
 
+   A policy that probes negatives MUST use the standing refusal
+   (`skip_freeze=true` on the refuse line), or every TCP
+   retransmit of the denied SYN pays a fresh freeze-thaw cycle
+   and the probe's wall clock balloons. cella will never answer
+   a refusal with a minted RST or ICMP error -- the membrane
+   does not speak frames the world never sent, and a refused
+   destination honestly looks filtered. The refused guest's own
+   connect timeout is the probe's cost; size the client's
+   patience (a single-SYN probe with a short timeout is the
+   honest shape), never the membrane.
+
 6. **What to verify**: the membrane-memory file exists after the
    first remembered grant; `cella --dump
    machines/<vm>/membrane-memory` shows the entries themselves,
