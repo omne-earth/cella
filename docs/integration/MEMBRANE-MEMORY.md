@@ -142,3 +142,39 @@ synonym (refuse is the word), a MAC in any destination (a policy
 that named one would break on every machine rebuild), an eternal
 window, and `skip_freeze` on an incoming line -- a strict parser
 rejects each of these rather than guessing.
+
+## The consistent reply port
+
+A destination the policy cannot enumerate cannot hold a grant,
+and the classic unnameable destination is the ephemeral reply
+port: a service's answer to a client goes to whatever port the
+client's kernel picked, so the service side's egress toward that
+port would freeze on every flow. The remedy is ruled
+(2026-09-15) as a guest-side contract, not a membrane mechanism:
+the client machine pins its ephemeral range to a narrow, agreed
+window --
+
+```sh
+echo "50000 50007" > /proc/sys/net/ipv4/ip_local_port_range
+```
+
+-- and the judge grants the window as exact destinations, one
+line per port, on the serving machine's membrane:
+
+```sh
+release outgoing 10.77.0.2:50000/tcp (keep_open=10m) (skip_freeze=true)
+# ... through 50007, and the same lines for /udp if UDP serves
+```
+
+The trust direction is the point. A destination is routing, not
+assertion: stamping a granted destination on a frame sends the
+frame there, so the match cannot be forged for benefit -- unlike
+matching on a frame's source, which the sender authors freely. A
+client that ignores the window (hostile or misconfigured) sends
+from an ungrantable port and the serving side's reply simply
+freezes: non-compliance costs liveness and nothing else,
+fail-closed. The window's width is the concurrency budget --
+TCP demuxes on the whole 4-tuple, so eight ports is eight live
+flows per remote service -- and sizing it is policy, stated in
+the client's image (the terminator image bakes exactly this
+window; docs/integration/TLS-TERMINATOR.md).

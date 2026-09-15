@@ -337,6 +337,24 @@ lives in tasks/PHASE1-core.md.
       (the live park, isolation, self-expiry, the live refusal,
       the witnessed door, the fail-closed edges), the existing
       battery untouched as the backward-compatibility proof.
+      Addendum, ruled 2026-09-15 -- the consistent reply port:
+      the ephemeral-reply-port freeze (a service's answer goes
+      to a port no policy can enumerate) is solved guest-side,
+      not membrane-side: the client machine pins
+      ip_local_port_range to a narrow agreed window (the
+      terminator image bakes 50000-50007) and the judge grants
+      the window as exact destinations on the serving membrane.
+      Matching stays destination-only. The symmetric
+      (either-end) match was considered the same day and
+      rejected: an egress frame's source is sender-authored, so
+      source-matching hands any granted machine a standing
+      freeze-evasion channel (stamp a granted endpoint as the
+      source of junk egress, stay live while refused);
+      destination is routing, unforgeable for benefit, and
+      non-compliance with the window just freezes, fail-closed.
+      Proven on the terminator wire (tls-terminator-t1..t5
+      green on destination-only matching with the baked
+      window).
 - [ ] 2.5 cella extract (proposed 2026-09-09, for the titanium
       collection model): a fourth universe verb -- `cella extract
       <machine> <guest-path>` emits the evidence at that path from

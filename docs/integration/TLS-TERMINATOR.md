@@ -94,6 +94,12 @@ does not route.
    # the world-leg 443 destinations the policy grants, exact
    release outgoing <dest-ip>:443/tcp (keep_open=1h) (skip_freeze=true)
    release incoming <dest-ip>:443/tcp (keep_open=1h)
+   # the member's reply window: the terminator image pins its
+   # clients to ports 50000-50007 (the consistent reply port,
+   # docs/integration/MEMBRANE-MEMORY.md), so the appliance's
+   # answers toward the member are eight exact destinations
+   release outgoing <member-ip>:50000/tcp (keep_open=1h) (skip_freeze=true)
+   # ... through 50007, and the same lines for /udp (DNS replies)
    ```
 
 ## The honest freeze
