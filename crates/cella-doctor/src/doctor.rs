@@ -85,7 +85,7 @@ pub fn gate(needs: &[String]) -> u32 {
 /// The host facts. Returns the number of FAIL lines.
 pub fn check() -> u32 {
     let mut r = Report { failed: 0 };
-    println!("cella doctor: host facts");
+    println!("cella_doctor: host facts");
 
     // The flavor of this binary. The field flavor (release) has no
     // console; the lab flavor (debug-assertions on) keeps it as the
@@ -217,10 +217,10 @@ pub fn check() -> u32 {
     }
 
     if r.failed == 0 {
-        println!("cella doctor: all facts hold");
+        println!("cella_doctor: all facts hold");
     } else {
         println!(
-            "cella doctor: {} fact(s) FAIL -- run: cella doctor fix",
+            "cella_doctor: {} fact(s) FAIL -- run: cella doctor fix",
             r.failed
         );
     }
@@ -250,7 +250,7 @@ pub fn fix() -> u32 {
             .unwrap_or(false)
     });
     if missing && !user.is_empty() {
-        println!("cella doctor: fix -- delegating a sub-id range (sudo usermod)");
+        println!("cella_doctor: fix -- delegating a sub-id range (sudo usermod)");
         let _ = std::process::Command::new("sudo")
             .args([
                 "usermod",
@@ -279,15 +279,15 @@ pub fn fix() -> u32 {
         if p.is_file() && golden::manifest_path(&p).is_file() {
             continue;
         }
-        println!("cella doctor: fix -- building {axis} {flavor}");
+        println!("cella_doctor: fix -- building {axis} {flavor}");
         // Green-field: an artifact without a manifest rebuilds fresh,
         // so that the manifest is born with the artifact it states.
         if let Err(e) = cella_build::flags::build_flags(axis, flavor, true) {
-            println!("cella doctor: build {axis} {flavor} failed: {e}");
+            println!("cella_doctor: build {axis} {flavor} failed: {e}");
         }
     }
     println!();
-    println!("cella doctor: re-check");
+    println!("cella_doctor: re-check");
     check()
 }
 
@@ -388,7 +388,7 @@ pub fn verify(target: Option<(&str, &str)>) -> u32 {
     ];
     let mut failed = 0u32;
     let mut seen = 0u32;
-    println!("cella doctor: verify");
+    println!("cella_doctor: verify");
     for (axis, flavor) in all {
         if let Some((a, f)) = target {
             if a != axis || f != flavor {
@@ -444,9 +444,9 @@ pub fn verify(target: Option<(&str, &str)>) -> u32 {
         println!("  note  nothing to verify -- no goldens found");
     }
     if failed == 0 {
-        println!("cella doctor: verified");
+        println!("cella_doctor: verified");
     } else {
-        println!("cella doctor: {failed} FAIL");
+        println!("cella_doctor: {failed} FAIL");
     }
     failed
 }
@@ -465,7 +465,7 @@ pub fn harvest(vm: Option<&str>) -> u32 {
     };
     if !book.is_file() {
         println!(
-            "cella doctor: no audit book at {} -- nothing to correlate",
+            "cella_doctor: no audit book at {} -- nothing to correlate",
             book.display()
         );
         return 1;
@@ -473,7 +473,7 @@ pub fn harvest(vm: Option<&str>) -> u32 {
     let messages = match cella_libs::ledger::read_all(&book) {
         Ok(m) => m,
         Err(e) => {
-            println!("cella doctor: reading the audit book: {e}");
+            println!("cella_doctor: reading the audit book: {e}");
             return 1;
         }
     };
@@ -485,7 +485,7 @@ pub fn harvest(vm: Option<&str>) -> u32 {
         })
         .collect();
     let (Some(&first), Some(&last)) = (clocks.iter().min(), clocks.iter().max()) else {
-        println!("cella doctor: the audit book holds no entries -- nothing to correlate");
+        println!("cella_doctor: the audit book holds no entries -- nothing to correlate");
         return 1;
     };
     let fmt = |ns: u64, round_up: bool| -> Option<String> {
@@ -497,7 +497,7 @@ pub fn harvest(vm: Option<&str>) -> u32 {
         Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
     let (Some(start), Some(end)) = (fmt(first, false), fmt(last, true)) else {
-        println!("cella doctor: date failed -- cannot shape the window");
+        println!("cella_doctor: date failed -- cannot shape the window");
         return 1;
     };
     let out = match std::process::Command::new("ausearch")
@@ -509,14 +509,14 @@ pub fn harvest(vm: Option<&str>) -> u32 {
     {
         Ok(o) => o,
         Err(_) => {
-            println!("cella doctor: ausearch not found -- install audit, or run where it exists");
+            println!("cella_doctor: ausearch not found -- install audit, or run where it exists");
             return 1;
         }
     };
     let text = String::from_utf8_lossy(&out.stdout);
     let err = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() && !err.contains("no matches") && !text.trim().is_empty() {
-        println!("cella doctor: ausearch refused ({}) -- the harvest is privileged: sudo cella doctor harvest", err.trim());
+        println!("cella_doctor: ausearch refused ({}) -- the harvest is privileged: sudo cella doctor harvest", err.trim());
         return 1;
     }
     let avc = book.with_file_name("avc");
@@ -527,11 +527,11 @@ pub fn harvest(vm: Option<&str>) -> u32 {
         text.to_string()
     };
     if let Err(e) = std::fs::write(&avc, content) {
-        println!("cella doctor: writing {}: {e}", avc.display());
+        println!("cella_doctor: writing {}: {e}", avc.display());
         return 1;
     }
     println!(
-        "cella doctor: harvested {denials} denial(s) into {} (window {start} .. {end})",
+        "cella_doctor: harvested {denials} denial(s) into {} (window {start} .. {end})",
         avc.display()
     );
     0

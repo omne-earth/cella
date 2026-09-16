@@ -24,7 +24,7 @@ pub mod pb {
 }
 
 fn usage() -> ! {
-    eprintln!(
+    cella_libs::logln!(
         "usage: cella-engine <vm> --dial <addr> | motor --listen <addr> [--allow ip:port ...] [--remember ip:port:secs|arp:secs ...] [--grant ...]"
     );
     std::process::exit(2);
@@ -34,14 +34,14 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(verb) = args.first() {
         if let Err(e) = cella_libs::audit::witness(None, verb, &args[1..]) {
-            eprintln!("cella-engine: {e}");
+            cella_libs::logln!("cella_engine: {e}");
             std::process::exit(1);
         }
     }
     match args.first().map(|s| s.as_str()) {
         Some("motor") => {
             if let Err(e) = motor::run(&args[1..]) {
-                eprintln!("cella-engine: motor: {e}");
+                cella_libs::logln!("cella_engine: motor: {e}");
                 std::process::exit(1);
             }
         }
@@ -51,7 +51,7 @@ fn main() {
                 None => usage(),
             };
             if let Err(e) = bridge::run(vm, &dial) {
-                eprintln!("cella-engine: {e}");
+                cella_libs::logln!("cella_engine: {e}");
                 std::process::exit(1);
             }
         }

@@ -66,7 +66,7 @@ impl pb::engine_server::Engine for Motor {
                         written: 0,
                     })),
                 };
-                println!("motor: grant standing (keep_open={keep_open}s)");
+                cella_libs::logln!("motor: grant standing (keep_open={keep_open}s)");
                 if tx.send(Ok(d)).await.is_err() {
                     return;
                 }
@@ -78,20 +78,20 @@ impl pb::engine_server::Engine for Motor {
                         // A stream error is worth a line, not a
                         // silent end: the bridge retries frames,
                         // the motor keeps listening.
-                        println!("motor: stream error: {e}");
+                        cella_libs::logln!("motor: stream error: {e}");
                         continue;
                     }
                 };
                 let Some(pb::event::Event::Parked(op)) = ev.event else {
                     // Completions and looks are evidence, not questions.
-                    println!("motor: event (not a park)");
+                    cella_libs::logln!("motor: event (not a park)");
                     continue;
                 };
                 let (ip, port, ethertype, dir) = match &op.destination {
                     Some(d) => (d.ip.clone(), d.port, d.ethertype, op.direction),
                     None => (Vec::new(), 0, 0, op.direction),
                 };
-                println!(
+                cella_libs::logln!(
                     "motor: parked id={} ip={} port={} dir={}",
                     cella_hex(&op.id),
                     ip.iter()
@@ -125,7 +125,7 @@ impl pb::engine_server::Engine for Motor {
                     id: op.id.clone(),
                     decision: Some(decision),
                 };
-                println!(
+                cella_libs::logln!(
                     "motor: {} id={}",
                     if allowed { "release" } else { "refuse" },
                     cella_hex(&op.id)
@@ -165,7 +165,7 @@ impl pb::engine_server::Engine for Motor {
                                 },
                             )),
                         };
-                        println!("motor: remember keep_open={keep_open}s");
+                        cella_libs::logln!("motor: remember keep_open={keep_open}s");
                         if tx.send(Ok(mem)).await.is_err() {
                             return;
                         }
@@ -280,7 +280,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
     rt.block_on(async move {
-        println!("motor: listening on {listen}");
+        cella_libs::logln!("motor: listening on {listen}");
         tonic::transport::Server::builder()
             .add_service(pb::engine_server::EngineServer::new(Motor {
                 allow,

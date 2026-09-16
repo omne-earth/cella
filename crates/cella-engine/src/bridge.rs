@@ -148,7 +148,7 @@ pub fn run(vm: &str, dial: &str) -> Result<(), String> {
 
         // Decisions land as they arrive. The bridge never filters,
         // reorders, or defaults: the engine's word, verbatim.
-        eprintln!("bridge: {vm_name} connected to {dial}");
+        cella_libs::logln!("bridge: {vm_name} connected to {dial}");
         while let Some(d) = inbound
             .message()
             .await
@@ -156,7 +156,7 @@ pub fn run(vm: &str, dial: &str) -> Result<(), String> {
         {
             land(&vm_name, d)?;
         }
-        eprintln!("bridge: {vm_name} stream ended");
+        cella_libs::logln!("bridge: {vm_name} stream ended");
         Ok(())
     })
     // The tail thread ends on its own: the runtime drop closes the
@@ -198,7 +198,7 @@ fn tail_thread(dir: &Path, ledger: &Path, tx: tokio::sync::mpsc::Sender<pb::Even
         if !heard {
             heard = listen(ifd);
             if heard {
-                eprintln!("bridge: the tail hears the ledger");
+                cella_libs::logln!("bridge: the tail hears the ledger");
             }
         }
         if let Ok(mut f) = std::fs::File::open(ledger) {
