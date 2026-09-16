@@ -27,6 +27,10 @@ pub struct Config {
     /// The upstream's port: 53 in the field; a gate's unprivileged
     /// responder rides higher.
     pub upstream_port: u16,
+    /// Where the interceptor's own ear listens (default 53). Off-53
+    /// serves deployments that cannot bind a privileged port -- the
+    /// strict-verifier gate runs the proxy as an ordinary user.
+    pub dns_port: u16,
     /// TCP ports the proxy listens on for named flows (TLS by SNI
     /// on any of them; plain HTTP by Host on any of them).
     pub listen: Vec<u16>,
@@ -44,6 +48,7 @@ pub fn load(path: &Path) -> Result<Config, String> {
 
 pub fn parse(text: &str) -> Result<Config, String> {
     let mut wire_ip = None;
+    let mut dns_port = 53u16;
     let mut upstream: Option<(Ipv4Addr, u16)> = None;
     let mut listen: Vec<u16> = Vec::new();
     let mut ca_cert = None;
@@ -71,6 +76,12 @@ pub fn parse(text: &str) -> Result<Config, String> {
                     None => (v, 53u16),
                 };
                 upstream = Some((parse_ip(ip).map_err(|e| format!("line {n}: {e}"))?, port));
+            }
+            "dns_port" => {
+                dns_port = value
+                    .trim()
+                    .parse()
+                    .map_err(|e| format!("line {n}: dns_port: {e}"))?;
             }
             "listen" => {
                 for p in value.split(',') {
@@ -107,6 +118,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let (upstream_dns, upstream_port) = upstream.ok_or("upstream_dns is mandatory")?;
     Ok(Config {
         wire_ip: wire_ip.ok_or("wire_ip is mandatory")?,
+        dns_port,
         upstream_dns,
         upstream_port,
         listen: if listen.is_empty() {

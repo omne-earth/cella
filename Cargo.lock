@@ -281,10 +281,12 @@ dependencies = [
 name = "cella-terminator"
 version = "0.1.0"
 dependencies = [
+ "oid-registry",
  "rcgen",
  "rustls",
  "rustls-pemfile",
  "webpki-roots 0.26.11",
+ "x509-parser",
 ]
 
 [[package]]
