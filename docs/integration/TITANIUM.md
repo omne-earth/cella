@@ -16,6 +16,13 @@ walks live per topic, and titanium follows them unchanged:
   appliance: TLS and names across cryogenic time, the consented
   pair CA, the honest freeze.
 
+A harness that grants exec budgets must know its host's thaw
+warm rate first: `make benchmark-thaw` reports it, and
+docs/FREEZE-THAW.md ("The warm rate is the host's property")
+states the threshold and the remedy -- a mount, not a cella
+change. Budgets sized without that number blame cella for the
+filesystem.
+
 ## The task.toml mapping
 
 - `allow_internet = false` -- `--net none`: no membrane, no
