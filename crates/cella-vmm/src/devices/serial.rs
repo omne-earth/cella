@@ -118,7 +118,7 @@ impl SerialDevice {
             scratch: regs[8],
             in_buffer: Vec::new(),
         };
-        eprintln!(
+        cella_libs::logln!(
             "cella: serial restore: IER={:#04x} IIR={:#04x} LCR={:#04x} LSR={:#04x} MCR={:#04x} MSR={:#04x}",
             regs[2], regs[3], regs[4], regs[5], regs[6], regs[7]
         );

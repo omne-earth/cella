@@ -180,7 +180,7 @@ impl World {
                     port: p.port,
                     tcp: p.tcp,
                 }),
-                None => eprintln!(
+                None => cella_libs::logln!(
                     "cella-network: cannot listen on {}/{} -- the knock has no door here",
                     p.port,
                     if p.tcp { "tcp" } else { "udp" }

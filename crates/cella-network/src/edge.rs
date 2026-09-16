@@ -184,7 +184,7 @@ pub fn run(vm: &str) -> Result<(), String> {
     let wires_dir = machine::home().join("wires");
     std::fs::create_dir_all(&wires_dir).map_err(|e| format!("creating {wires_dir:?}: {e}"))?;
 
-    println!(
+    cella_libs::logln!(
         "cella-network: edge for {vm:?} up -- {} nic(s), listening on edge.sock",
         nics.len()
     );
@@ -207,7 +207,7 @@ pub fn run(vm: &str) -> Result<(), String> {
                     }
                     set_nonblocking(conn);
                     nic.vmm = Some(conn);
-                    println!(
+                    cella_libs::logln!(
                         "cella-network: nic {} attached (epoch connection)",
                         hello[0]
                     );
@@ -248,13 +248,13 @@ pub fn run(vm: &str) -> Result<(), String> {
                     if let Ok(conn) = seq::accept(l) {
                         set_nonblocking(conn);
                         *peer = Some(conn);
-                        println!("cella-network: wire {name:?} accepted");
+                        cella_libs::logln!("cella-network: wire {name:?} accepted");
                     }
                 }
             } else if let Ok(conn) = seq::connect(&path) {
                 set_nonblocking(conn);
                 *peer = Some(conn);
-                println!("cella-network: wire {name:?} connected");
+                cella_libs::logln!("cella-network: wire {name:?} connected");
             }
         }
 
@@ -291,7 +291,7 @@ pub fn run(vm: &str) -> Result<(), String> {
                         Err(_) => {
                             close_fd(vfd);
                             nic.vmm = None;
-                            println!("cella-network: nic {} detached", nic.nic_index);
+                            cella_libs::logln!("cella-network: nic {} detached", nic.nic_index);
                             break;
                         }
                     }
@@ -321,7 +321,7 @@ pub fn run(vm: &str) -> Result<(), String> {
             }
             if wire_dropped {
                 if let Kind::Wire { name, .. } = &nic.kind {
-                    println!("cella-network: wire {name:?} dropped");
+                    cella_libs::logln!("cella-network: wire {name:?} dropped");
                 }
             }
             for frame in inbound {
@@ -332,15 +332,16 @@ pub fn run(vm: &str) -> Result<(), String> {
                             close_fd(vfd);
                             nic.vmm = None;
                             nic.discarded += 1;
-                            println!(
+                            cella_libs::logln!(
                                 "cella-network: nic {} detached; frame discarded (total {})",
-                                nic.nic_index, nic.discarded
+                                nic.nic_index,
+                                nic.discarded
                             );
                         }
                     }
                     None => {
                         nic.discarded += 1;
-                        println!(
+                        cella_libs::logln!(
                             "cella-network: frame discarded at the edge, nic {} detached                              (total {})",
                             nic.nic_index, nic.discarded
                         );
@@ -359,7 +360,7 @@ pub fn run(vm: &str) -> Result<(), String> {
             if tether.elapsed().as_secs() >= 1 {
                 tether = std::time::Instant::now();
                 if !edge_sock.exists() {
-                    println!(
+                    cella_libs::logln!(
                         "cella-network: edge.sock is gone -- the machine was removed; exiting"
                     );
                     return Ok(());

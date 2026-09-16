@@ -165,7 +165,7 @@ fn parse_mac(s: &str) -> [u8; 6] {
 }
 
 fn usage_error(msg: &str) -> ! {
-    eprintln!("cella: {msg}");
+    cella_libs::logln!("cella: {msg}");
     std::process::exit(2);
 }
 
@@ -438,7 +438,7 @@ fn main() {
         vcpu::restore_vm_clock(&vm, &frozen_state.clock)
             .unwrap_or_else(|e| fatal(&format!("restoring clock: {e:?}")));
         let t_after_clock = std::time::Instant::now();
-        eprintln!(
+        cella_libs::logln!(
             "cella: thaw timing: TSC write to clock write {}",
             fmt_ns((t_after_clock - t_after_restore).as_nanos() as i128)
         );
@@ -519,7 +519,7 @@ fn main() {
 
         freeze::finalize_thaw(&args.state_dir)
             .unwrap_or_else(|e| fatal(&format!("finalizing thaw: {e}")));
-        eprintln!("cella: thawed {:?}", args.state_dir);
+        cella_libs::logln!("cella: thawed {:?}", args.state_dir);
     } else {
         let kernel = args.kernel.clone().unwrap_or_else(|| {
             usage_error("--kernel is required when booting fresh (no frozen state found)")
@@ -535,7 +535,7 @@ fn main() {
         boot::setup_gdt(&mem, &vcpu_fd).unwrap_or_else(|e| fatal(&format!("gdt: {e:?}")));
         boot::set_entry_point(&vcpu_fd, &boot_info)
             .unwrap_or_else(|e| fatal(&format!("entry point: {e:?}")));
-        eprintln!("cella: booting {:?}", kernel);
+        cella_libs::logln!("cella: booting {:?}", kernel);
     }
 
     install_sigusr1_handler();
@@ -544,7 +544,7 @@ fn main() {
     // The guest starts to run at the first KVM_RUN in run_loop. Measure
     // the delay from the write of the clock to that moment.
     if let Some(t) = thaw_clock_written {
-        eprintln!(
+        cella_libs::logln!(
             "cella: thaw timing: clock write to first KVM_RUN {}",
             fmt_ns(t.elapsed().as_nanos() as i128)
         );
@@ -618,7 +618,7 @@ fn run_loop(
             // next vcpu_fd.run() -- which blocks indefinitely against
             // an idle guest that a refusal (rightly) never wakes.
             if flush_ledger(mmio_devices, ledger_path, &standing) {
-                eprintln!("cella: parked -- the machine freezes (one-shot)");
+                cella_libs::logln!("cella: parked -- the machine freezes (one-shot)");
                 FREEZE_REQUESTED.store(true, Ordering::SeqCst);
             }
         }
@@ -629,7 +629,7 @@ fn run_loop(
                 .collect();
             let held: usize = device_states.iter().map(|d| d.held_frames.len()).sum();
             if held > 0 {
-                eprintln!("cella: freezing with {held} held egress frame(s)");
+                cella_libs::logln!("cella: freezing with {held} held egress frame(s)");
             }
             do_freeze(
                 &vcpu_fd,
@@ -653,7 +653,7 @@ fn run_loop(
                 match vcpu::dispatch(exit, &mut devices) {
                     vcpu::RunResult::Continue | vcpu::RunResult::Halted => {}
                     vcpu::RunResult::Shutdown => {
-                        eprintln!("cella: guest requested shutdown");
+                        cella_libs::logln!("cella: guest requested shutdown");
                         std::process::exit(0);
                     }
                 }
@@ -698,7 +698,7 @@ fn run_loop(
         // remembers the destination (N.F.7): a remembered park
         // waits live, and the decision applies on the kick.
         if flush_ledger(mmio_devices, ledger_path, &standing) {
-            eprintln!("cella: parked -- the machine freezes (one-shot)");
+            cella_libs::logln!("cella: parked -- the machine freezes (one-shot)");
             FREEZE_REQUESTED.store(true, Ordering::SeqCst);
         }
     }
@@ -729,7 +729,7 @@ fn flush_ledger(
     for (_, _, t) in mmio_devices.iter_mut() {
         for dest in t.take_parked_dests() {
             if cella_libs::memory::skips_freeze(standing, &dest, now_s) {
-                eprintln!("cella: the membrane remembers -- the park waits live");
+                cella_libs::logln!("cella: the membrane remembers -- the park waits live");
             } else {
                 freeze_needed = true;
             }
@@ -737,7 +737,7 @@ fn flush_ledger(
     }
     for event in events {
         if let Err(e) = ledger::append_event(ledger_path, event) {
-            eprintln!("cella: ledger append failed: {e}");
+            cella_libs::logln!("cella: ledger append failed: {e}");
         }
     }
     freeze_needed
@@ -912,7 +912,7 @@ fn apply_valve_record(state_dir: &std::path::Path, mmio_devices: &mut [(u64, u64
     for (_, _, t) in mmio_devices.iter_mut() {
         t.set_valve(state);
     }
-    eprintln!("cella: valve {:?}", state);
+    cella_libs::logln!("cella: valve {:?}", state);
 }
 
 /// The inbound lane's decisions, applied live: a running machine
@@ -955,7 +955,7 @@ fn apply_verdicts(
             decisions.insert(d.id.clone(), d.clone());
         }
     }
-    eprintln!(
+    cella_libs::logln!(
         "cella: applying {} decision(s) from the verdict file",
         decisions.len()
     );
@@ -992,9 +992,9 @@ fn apply_verdicts(
             predecessor: Vec::new(),
         };
         if let Err(e) = ledger::append_event(&ledger_path, event) {
-            eprintln!("cella: ledger append failed: {e}");
+            cella_libs::logln!("cella: ledger append failed: {e}");
         }
-        eprintln!(
+        cella_libs::logln!(
             "cella: lapsed {} by the book -- refused, and held by nothing",
             ledger::hex(id)
         );
@@ -1010,7 +1010,7 @@ fn do_freeze(
     serial_regs: [u8; 9],
     device_states: &[devices::virtio::mmio::TransportState],
 ) {
-    eprintln!("cella: freezing to {:?}", state_dir);
+    cella_libs::logln!("cella: freezing to {:?}", state_dir);
     // The guest stopped when KVM_RUN returned. Measure the delay from
     // that moment to the read of the TSC and the kvmclock. The values
     // that the code reads are the values at the read, not at the stop.
@@ -1037,7 +1037,7 @@ fn do_freeze(
     let t_after_save = std::time::Instant::now();
     let clock = vcpu::save_vm_clock(vm).unwrap_or_else(|e| fatal(&format!("saving clock: {e:?}")));
     let t_clock = std::time::Instant::now();
-    eprintln!(
+    cella_libs::logln!(
         "cella: freeze timing: guest stop to TSC read {}, TSC read to clock read {}",
         fmt_ns((t_tsc - t_stopped).as_nanos() as i128),
         fmt_ns((t_clock - t_after_save).as_nanos() as i128)
@@ -1051,7 +1051,7 @@ fn do_freeze(
         .unwrap_or_else(|e| fatal(&format!("saving nested state: {e:?}")));
     let nested_msrs = vcpu::save_nested_msrs(vcpu_fd);
     if !nested.is_empty() {
-        eprintln!(
+        cella_libs::logln!(
             "cella: nested state: {} bytes, {} MSR(s)",
             nested.len(),
             nested_msrs.len()
@@ -1073,7 +1073,7 @@ fn do_freeze(
     freeze::write_state(state_dir, &frozen)
         .unwrap_or_else(|e| fatal(&format!("writing frozen state: {e:?}")));
 
-    eprintln!("cella: frozen");
+    cella_libs::logln!("cella: frozen");
 }
 
 fn install_sigusr1_handler() {
@@ -1458,7 +1458,7 @@ fn fmt_ns(ns: i128) -> String {
 }
 
 fn fatal(msg: &str) -> ! {
-    eprintln!("cella: fatal: {msg}");
+    cella_libs::logln!("cella: fatal: {msg}");
     std::process::exit(1);
 }
 
@@ -1492,7 +1492,7 @@ fn prefault_ept(vcpu: &kvm_ioctls::VcpuFd, size: u64) {
             if err.raw_os_error() == Some(libc::EINTR) {
                 continue;
             }
-            eprintln!(
+            cella_libs::logln!(
                 "cella: thaw timing: prefault(ept) failed at gpa {:#x}: {err}",
                 arg.gpa
             );
@@ -1502,7 +1502,7 @@ fn prefault_ept(vcpu: &kvm_ioctls::VcpuFd, size: u64) {
             break;
         }
     }
-    eprintln!(
+    cella_libs::logln!(
         "cella: thaw timing: prefault(ept) done in {}",
         fmt_ns(t.elapsed().as_nanos() as i128)
     );
