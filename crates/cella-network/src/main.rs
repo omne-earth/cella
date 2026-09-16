@@ -1,4 +1,4 @@
-//! cella-network: the translator (1.6.14e).
+//! cella_network: the translator (1.6.14e).
 //!
 //! One process per machine, machine-lifetime, no capability: the
 //! machine's start spawns `cella-network edge <vm>`, destroy kills
@@ -24,7 +24,7 @@ fn main() {
     // static gate of make test counts this door).
     if let Some(verb) = args.first() {
         if let Err(e) = cella_libs::audit::witness(None, verb, &args[1..]) {
-            cella_libs::logln!("cella-network: {e}");
+            cella_libs::logln!("cella_network: {e}");
             std::process::exit(1);
         }
     }
@@ -40,7 +40,7 @@ fn main() {
                 std::process::exit(2);
             };
             if let Err(e) = edge::run(vm) {
-                cella_libs::logln!("cella-network: {e}");
+                cella_libs::logln!("cella_network: {e}");
                 std::process::exit(1);
             }
         }
@@ -52,7 +52,7 @@ fn main() {
         }
         Some(other) => {
             cella_libs::logln!(
-                "cella-network: unknown verb {other:?} -- usage: cella-network edge <vm>"
+                "cella_network: unknown verb {other:?} -- usage: cella-network edge <vm>"
             );
             std::process::exit(2);
         }

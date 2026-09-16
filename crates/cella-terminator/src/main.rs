@@ -1,4 +1,4 @@
-//! cella-terminator: the one network appliance's userland
+//! cella_terminator: the one network appliance's userland
 //! (docs/NETWORK-MODEL.md, "The terminator"; tasks/
 //! PHASE2-security.md, 2.7). Guest-only: this binary ships inside
 //! the terminator image like busybox does -- no witness door, no
@@ -57,13 +57,13 @@ fn main() {
                     if let Err(e) = std::fs::write(out.join("ca.pem"), cert_pem)
                         .and_then(|_| std::fs::write(out.join("ca.key"), key_pem))
                     {
-                        eprintln!("cella-terminator: writing the pair CA: {e}");
+                        eprintln!("cella_terminator: writing the pair CA: {e}");
                         std::process::exit(1);
                     }
                     return;
                 }
                 Err(e) => {
-                    eprintln!("cella-terminator: minting the pair CA: {e}");
+                    eprintln!("cella_terminator: minting the pair CA: {e}");
                     std::process::exit(1);
                 }
             }
@@ -75,12 +75,12 @@ fn main() {
     let cfg = match config::load(std::path::Path::new(&path)) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("cella-terminator: {e}");
+            eprintln!("cella_terminator: {e}");
             std::process::exit(2);
         }
     };
     if let Err(e) = proxy::run(cfg) {
-        eprintln!("cella-terminator: {e}");
+        eprintln!("cella_terminator: {e}");
         std::process::exit(1);
     }
 }
