@@ -2,7 +2,8 @@
 
 How an integrator puts the one network appliance between its
 members and the world. The law is docs/NETWORK-MODEL.md ("The
-terminator"); this is the builder's walk. Nothing here is
+terminator"); the mechanism and the gates' walks are
+docs/TLS-TERMINATOR.md; this is the builder's walk. Nothing here is
 specific to any one harness.
 
 ## Why it exists
@@ -112,11 +113,82 @@ an upstream retry, never a broken promise. Do not design around
 a terminator that never freezes: design around one that rarely
 does.
 
-## What to verify
+## What to verify, t1-t8
 
-The member's handshake completes across a member freeze (freeze
-the member mid-handshake, thaw, the session lives). Plain TCP
-splices. A name resolves from the member with no world DNS
-crossing on the second lookup (the cache). The reference
-assertions are the gates, scripts/test/tls-terminator.sh
-(`make smoke-tls-terminator`).
+The reference assertions are the eight gates (`make
+smoke-tls-terminator`; docs/TLS-TERMINATOR.md shows each walk as
+a diagram). An integration test mirrors them one for one, with
+the harness's own tools. `<gw>` is the terminator's wire address;
+`<pem>` is the baked pair cert.
+
+1. **The interceptor (t1).** From a member, resolve any name;
+   the answer is always `<gw>`.
+
+   ```sh
+   nslookup anything.example    # every answer: <gw>
+   ```
+
+2. **Termination verified (t2).** From a member, any TLS client
+   that trusts only `<pem>` must verify the minted leaf. With the
+   world leg dead, verification still succeeds -- the local proof
+   that interception, SNI, and minting hold before the world is
+   ever involved.
+
+   ```sh
+   openssl s_client -connect <gw>:443 -servername api.example \
+       -CAfile <pem> -verify_return_error </dev/null
+   ```
+
+3. **The nameless splice (t3).** Configure a static map
+   (`map=<port>:<name>:<world-port>`), fetch through it, and read
+   the appliance's chronicle: the world-leg park carries
+   `host=<name>` (the name ratchet), and still does after a
+   freeze and thaw of the appliance.
+
+   ```sh
+   wget -q -O- http://<gw>:8080/
+   cella --dump <machines>/term/network/ledger | grep host=
+   ```
+
+4. **The cache (t4).** Fetch twice; count questions at the
+   upstream between the fetches. The second flow asks nothing
+   while the TTL stands.
+
+5. **The unauthorized middle refused (t5).** The same client with
+   a different trust store (or none) must refuse the handshake.
+   If this passes, stop: a member that never baked the pair's
+   cert is verifying the middle, and the consent story is broken.
+
+6. **The named world (t6).** A real name end to end: the member
+   fetches `https://example.com` through the pair; the content
+   arrives, the member-leg chain is the pair's, and the appliance
+   verified the world's chain against its pinned roots.
+
+7. **The strict verifier (t7).** Hold the served chain to strict
+   RFC 5280 semantics with a verifier you did not build:
+
+   ```sh
+   openssl s_client -connect <gw>:443 -servername t.example \
+       -showcerts </dev/null | awk '/BEGIN CERT/{n++} n==1' > leaf.pem
+   openssl verify -x509_strict -CAfile <pem> leaf.pem   # must say OK
+   ```
+
+8. **The field verifier (t8).** The strictest common client
+   stack: Python 3.13+ (`VERIFY_X509_STRICT` is its default)
+   with hostname checking, against `<gw>:443`. This is the stack
+   that first tripped a bare leaf in the field; a green t8 means
+   an agent's ordinary `ssl` client verifies the mint.
+
+   ```python
+   import socket, ssl
+   ctx = ssl.create_default_context(cafile="<pem>")
+   ctx.verify_flags |= ssl.VERIFY_X509_STRICT
+   with socket.create_connection(("<gw>", 443)) as s:
+       with ctx.wrap_socket(s, server_hostname="api.example") as t:
+           print(t.version())
+   ```
+
+Also verify the freeze story once: freeze the member
+mid-handshake, thaw it, and the session completes -- the member
+leg's patience is the pair's own (docs/TLS-TERMINATOR.md, "The
+two legs").

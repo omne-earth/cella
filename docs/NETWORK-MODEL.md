@@ -372,7 +372,10 @@ interface carries an unmanaged mode.
 The one network appliance (ruled 2026-09-15): an ordinary cella
 machine wearing the `terminator` rootfs flavor, in the pair seat
 -- a member on a wire, the world on the other nic -- that splits
-every TCP connection in two and owns the names.
+every TCP connection in two and owns the names. This section is
+the law; the mechanism and the eight gates' walks are
+docs/TLS-TERMINATOR.md, and the builder's contract is
+docs/integration/TLS-TERMINATOR.md.
 
 - **Two legs.** The member's peer is always its terminator: that
   leg's patience is ours, and a member may freeze mid-handshake
