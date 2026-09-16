@@ -58,6 +58,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         test-seccomp-machine \
         test-machine test-one-door test-witness \
         clean distclean logs-clean lines \
+        benchmark-thaw \
         probe-sregs probe-wallclock probe-freeze-thaw-clock \
         probe-prefault-ept probe-thaw-gate probe-inception \
         kernel-config-check
@@ -926,6 +927,11 @@ export CELLA_OBSERVE_SECS
 ## KVM_SET_SREGS ordering: does CS.L=1 need CR0.PG/EFER.LMA set in the *same*
 ## ioctl call? (no /dev/kvm needed beyond opening it; boots nothing -- see
 ## src/bin/cella-probe/sregs.rs)
+## Report the thaw warm rate, three regimes: hot, cold, concurrent
+benchmark-thaw: build-lab golden
+	$(LOG)
+	$(SCRIPTS)/test/benchmark-thaw.sh
+
 probe-sregs: build
 	$(LOG)
 	target/lab/cella-probe sregs
