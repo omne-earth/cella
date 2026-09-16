@@ -299,6 +299,31 @@ Order rules, and the reason for each rule:
 
 ## Measurement and gates
 
+### The warm rate is the host's property
+
+The deep warm at thaw touches every guest page, and its rate is
+set by the filesystem under CELLA_HOME, not by cella: the RAM
+image is a MAP_SHARED file, dirtied whole at every freeze, and a
+copy-on-write filesystem fragments it -- every 4 KiB fault then
+pays that fragmentation, and concurrent thaws multiply it.
+Measure the host before trusting a budget:
+
+```sh
+make benchmark-thaw    # hot, cold, and concurrent -- a report, not a verdict
+```
+
+The threshold for comfortable use: the solo rate should warm a
+machine's whole RAM well inside the tightest exec budget the
+harness grants -- as a rule, **1 GiB of guest RAM per two
+seconds of budget, with concurrent headroom to spare**. A host
+below that has a mount problem, not a cella problem, and the
+remedy is a mount: place CELLA_HOME on a non-CoW filesystem (a
+dedicated ext4/xfs volume, or a `nodatacow` btrfs subvolume
+reserved for machine state). The trade is the operator's to
+make knowingly -- a CoW filesystem buys block checksums and
+cheap reflinks for the frozen image at the price of the warm
+rate; cella deliberately ships no filesystem-specific tuning.
+
 `make probe-freeze-thaw-clock` measures the crossing: the heartbeat
 interval of the guest that contains the freeze, in nanoseconds, from
 /proc/timer_list. The probe measures wake-up lateness after the thaw,
