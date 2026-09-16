@@ -178,8 +178,8 @@ pub fn run(cfg: Config) -> Result<(), String> {
     let maps = Arc::new(cfg.maps.clone());
 
     // The interceptor's ear.
-    let dns_sock =
-        UdpSocket::bind((cfg.wire_ip, 53)).map_err(|e| format!("bind {}:53: {e}", cfg.wire_ip))?;
+    let dns_sock = UdpSocket::bind((cfg.wire_ip, cfg.dns_port))
+        .map_err(|e| format!("bind {}:{}: {e}", cfg.wire_ip, cfg.dns_port))?;
     let self_ip = cfg.wire_ip;
     std::thread::spawn(move || loop {
         serve_dns_once(&dns_sock, self_ip);
