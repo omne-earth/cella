@@ -188,6 +188,15 @@ the harness's own tools. `<gw>` is the terminator's wire address;
            print(t.version())
    ```
 
+9. **Throughput (t9).** A bulk transfer through the pair arrives
+   byte-exact at real speed -- fetch a file of tens of MiB and
+   compare checksums and wall time. Every crossing is still
+   individually judged; if bulk crawls at tens of kB/s, the
+   verdict path is polling somewhere (the bridge's ear,
+   docs/WORLD-ENGINE.md, or the engine's own decision latency --
+   after cella's ear, the engine's per-verdict cost is the
+   ceiling, so know yours).
+
 Also verify the freeze story once: freeze the member
 mid-handshake, thaw it, and the session completes -- the member
 leg's patience is the pair's own (docs/TLS-TERMINATOR.md, "The

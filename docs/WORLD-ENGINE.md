@@ -52,8 +52,13 @@ Three layers, one vocabulary:
 2. **The file wire, shipped.** The ledger (N.F.3) holds framed
    Events; the verdict file (N.F.2) holds framed Decisions. The
    files are the resting form of the stream.
-3. **The stream, shipped.** The bridge (W.B.1) tails the ledger,
-   calls `Decide`, and lands each returned Decision in the
+3. **The stream, shipped.** The bridge (W.B.1) tails the ledger
+   with an ear, not a poll: inotify wakes it on the append, so a
+   park reaches the judge in milliseconds -- a sustained flow is
+   one operation per verdict round trip, thus the tail's latency
+   is the pair's throughput ceiling (tls-terminator-t9 holds the
+   floor). A 500 ms poll stands behind the ear as the safety
+   net. The bridge calls `Decide` and lands each returned Decision in the
    verdict file with a kick. The membrane never learns which
    judge wrote the file.
 
