@@ -17,3 +17,9 @@ rustls = { workspace = true }
 rcgen = { workspace = true }
 webpki-roots = { workspace = true }
 rustls-pemfile = { workspace = true }
+
+[dev-dependencies]
+# Already in the tree via rcgen's x509-parser feature, same pin:
+# the tests read back what the minter wrote.
+x509-parser = "0.16"
+oid-registry = "0.7"

@@ -64,6 +64,13 @@ impl Minter {
         // window is the pair's lifetime, not the world's calendar.
         params.not_before = rcgen::date_time_ymd(1975, 1, 1);
         params.not_after = rcgen::date_time_ymd(2200, 1, 1);
+        // The member's verifier is not ours to choose, so the leaf
+        // serves the strictest honest one (RFC 5280): the AKI names
+        // the issuing pair CA, and the usages say exactly what a
+        // TLS server leaf is for -- nothing implicit, nothing more.
+        params.use_authority_key_identifier_extension = true;
+        params.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
         let leaf = params
             .signed_by(&leaf_key, &self.ca_cert, &self.ca_key)
             .map_err(|e| format!("minting {name}: {e}"))?;
@@ -125,6 +132,82 @@ mod tests {
         let d = std::env::temp_dir().join(format!("cella-term-ca-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
         d
+    }
+
+    #[test]
+    fn a_minted_leaf_satisfies_a_strict_verifier() {
+        // rustls tolerates a bare leaf; a member's stricter stack
+        // is entitled not to (RFC 5280). The leaf must carry the
+        // AKI naming the pair CA and exactly the TLS-server
+        // usages -- read back from the served bytes.
+        use x509_parser::prelude::*;
+        let (ca_pem, key_pem) = mint_pair_ca("strict").unwrap();
+        let d = tmpdir();
+        std::fs::write(d.join("strict-ca.pem"), &ca_pem).unwrap();
+        std::fs::write(d.join("strict-ca.key"), &key_pem).unwrap();
+        let minter = Minter::load(&d.join("strict-ca.pem"), &d.join("strict-ca.key")).unwrap();
+        let leaf_der = handshake_peer_leaf(&minter, &ca_pem, "svc.example");
+        let (_, leaf) = X509Certificate::from_der(&leaf_der).unwrap();
+        let ca_der = super::pem_to_der(&ca_pem).unwrap();
+        let (_, ca) = X509Certificate::from_der(ca_der.as_ref()).unwrap();
+        // The AKI names the pair CA's own key identifier.
+        let aki = leaf
+            .get_extension_unique(&oid_registry::OID_X509_EXT_AUTHORITY_KEY_IDENTIFIER)
+            .unwrap()
+            .expect("the leaf carries no AKI");
+        let ski = ca
+            .get_extension_unique(&oid_registry::OID_X509_EXT_SUBJECT_KEY_IDENTIFIER)
+            .unwrap()
+            .expect("the CA carries no SKI");
+        let ParsedExtension::AuthorityKeyIdentifier(aki) = aki.parsed_extension() else {
+            panic!("AKI did not parse");
+        };
+        let ParsedExtension::SubjectKeyIdentifier(ski) = ski.parsed_extension() else {
+            panic!("SKI did not parse");
+        };
+        assert_eq!(aki.key_identifier.as_ref().unwrap().0, ski.0);
+        // Exactly the TLS-server usages, nothing implicit.
+        let ku = leaf.key_usage().unwrap().expect("no KeyUsage");
+        assert!(ku.value.digital_signature());
+        assert!(!ku.value.key_cert_sign());
+        let eku = leaf.extended_key_usage().unwrap().expect("no EKU");
+        assert!(eku.value.server_auth);
+        assert!(!eku.value.client_auth);
+    }
+
+    /// Handshake against the minter over loopback and return the
+    /// leaf the server actually served -- the member's view.
+    fn handshake_peer_leaf(minter: &Minter, ca_pem: &str, sni: &str) -> Vec<u8> {
+        let cfg = minter.server_config_for(sni).unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(pem_to_der(ca_pem).unwrap()).unwrap();
+        let client_cfg = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut tcp, _) = listener.accept().unwrap();
+            let mut conn = rustls::ServerConnection::new(cfg).unwrap();
+            let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+            use std::io::Read as _;
+            let _ = tls.read(&mut [0u8; 1]);
+        });
+        let mut tcp = std::net::TcpStream::connect(addr).unwrap();
+        let mut conn = rustls::ClientConnection::new(
+            Arc::new(client_cfg),
+            sni.to_string().try_into().unwrap(),
+        )
+        .unwrap();
+        {
+            let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+            use std::io::Write as _;
+            tls.write_all(b"x").unwrap();
+        }
+        let leaf = conn.peer_certificates().unwrap()[0].to_vec();
+        drop(tcp);
+        let _ = server.join();
+        leaf
     }
 
     #[test]
