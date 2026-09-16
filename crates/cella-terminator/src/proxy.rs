@@ -200,13 +200,13 @@ pub fn run(cfg: Config) -> Result<(), String> {
                     (minter.clone(), resolve.clone(), roots.clone(), maps.clone());
                 std::thread::spawn(move || {
                     if let Err(e) = handle_conn(conn, &minter, &*resolve, roots, &maps, None) {
-                        eprintln!("cella-terminator: {e}");
+                        eprintln!("cella_terminator: {e}");
                     }
                 });
             }
         }));
     }
-    eprintln!("cella-terminator: serving (wire {})", cfg.wire_ip);
+    eprintln!("cella_terminator: serving (wire {})", cfg.wire_ip);
     for h in handles {
         let _ = h.join();
     }

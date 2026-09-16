@@ -374,7 +374,7 @@ pub fn dispatch(exit: VcpuExit, devices: &mut Devices) -> RunResult {
         VcpuExit::Hlt => RunResult::Halted,
         VcpuExit::Shutdown => RunResult::Shutdown,
         VcpuExit::FailEntry(reason, cpu) => {
-            eprintln!("cella: KVM entry failed: reason {reason:#x} on cpu {cpu}");
+            cella_libs::logln!("cella: KVM entry failed: reason {reason:#x} on cpu {cpu}");
             RunResult::Shutdown
         }
         VcpuExit::Intr | VcpuExit::IrqWindowOpen => RunResult::Continue,

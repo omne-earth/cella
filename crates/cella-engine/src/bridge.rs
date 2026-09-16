@@ -6,33 +6,10 @@
 use crate::pb;
 use prost::Message as _;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn machine_dir(vm: &str) -> PathBuf {
     cella_libs::machine::machine_dir(vm)
-}
-
-/// Decode every length-delimited Message in `bytes`, returning the
-/// Events. The file holds cella_libs-generated frames; this crate's
-/// generated types read the same wire bytes -- one proto, one form.
-fn events_in(bytes: &[u8]) -> Vec<pb::Event> {
-    let mut out = Vec::new();
-    let mut buf = bytes;
-    while !buf.is_empty() {
-        let before = buf.len();
-        match pb::Message::decode_length_delimited(&mut buf) {
-            Ok(m) => {
-                if let Some(pb::message::Body::Event(e)) = m.body {
-                    out.push(e);
-                }
-            }
-            Err(_) => break,
-        }
-        if buf.len() == before {
-            break;
-        }
-    }
-    out
 }
 
 /// Append one Decision to the verdict file (N.F.2) and kick the
@@ -155,43 +132,23 @@ pub fn run(vm: &str, dial: &str) -> Result<(), String> {
             .map_err(|e| format!("Decide: {e}"))?
             .into_inner();
 
-        // The tail: poll the ledger for new frames, send each new
-        // Event once. The offset is the cursor; the file is
-        // append-only, thus the cursor never rewinds.
+        // The tail: an ear on the ledger, not a poll. A sustained
+        // flow is one operation per verdict round trip, so the
+        // tail's latency is the pair's throughput ceiling -- a
+        // 200 ms poll clocked bulk transfers at tens of kB/s. The
+        // tail therefore wakes on inotify (a 500 ms poll stands
+        // behind it as the safety net, and becomes the pace only
+        // when inotify is unavailable), reads incrementally from a
+        // byte cursor -- append-only, thus the cursor never
+        // rewinds -- and a torn final frame waits for its missing
+        // bytes rather than being re-read whole.
         let ledger2 = ledger.clone();
         let dir2 = dir.clone();
-        let tail = tokio::spawn(async move {
-            let mut sent = 0usize;
-            loop {
-                // The tether: the machine directory is the lease.
-                if !dir2.exists() {
-                    break;
-                }
-                if let Ok(mut f) = std::fs::File::open(&ledger2) {
-                    let mut bytes = Vec::new();
-                    if f.read_to_end(&mut bytes).is_ok() {
-                        let events = events_in(&bytes);
-                        // A read can land mid-append and see a torn
-                        // final frame; the count then dips below the
-                        // cursor. Never rewind: send only past the
-                        // high-water mark.
-                        if events.len() > sent {
-                            for e in events.iter().skip(sent) {
-                                if tx.send(e.clone()).await.is_err() {
-                                    return;
-                                }
-                            }
-                            sent = events.len();
-                        }
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            }
-        });
+        std::thread::spawn(move || tail_thread(&dir2, &ledger2, tx));
 
         // Decisions land as they arrive. The bridge never filters,
         // reorders, or defaults: the engine's word, verbatim.
-        eprintln!("bridge: {vm_name} connected to {dial}");
+        cella_libs::logln!("bridge: {vm_name} connected to {dial}");
         while let Some(d) = inbound
             .message()
             .await
@@ -199,8 +156,110 @@ pub fn run(vm: &str, dial: &str) -> Result<(), String> {
         {
             land(&vm_name, d)?;
         }
-        eprintln!("bridge: {vm_name} stream ended");
-        tail.abort();
+        cella_libs::logln!("bridge: {vm_name} stream ended");
         Ok(())
     })
+    // The tail thread ends on its own: the runtime drop closes the
+    // channel, and the next send fails; the tether covers the rest.
+}
+
+/// The tail's body: wake, read the new bytes, frame them, send.
+fn tail_thread(dir: &Path, ledger: &Path, tx: tokio::sync::mpsc::Sender<pb::Event>) {
+    // The ear: inotify on the ledger's parent directory (the file
+    // may not exist yet at the first wake). Any write in the
+    // directory wakes the tail; a wake is one cheap metadata read.
+    // The directory itself is born with the VMM's first flush, so
+    // the watch retries until it takes -- until then the loop
+    // paces itself.
+    let ifd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
+    let listen = |ifd: i32| -> bool {
+        if ifd < 0 {
+            return false;
+        }
+        let Some(parent) = ledger.parent() else {
+            return false;
+        };
+        let Ok(c) = std::ffi::CString::new(parent.as_os_str().as_encoded_bytes()) else {
+            return false;
+        };
+        // SAFETY: a valid fd and a NUL-terminated path.
+        let wd =
+            unsafe { libc::inotify_add_watch(ifd, c.as_ptr(), libc::IN_MODIFY | libc::IN_CREATE) };
+        wd >= 0
+    };
+    let mut heard = listen(ifd);
+    let mut offset: u64 = 0;
+    let mut pending: Vec<u8> = Vec::new();
+    loop {
+        // The tether: the machine directory is the lease.
+        if !dir.exists() {
+            break;
+        }
+        if !heard {
+            heard = listen(ifd);
+            if heard {
+                cella_libs::logln!("bridge: the tail hears the ledger");
+            }
+        }
+        if let Ok(mut f) = std::fs::File::open(ledger) {
+            let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+            if len > offset {
+                use std::io::Seek;
+                let mut chunk = vec![0u8; (len - offset) as usize];
+                if f.seek(std::io::SeekFrom::Start(offset)).is_ok()
+                    && f.read_exact(&mut chunk).is_ok()
+                {
+                    offset = len;
+                    pending.extend_from_slice(&chunk);
+                    let mut consumed = 0usize;
+                    loop {
+                        let mut buf = &pending[consumed..];
+                        let before = buf.len();
+                        match pb::Message::decode_length_delimited(&mut buf) {
+                            Ok(m) => {
+                                let used = before - buf.len();
+                                if used == 0 {
+                                    break;
+                                }
+                                consumed += used;
+                                if let Some(pb::message::Body::Event(e)) = m.body {
+                                    if tx.blocking_send(e).is_err() {
+                                        if ifd >= 0 {
+                                            // SAFETY: our own fd.
+                                            unsafe { libc::close(ifd) };
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                            // A torn final frame: keep the bytes,
+                            // wait for the rest of them.
+                            Err(_) => break,
+                        }
+                    }
+                    pending.drain(..consumed);
+                }
+            }
+        }
+        if heard {
+            let mut pfd = libc::pollfd {
+                fd: ifd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: one valid pollfd; the timeout is the safety
+            // net against a missed event, never the pace.
+            if unsafe { libc::poll(&mut pfd, 1, 500) } > 0 {
+                let mut evbuf = [0u8; 4096];
+                // SAFETY: draining our own fd into a local buffer.
+                let _ = unsafe { libc::read(ifd, evbuf.as_mut_ptr().cast(), evbuf.len()) };
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+    if ifd >= 0 {
+        // SAFETY: our own fd.
+        unsafe { libc::close(ifd) };
+    }
 }

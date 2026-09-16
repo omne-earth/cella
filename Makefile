@@ -49,6 +49,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-tls-terminator tls-terminator-t1 tls-terminator-t2 \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
         tls-terminator-t6 tls-terminator-t7 tls-terminator-t8 \
+        tls-terminator-t9 \
         golden-terminator \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
@@ -113,6 +114,7 @@ SMOKE_TARGETS := smoke smoke-debug smoke-release \
         smoke-tls-terminator tls-terminator-t1 tls-terminator-t2 \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
         tls-terminator-t6 tls-terminator-t7 tls-terminator-t8 \
+        tls-terminator-t9 \
         golden-terminator \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
@@ -589,13 +591,18 @@ tls-terminator-t8: build-lab
 	$(LOG)
 	$(SCRIPTS)/test/tls-terminator-python-strict.sh
 
+tls-terminator-t9: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t9
+
 ## The terminated pair's family, the interceptor first; t6 is the
 ## named world (https://example.com, SKIPs without internet), t7
 ## the strict verifier (openssl judges the mint, no VMs), t8 the
 ## field verifier (python ssl under VERIFY_X509_STRICT)
 smoke-tls-terminator: tls-terminator-t1 tls-terminator-t2 \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
-        tls-terminator-t6 tls-terminator-t7 tls-terminator-t8
+        tls-terminator-t6 tls-terminator-t7 tls-terminator-t8 \
+        tls-terminator-t9
 
 ## The membrane-memory family, the door first (mm1-mm4 ride it)
 smoke-membrane-memory: membrane-memory-mm5 membrane-memory-mm1 \

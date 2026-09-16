@@ -77,7 +77,7 @@ fn seg(selector: u16, type_: u8) -> kvm_segment {
 /// the lazy path, which is slower for the guest but correct.
 pub fn warm_stage2(vm: &VmFd, vcpu: &mut VcpuFd, mem_size: u64) -> bool {
     if mem_size > SCRATCH_GPA {
-        eprintln!("cella: warm: guest RAM reaches the scratch range, warming skipped");
+        cella_libs::logln!("cella: warm: guest RAM reaches the scratch range, warming skipped");
         return false;
     }
 
@@ -95,7 +95,7 @@ pub fn warm_stage2(vm: &VmFd, vcpu: &mut VcpuFd, mem_size: u64) -> bool {
         )
     };
     if host == libc::MAP_FAILED {
-        eprintln!("cella: warm: scratch mmap failed, warming skipped");
+        cella_libs::logln!("cella: warm: scratch mmap failed, warming skipped");
         return false;
     }
 
@@ -125,7 +125,7 @@ pub fn warm_stage2(vm: &VmFd, vcpu: &mut VcpuFd, mem_size: u64) -> bool {
         })
     };
     if set.is_err() {
-        eprintln!("cella: warm: scratch memslot rejected, warming skipped");
+        cella_libs::logln!("cella: warm: scratch memslot rejected, warming skipped");
         return false;
     }
 
@@ -146,7 +146,7 @@ pub fn warm_stage2(vm: &VmFd, vcpu: &mut VcpuFd, mem_size: u64) -> bool {
     sregs.es = data;
     sregs.ss = data;
     if vcpu.set_sregs(&sregs).is_err() {
-        eprintln!("cella: warm: set_sregs failed, warming skipped");
+        cella_libs::logln!("cella: warm: set_sregs failed, warming skipped");
         return false;
     }
     let regs = kvm_regs {
@@ -158,7 +158,7 @@ pub fn warm_stage2(vm: &VmFd, vcpu: &mut VcpuFd, mem_size: u64) -> bool {
         ..Default::default()
     };
     if vcpu.set_regs(&regs).is_err() {
-        eprintln!("cella: warm: set_regs failed, warming skipped");
+        cella_libs::logln!("cella: warm: set_regs failed, warming skipped");
         return false;
     }
 
@@ -167,17 +167,17 @@ pub fn warm_stage2(vm: &VmFd, vcpu: &mut VcpuFd, mem_size: u64) -> bool {
         match vcpu.run() {
             Ok(VcpuExit::IoOut(port, _)) if port == EXIT_PORT => break,
             Ok(other) => {
-                eprintln!("cella: warm: unexpected exit {other:?}, warming stopped");
+                cella_libs::logln!("cella: warm: unexpected exit {other:?}, warming stopped");
                 return false;
             }
             Err(e) if e.errno() == libc::EINTR => continue,
             Err(e) => {
-                eprintln!("cella: warm: KVM_RUN failed: {e}, warming stopped");
+                cella_libs::logln!("cella: warm: KVM_RUN failed: {e}, warming stopped");
                 return false;
             }
         }
     }
-    eprintln!(
+    cella_libs::logln!(
         "cella: thaw timing: warm(stage-2, all layers) {} pages in {} ns ({}.{:09} s)",
         mem_size / 4096,
         t.elapsed().as_nanos(),

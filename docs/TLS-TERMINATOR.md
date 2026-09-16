@@ -10,7 +10,7 @@ mechanism and shows each gate's walk.
 
 Status: shipped (2026-09-15). The proxy (crates/cella-terminator),
 the image (`cella build rootfs terminator`), and the pair CA
-export are built. Eight gates run green (`make
+export are built. Nine gates run green (`make
 smoke-tls-terminator`, TESTING.md rosters them).
 
 The identifiers: T.R is the resolver, T.C the pair CA, T.P the
@@ -89,8 +89,8 @@ sequenceDiagram
 
 ## The gates, one walk each
 
-The eight criteria live in scripts/test/tls-terminator.sh (t1-t6,
-a live pair on KVM) and scripts/test/tls-terminator-strict.sh
+The nine criteria live in scripts/test/tls-terminator.sh (t1-t6
+and t9, a live pair on KVM) and scripts/test/tls-terminator-strict.sh
 plus scripts/test/tls-terminator-python-strict.sh (t7-t8, the
 minter's bytes on a loopback wire, no VMs). TESTING.md rosters
 the family; `make smoke-tls-terminator` runs it.
@@ -266,6 +266,35 @@ sequenceDiagram
     P-->>Y: the served chain
     Y->>Y: strict verification + hostname check
     Y-->>G: strict-ok TLSv1.3
+```
+
+### t9 -- throughput through the pair
+
+A sustained flow is one operation per verdict round trip: every
+crossing still parks and gets its individual verdict (the law is
+untouched), so the pair's throughput ceiling is the verdict
+path's latency. The bridge hears the ledger by inotify (W.B.1,
+docs/WORLD-ENGINE.md) and the round trip is milliseconds; a
+16 MiB transfer must arrive byte-exact and inside the floor. A
+regression to a polling-paced tail fails this gate by a factor
+of twenty, not by a margin.
+
+```mermaid
+sequenceDiagram
+    participant M as the member
+    participant N as N.M.1 the membrane
+    participant B as W.B.1 the bridge
+    participant J as the judge
+    participant W as the world's file
+    loop one window per verdict, at millisecond pace
+        M->>N: frames park (the flow's next window)
+        N-->>B: the ledger append wakes the ear
+        B->>J: Event, streamed
+        J-->>B: Release
+        B-->>N: landed + the kick
+        N->>W: the window crosses
+    end
+    W-->>M: 16 MiB, byte-exact, inside the floor
 ```
 
 ## The minted leaf, exactly

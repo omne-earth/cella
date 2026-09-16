@@ -16,9 +16,12 @@ pub mod ledger;
 #[cfg(feature = "wire")]
 pub mod memory;
 
+#[cfg(feature = "wire")]
 pub mod names;
 #[cfg(feature = "wire")]
 pub mod proto;
+
+pub mod log;
 
 #[cfg(feature = "sidecar")]
 pub mod freeze;

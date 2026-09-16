@@ -1,4 +1,4 @@
-//! cella-network: the translator (1.6.14e).
+//! cella_network: the translator (1.6.14e).
 //!
 //! One process per machine, machine-lifetime, no capability: the
 //! machine's start spawns `cella-network edge <vm>`, destroy kills
@@ -24,7 +24,7 @@ fn main() {
     // static gate of make test counts this door).
     if let Some(verb) = args.first() {
         if let Err(e) = cella_libs::audit::witness(None, verb, &args[1..]) {
-            eprintln!("cella-network: {e}");
+            cella_libs::logln!("cella_network: {e}");
             std::process::exit(1);
         }
     }
@@ -36,11 +36,11 @@ fn main() {
             // The machine's start spawns it detached; destroy
             // kills it by edge.pid.
             let Some(vm) = args.get(1) else {
-                eprintln!("usage: cella-network edge <vm>");
+                cella_libs::logln!("usage: cella-network edge <vm>");
                 std::process::exit(2);
             };
             if let Err(e) = edge::run(vm) {
-                eprintln!("cella-network: {e}");
+                cella_libs::logln!("cella_network: {e}");
                 std::process::exit(1);
             }
         }
@@ -51,11 +51,13 @@ fn main() {
             std::process::exit(0);
         }
         Some(other) => {
-            eprintln!("cella-network: unknown verb {other:?} -- usage: cella-network edge <vm>");
+            cella_libs::logln!(
+                "cella_network: unknown verb {other:?} -- usage: cella-network edge <vm>"
+            );
             std::process::exit(2);
         }
         None => {
-            eprintln!("usage: cella-network edge <vm>");
+            cella_libs::logln!("usage: cella-network edge <vm>");
             std::process::exit(2);
         }
     }

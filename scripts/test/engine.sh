@@ -42,7 +42,22 @@ teardown() {
     if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then echo "kept: $CELLA_HOME"; else rm -rf "$CELLA_HOME"; fi
 }
 trap teardown EXIT
-type_in() { local vm="$1"; shift; (printf '%s\n' "$1"; sleep 2) | timeout 20 "$BIN" enter "$vm" >/dev/null; }
+# The gates' console hand. A machine freezes the instant its next
+# chatter frame parks, and the ear's millisecond verdicts make
+# that window routine -- so the hand thaws first and retries: a
+# frozen console is a state, not a failure.
+type_in() {
+    local vm="$1"; shift
+    local try
+    for try in 1 2 3; do
+        [ -f "$CELLA_HOME/machines/$vm/state" ] && "$BIN" thaw "$vm" >/dev/null 2>&1 || true
+        if (printf '%s\n' "$1"; sleep 2) | timeout 20 "$BIN" enter "$vm" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
 
 say "$RUNG: stand the machine, the motor, and the bridge"
 "$BIN" create "$VM" --net world:$WORLD_PORT/udp >/dev/null

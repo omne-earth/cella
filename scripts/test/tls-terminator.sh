@@ -15,12 +15,16 @@
 #   t6  the named world: https://example.com end to end -- real
 #       DNS, real world-leg TLS against the pinned roots, minted
 #       leaf on the member leg (SKIPs without internet)
+#   t9  throughput: a bulk transfer through the pair arrives whole
+#       and fast -- the verdict path must never be the bottleneck
+#       (t7 and t8, the no-VM verifier gates, live in their own
+#       scripts)
 set -uo pipefail
 
 T="${1:-}"
 case "$T" in
-t1|t2|t3|t4|t5|t6) ;;
-*) echo "usage: tls-terminator.sh <t1|t2|t3|t4|t5|t6>"; exit 2 ;;
+t1|t2|t3|t4|t5|t6|t9) ;;
+*) echo "usage: tls-terminator.sh <t1|t2|t3|t4|t5|t6|t9>"; exit 2 ;;
 esac
 
 cd "$(dirname "$0")/../.."
@@ -112,6 +116,7 @@ while True:
 PYEOF
 DNS_PID=$!
 mkdir -p "$CELLA_HOME/www" && echo "the-world-answers" > "$CELLA_HOME/www/index.html"
+[ "$T" = t9 ] && dd if=/dev/zero of="$CELLA_HOME/www/bulk.bin" bs=1M count=16 status=none
 (cd "$CELLA_HOME/www" && exec python3 -m http.server "$HTTP_PORT" --bind "$HOST_IP" >/dev/null 2>&1) &
 HTTP_PID=$!
 
@@ -250,6 +255,25 @@ t5)
         || { echo "FAIL: expected exit 1 -- $(mem_log 'probe-rc=' | tail -1)"; exit 1; }
     echo "  no pair trust, no middle: the handshake refused"
     echo; echo "PASS: t5 -- the unauthorized middle is refused"
+    ;;
+
+t9)
+    say "t9: a bulk transfer through the pair -- whole, and fast"
+    T0=$SECONDS
+    type_mem "wget -q -O /tmp/bulk http://$GW:8080/bulk.bin && wc -c /tmp/bulk; echo bulk-don\"e\""
+    wait_console "$MEM_VM" "bulk-done" 120 || { echo "FAIL: the transfer never finished"; evidence; exit 1; }
+    WALL=$((SECONDS - T0))
+    # Whole: the exact byte count, or the stream truncated.
+    mem_log "16777216 /tmp/bulk" >/dev/null \
+        || { echo "FAIL: the transfer arrived torn -- $(mem_log '/tmp/bulk' | tail -1)"; evidence; exit 1; }
+    # Fast: 16 MiB inside 32 s of wall (typing overhead included)
+    # is >= 0.5 MiB/s end to end. The pre-ear bridge carried
+    # ~27 kB/s -- ten minutes for this file; the floor separates
+    # the regimes with a wide margin, not a benchmark's precision.
+    [ "$WALL" -le 32 ] \
+        || { echo "FAIL: 16 MiB took ${WALL}s -- the verdict path is the bottleneck again"; evidence; exit 1; }
+    echo "  16 MiB in ${WALL}s, byte-exact: the pair carries bulk"
+    echo; echo "PASS: t9 -- throughput through the pair"
     ;;
 
 t6)

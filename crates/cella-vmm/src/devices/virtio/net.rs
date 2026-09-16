@@ -243,7 +243,7 @@ impl Net {
                 self.inbound_dropped += 1;
                 if !op.dropped {
                     op.dropped = true;
-                    eprintln!(
+                    cella_libs::logln!(
                         "cella: inbound hold at its cap for {} -- dropping, the protocols retransmit",
                         op.peer
                     );
@@ -258,8 +258,8 @@ impl Net {
             self.inbound_dropped += 1;
             return;
         }
-        eprintln!("cella: parked ingress from {peer}");
         let guest_ns = self.guest_clock.now_ns();
+        cella_libs::logln_guest!(guest_ns, "cella: parked ingress from {peer}");
         let id = ledger::uuid7(guest_ns);
         let destination = self.named(&peer);
         self.pending_ledger.push(proto::Event {
@@ -355,16 +355,16 @@ impl Net {
         self.parked_dests.push(self.named(&dest));
         if let Some(op) = self.parked.iter_mut().find(|op| op.dest == dest) {
             if cfg!(debug_assertions) {
-                eprintln!("cella: parked egress to {dest} (joined)");
+                cella_libs::logln!("cella: parked egress to {dest} (joined)");
             }
             op.frames.push((head_index, frame));
             return;
         }
-        eprintln!("cella: parked egress to {dest}");
         // One clock read names both the id's timestamp bits and the
         // Operation.guest_ns field: the id and the field must agree
         // on the instant, not describe two independent reads of it.
         let guest_ns = self.guest_clock.now_ns();
+        cella_libs::logln_guest!(guest_ns, "cella: parked egress to {dest}");
         let id = ledger::uuid7(guest_ns);
         let destination = self.named(&dest);
         self.pending_ledger.push(proto::Event {
@@ -454,7 +454,7 @@ impl VirtioDevice for Net {
                     // decision, never a leak.
                     let guest_ns = self.guest_clock.now_ns();
                     let fresh = ledger::uuid7(guest_ns);
-                    eprintln!(
+                    cella_libs::logln!(
                         "cella: no unambiguous open operation at thaw for \
                          {dest}, minted {}",
                         ledger::hex(&fresh)
@@ -540,7 +540,7 @@ impl VirtioDevice for Net {
                 None => {
                     let guest_ns = self.guest_clock.now_ns();
                     let fresh = ledger::uuid7(guest_ns);
-                    eprintln!(
+                    cella_libs::logln!(
                         "cella: no unambiguous open ingress operation at thaw for \
                          {peer}, minted {}",
                         ledger::hex(&fresh)
@@ -604,9 +604,13 @@ impl VirtioDevice for Net {
                     for f in &op.frames {
                         if let Some((host, ip)) = super::dnsname::answer_in_frame(f) {
                             if self.resolved.insert(ip, host.clone()).as_deref() != Some(&host) {
-                                eprintln!(
+                                cella_libs::logln_guest!(
+                                    self.guest_clock.now_ns(),
                                     "cella: the ratchet learns {host} = {}.{}.{}.{}",
-                                    ip[0], ip[1], ip[2], ip[3]
+                                    ip[0],
+                                    ip[1],
+                                    ip[2],
+                                    ip[3]
                                 );
                                 if let Some(p) = &self.names_path {
                                     cella_libs::names::append_name(p, &host, ip);

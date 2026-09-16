@@ -111,7 +111,7 @@ echo "PASS: the AVC denied cella_vmm_t:c0 -> beta's cella_machine_data_t:c1 (ver
 echo "--- selinux gate: cella doctor harvest files the denial ---"
 OUT=$("$DOCTOR" harvest 2>&1)
 echo "  $OUT"
-echo "$OUT" | grep -q "^cella doctor: harvested [1-9][0-9]* denial" || {
+echo "$OUT" | grep -q "^cella_doctor: harvested [1-9][0-9]* denial" || {
     echo "FAIL: harvest did not report at least one denial (got: $OUT)"
     exit 1
 }

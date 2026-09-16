@@ -16,7 +16,7 @@
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t tmpfs tmpfs /tmp
-echo "cella-terminator: init running (pid $$)"
+echo "cella_terminator: init running (pid $$)"
 
 # The consistent reply port (docs/integration/MEMBRANE-MEMORY.md,
 # "The consistent reply port"): every outbound flow sources from
@@ -25,7 +25,7 @@ echo "cella-terminator: init running (pid $$)"
 # ephemeral range. Non-compliance costs nothing but liveness: a
 # port outside the window simply freezes, fail-closed.
 echo "50000 50007" > /proc/sys/net/ipv4/ip_local_port_range
-echo "cella-terminator: reply ports 50000-50007"
+echo "cella_terminator: reply ports 50000-50007"
 
 PAIR=$(sed -n 's/.*cella_pair=\([0-9]*\).*/\1/p' /proc/cmdline)
 [ -z "$PAIR" ] && [ -e /sys/class/net/eth1 ] && PAIR=0
@@ -33,9 +33,9 @@ WIRE_IP="10.77.${PAIR:-0}.1"
 if [ -e /sys/class/net/eth1 ]; then
     ip addr add "$WIRE_IP/24" dev eth1
     ip link set eth1 up
-    echo "cella-terminator: member side $WIRE_IP/24"
+    echo "cella_terminator: member side $WIRE_IP/24"
 else
-    echo "cella-terminator: no member wire (eth1 absent)"
+    echo "cella_terminator: no member wire (eth1 absent)"
 fi
 
 DNS=$(sed -n "s/.*cella_dns=\([0-9.:]*\).*/\1/p" /proc/cmdline)
@@ -51,7 +51,7 @@ MAPS=$(sed -n 's/.*cella_map=\([^ ]*\).*/\1/p' /proc/cmdline)
         done
     fi
 } > /etc/cella-terminator.conf
-echo "cella-terminator: configured (dns ${DNS:-9.9.9.9}, listen ${LISTEN:-443,80})"
+echo "cella_terminator: configured (dns ${DNS:-9.9.9.9}, listen ${LISTEN:-443,80})"
 
 # The one service, under the house respawn loop, in the
 # background. The pair CA sits at /etc/cella/pair-ca.{pem,key},
@@ -60,9 +60,9 @@ echo "cella-terminator: configured (dns ${DNS:-9.9.9.9}, listen ${LISTEN:-443,80
     N=0
     while true; do
         N=$((N+1))
-        echo "cella-terminator: generation $N starting"
+        echo "cella_terminator: generation $N starting"
         /bin/cella-terminator /etc/cella-terminator.conf
-        echo "cella-terminator: generation $N exited with $?"
+        echo "cella_terminator: generation $N exited with $?"
         sleep 1
     done
 ) &
