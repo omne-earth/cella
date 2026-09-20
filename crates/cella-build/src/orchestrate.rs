@@ -397,6 +397,7 @@ pub fn rootfs_canonical(golden: &Path) -> Result<(), String> {
 }
 
 pub const GUEST_BASH_VERSION: &str = "5.3";
+pub const GUEST_TAR_VERSION: &str = "1.35";
 
 /// The interactive rootfs, natively: the canonical root plus a real
 /// static bash and the interactive init. Builds the canonical tree
@@ -443,6 +444,34 @@ pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String
         run_in_toolbox_quiet("bash build", &bsrc, &["make", "-j", &jobs])?;
     }
 
+    // GNU tar, static, for the extract job alone: busybox tar reads
+    // every zero of a hole, so a mostly-empty twin costs its whole
+    // apparent size three times over. GNU tar's --sparse walks
+    // SEEK_HOLE/SEEK_DATA and the work shrinks to the allocated
+    // bytes; the sparse members are the standard GNU format any
+    // host tar restores.
+    let tsrc = rbuild.join(format!("tar-{GUEST_TAR_VERSION}"));
+    fetch_and_extract(
+        "tar",
+        &format!("https://ftp.gnu.org/gnu/tar/tar-{GUEST_TAR_VERSION}.tar.gz"),
+        &rbuild.join(format!("tar-{GUEST_TAR_VERSION}.tar.gz")),
+        &tsrc,
+        &rbuild,
+    )?;
+    if !tsrc.join("src/tar").is_file() {
+        println!("cella: tar: configuring and building (static)");
+        run_in_toolbox_quiet(
+            "tar configure",
+            &tsrc,
+            &["./configure", "--disable-nls", "LDFLAGS=-static"],
+        )?;
+        let jobs = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .to_string();
+        run_in_toolbox_quiet("tar build", &tsrc, &["make", "-j", &jobs])?;
+    }
+
     println!("cella: rootfs cella: assembling");
     let croot = rbuild.join("root-cella");
     let _ = fs::remove_dir_all(&croot);
@@ -454,6 +483,7 @@ pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String
     )?;
     for (from, to, mode) in [
         (bsrc.join("bash"), croot.join("bin/bash"), 0o755),
+        (tsrc.join("src/tar"), croot.join("bin/gtar"), 0o755),
         (init.clone(), croot.join("sbin/init"), 0o755),
     ] {
         fs::copy(&from, &to).map_err(|e| e.to_string())?;
@@ -465,7 +495,7 @@ pub fn rootfs_cella(golden: &Path, canonical_golden: &Path) -> Result<(), String
     let img = rbuild.join("rootfs-cella.ext4");
     let _ = fs::remove_file(&img);
     let f = fs::File::create(&img).map_err(|e| e.to_string())?;
-    f.set_len(16 * 1024 * 1024).map_err(|e| e.to_string())?;
+    f.set_len(32 * 1024 * 1024).map_err(|e| e.to_string())?;
     drop(f);
     run_in_toolbox_quiet(
         "mkfs",
