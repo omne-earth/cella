@@ -18,11 +18,11 @@ use prost::Message as _;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Fold the file, newest frame per ip winning. An absent or
-/// unreadable file is an empty ratchet; a torn final frame drops
+/// Every frame in append order -- the raw chronicle, for the dump.
+/// An absent or unreadable file is empty; a torn final frame drops
 /// and everything before it stands.
-pub fn read_names(path: &Path) -> HashMap<[u8; 4], String> {
-    let mut out = HashMap::new();
+pub fn read_all(path: &Path) -> Vec<proto::Destination> {
+    let mut out = Vec::new();
     let Ok(bytes) = std::fs::read(path) else {
         return out;
     };
@@ -35,6 +35,15 @@ pub fn read_names(path: &Path) -> HashMap<[u8; 4], String> {
         if buf.len() == before {
             break;
         }
+        out.push(d);
+    }
+    out
+}
+
+/// Fold the file, newest frame per ip winning.
+pub fn read_names(path: &Path) -> HashMap<[u8; 4], String> {
+    let mut out = HashMap::new();
+    for d in read_all(path) {
         if d.host.is_empty() || d.ip.len() != 4 {
             continue;
         }

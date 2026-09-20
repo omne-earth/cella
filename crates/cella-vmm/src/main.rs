@@ -499,7 +499,7 @@ fn main() {
         // The thaw edge never re-freezes on its own flush: these are
         // the edge's own Released/Lapsed events, not new parks, and
         // any genuinely new park lands in the run loop's flush.
-        let _ = flush_ledger(&mut mmio_devices, &ledger_path, &[]);
+        let _ = flush_ledger(&vm, &mut mmio_devices, &ledger_path, &[]);
         // Deliberately no KVM_KVMCLOCK_CTRL. That call sets
         // PVCLOCK_GUEST_STOPPED in the pvclock page, and the flag tells
         // the guest that it was stopped. The freeze must not exist for
@@ -617,7 +617,7 @@ fn run_loop(
             // writes it, and the loop's other flush waits on the
             // next vcpu_fd.run() -- which blocks indefinitely against
             // an idle guest that a refusal (rightly) never wakes.
-            if flush_ledger(mmio_devices, ledger_path, &standing) {
+            if flush_ledger(vm, mmio_devices, ledger_path, &standing) {
                 cella_libs::logln!("cella: parked -- the machine freezes (one-shot)");
                 FREEZE_REQUESTED.store(true, Ordering::SeqCst);
             }
@@ -697,7 +697,7 @@ fn run_loop(
         // stops before the guest runs again -- unless the membrane
         // remembers the destination (N.F.7): a remembered park
         // waits live, and the decision applies on the kick.
-        if flush_ledger(mmio_devices, ledger_path, &standing) {
+        if flush_ledger(vm, mmio_devices, ledger_path, &standing) {
             cella_libs::logln!("cella: parked -- the machine freezes (one-shot)");
             FREEZE_REQUESTED.store(true, Ordering::SeqCst);
         }
@@ -710,6 +710,7 @@ fn run_loop(
 /// thus the Parked events are on disk before the sidecar exists --
 /// the rebinding at thaw depends on this order.
 fn flush_ledger(
+    vm: &kvm_ioctls::VmFd,
     mmio_devices: &mut [(u64, u64, MmioTransport)],
     ledger_path: &std::path::Path,
     standing: &[cella_libs::memory::Standing],
@@ -729,7 +730,11 @@ fn flush_ledger(
     for (_, _, t) in mmio_devices.iter_mut() {
         for dest in t.take_parked_dests() {
             if cella_libs::memory::skips_freeze(standing, &dest, now_s) {
-                cella_libs::logln!("cella: the membrane remembers -- the park waits live");
+                cella_libs::logln_guest!(
+                    ledger::GuestClock::now_ns(vm),
+                    "cella: membrane released egress to {}, freeze skipped",
+                    dump_dest(&dest)
+                );
             } else {
                 freeze_needed = true;
             }
@@ -1359,6 +1364,23 @@ fn dump(path: &PathBuf) -> ! {
             out.push_str(&format!($($arg)*));
             out.push('\n');
         }};
+    }
+    if path.file_name().and_then(|n| n.to_str()) == Some("names") {
+        // The name ratchet, as the raw chronicle: every frame in
+        // append order, the newest claim per ip winning at fold
+        // time -- the dump shows the testimony, not the fold.
+        for d in cella_libs::names::read_all(path) {
+            let ip =
+                d.ip.iter()
+                    .map(|b| b.to_string())
+                    .collect::<Vec<_>>()
+                    .join(".");
+            println!("name {ip} {}", d.host);
+        }
+        use std::io::Write;
+        let _ = std::io::stdout().write_all(out.as_bytes());
+        let _ = std::io::stdout().flush();
+        std::process::exit(0);
     }
     if path.file_name().and_then(|n| n.to_str()) == Some("membrane-memory") {
         for m in cella_libs::memory::read_all(path) {
