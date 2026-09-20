@@ -228,7 +228,10 @@ $HOME/.cella/
     scratch.img                  present only in a <machine>-extractor, for
                                  the life of one extract (the tar and its
                                  trailer)
-    vmm.log                      the stderr of the VMM (operator instrumentation)
+    vmm.log                      the stderr of the VMM (operator
+                                 instrumentation); lines lead with host_ns=,
+                                 plus guest_ns= where the guest clock is in
+                                 hand -- raw nanoseconds, the books' spelling
     valve                        N.F.1, the valve posture, one word (born
                                  closed; the gateway CLI alone writes it)
     membrane-memory              N.F.7, the membrane's standing memory: framed
@@ -240,13 +243,18 @@ $HOME/.cella/
                                  Lapsed, framed
                                  (append-only; it survives stop, as a chronicle
                                  must)
+    network/names                the name ratchet made durable: framed
+                                 Destination entries (host, ip), append-only,
+                                 newest claim per ip winning at fold; read at
+                                 boot so a thaw wakes knowing every name this
+                                 membrane witnessed (--dump renders it)
     edge.sock                    N.F.4, the translator's listener; each VMM
                                  run connects at spawn, one connection per nic
                                  (docs/ROOTLESS-NETWORK.md, "The edge")
     edge.pid                     N.F.5, the translator's pid; destroy kills
                                  by it
     edge.log                     N.F.6, the translator's transcript,
-                                 append-only
+                                 append-only; lines lead with host_ns=
 ```
 
 The chronicle is the machine's append-only record of what its
