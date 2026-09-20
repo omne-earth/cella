@@ -16,7 +16,7 @@
 // membrane its router solicitations and MLD reports would park and
 // freeze the machine on chatter no one sent (docs/NETWORK-MODEL.md).
 // Chatter that exists still parks; this removes the pointless source.
-pub const DEFAULT_BASE_ARGS: &str = "console=ttyS0 reboot=k panic=1 pci=off ipv6.disable=1";
+pub const DEFAULT_BASE_ARGS: &str = "console=ttyS0 reboot=t panic=1 pci=off ipv6.disable=1";
 
 /// The kernel arguments that control time in the guest.
 ///

@@ -390,6 +390,11 @@ smoke-boot: build-lab build golden
 
 ## Create -> start -> freeze -> verify sidecar -> thaw -> one-shot check, then
 ## the clock probe
+## A guest-initiated reset ends the VMM: exit 0, on the record
+smoke-reboot: build golden
+	$(LOG)
+	$(SCRIPTS)/test/reboot.sh
+
 smoke-thaw: build golden
 	$(LOG)
 	$(SCRIPTS)/test/thaw.sh
@@ -734,7 +739,7 @@ smoke-release: smoke-thaw smoke-machine smoke-rootless \
 
 ## The whole battery: the no-KVM checks first (fail fast), then the dark
 ## half against the field flavor, then the console half against the lab
-smoke: test smoke-release smoke-debug smoke-membrane-memory smoke-tls-terminator
+smoke: test smoke-release smoke-debug smoke-reboot smoke-membrane-memory smoke-tls-terminator
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
