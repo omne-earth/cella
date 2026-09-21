@@ -94,7 +94,7 @@ stateDiagram-v2
     state "L.S.4 archived (a rock)" as S4
     [*] --> S1: create
     S1 --> S2: start
-    S2 --> S3: freeze, or its own egress parks (open valve)
+    S2 --> S3: freeze, or its own egress parks<br/>(open valve, no standing memory -- N.F.7 keeps it live)
     S3 --> S2: thaw
     S2 --> S1: stop
     S1 --> S4: archive
