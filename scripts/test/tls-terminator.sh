@@ -117,7 +117,33 @@ PYEOF
 DNS_PID=$!
 mkdir -p "$CELLA_HOME/www" && echo "the-world-answers" > "$CELLA_HOME/www/index.html"
 [ "$T" = t9 ] && dd if=/dev/zero of="$CELLA_HOME/www/bulk.bin" bs=1M count=16 status=none
-(cd "$CELLA_HOME/www" && exec python3 -m http.server "$HTTP_PORT" --protocol HTTP/1.1 --bind "$HOST_IP" >/dev/null 2>&1) &
+if [ "$T" = t10 ]; then
+    # t10's world keeps alive and never closes first: the trial's
+    # upstreams did the same, which puts the active close -- and,
+    # before the RST fix, a 60 s TIME_WAIT corpse -- on the
+    # terminator's world port.
+    python3 - "$HOST_IP" "$HTTP_PORT" >/dev/null 2>&1 <<'PYSRV' &
+import socket, sys, threading
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind((sys.argv[1], int(sys.argv[2]))); s.listen(64)
+def serve(c):
+    try:
+        while True:
+            d = b""
+            while b"\r\n\r\n" not in d:
+                r = c.recv(4096)
+                if not r: return
+                d += r
+            c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+    except OSError: pass
+    finally: c.close()
+while True:
+    c, _ = s.accept()
+    threading.Thread(target=serve, args=(c,), daemon=True).start()
+PYSRV
+else
+    (cd "$CELLA_HOME/www" && exec python3 -m http.server "$HTTP_PORT" --protocol HTTP/1.1 --bind "$HOST_IP" >/dev/null 2>&1) &
+fi
 HTTP_PID=$!
 
 say "$T: stand the pair, the judge, and the host world"
@@ -298,7 +324,13 @@ t10)
     # the window is a graveyard after ~8 and connect() dies with
     # EADDRINUSE -- the member sees empty replies, this gate sees
     # fewer than twelve, and it FAILS until the drain is fixed.
-    type_mem "for i in \$(seq 1 12); do (wget -q -O- -T 5 http://$GW:8080/ >/dev/null 2>&1 && echo hit >> /tmp/hits) & done; wait; echo burst-o\"k\"=\$(wc -l < /tmp/hits)"
+    # Paced at ~1 s, the trial's true shape: each request
+    # full-closes, the member stays lawful inside its own window,
+    # and each crossing's world leg -- before the RST fix -- left
+    # a 60 s corpse on one of eight appliance ports. Demand of
+    # 12 in ~13 s against a drain of 8 per 60 s locks out at ~8;
+    # the RST close leaves no corpse and all twelve answer.
+    type_mem "N=0; for i in \$(seq 1 12); do wget -q -O- -T 8 http://$GW:8080/ >/dev/null 2>&1 && N=\$((N+1)); sleep 1; done; echo burst-o\"k\"=\$N"
     wait_console "$MEM_VM" "burst-ok=" 120 || { echo "FAIL: the burst never finished"; evidence; exit 1; }
     GOT=$(mem_log 'burst-ok=' | tail -1 | sed 's/.*burst-ok=//' | tr -dc 0-9)
     [ "${GOT:-0}" -eq 12 ] \

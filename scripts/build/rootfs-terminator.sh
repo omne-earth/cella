@@ -26,6 +26,16 @@ echo "cella_terminator: init running (pid $$)"
 # port outside the window simply freezes, fail-closed.
 echo "50000 50007" > /proc/sys/net/ipv4/ip_local_port_range
 echo "cella_terminator: reply ports 50000-50007"
+# Eight ports cannot afford 60 s TIME_WAIT corpses. tw_reuse
+# retakes a corpse after ~1 s, proven safe by TCP timestamps --
+# which exist on guest-kernel peers (the member's flows to the
+# appliance over the wire ride real kernel TCP at both ends). The
+# appliance's WORLD leg is the exception: its peer is the
+# translator's userspace TCP, which speaks no timestamps, so that
+# leg avoids the corpse by closing abortively instead (the
+# terminator's splice_rst_world).
+echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse
+echo "cella_terminator: tw_reuse on (1s port recycling)"
 
 PAIR=$(sed -n 's/.*cella_pair=\([0-9]*\).*/\1/p' /proc/cmdline)
 [ -z "$PAIR" ] && [ -e /sys/class/net/eth1 ] && PAIR=0

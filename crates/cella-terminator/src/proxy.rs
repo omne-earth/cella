@@ -12,7 +12,7 @@ use crate::ca::Minter;
 use crate::config::{Config, PortMap};
 use crate::dns;
 use crate::http;
-use crate::splice::splice;
+use crate::splice::splice_rst_world;
 
 /// Resolve a name to the real world address. Production resolves
 /// through the upstream provider with the cache; the tests inject.
@@ -39,7 +39,7 @@ pub fn handle_conn(
             .map_err(|e| format!("world {}:{}: {e}", m.host, m.port))?;
         member.set_nonblocking(true).map_err(|e| e.to_string())?;
         world.set_nonblocking(true).map_err(|e| e.to_string())?;
-        splice(member, world);
+        splice_rst_world(member, world);
         return Ok(());
     }
 
@@ -57,7 +57,7 @@ pub fn handle_conn(
     world.write_all(&head).map_err(|e| e.to_string())?;
     member.set_nonblocking(true).map_err(|e| e.to_string())?;
     world.set_nonblocking(true).map_err(|e| e.to_string())?;
-    splice(member, world);
+    splice_rst_world(member, world);
     Ok(())
 }
 
@@ -118,7 +118,7 @@ fn terminate_tls(
 
     member.set_nonblocking(true).map_err(|e| e.to_string())?;
     world.set_nonblocking(true).map_err(|e| e.to_string())?;
-    splice(
+    splice_rst_world(
         rustls::StreamOwned::new(member_conn, member),
         rustls::StreamOwned::new(world_conn, world),
     );
