@@ -23,7 +23,7 @@ set -uo pipefail
 
 T="${1:-}"
 case "$T" in
-t1|t2|t3|t4|t5|t6|t9|t10) ;;
+t1|t2|t3|t4|t5|t6|t9|t10|t11) ;;
 *) echo "usage: tls-terminator.sh <t1|t2|t3|t4|t5|t6|t9>"; exit 2 ;;
 esac
 
@@ -117,13 +117,14 @@ PYEOF
 DNS_PID=$!
 mkdir -p "$CELLA_HOME/www" && echo "the-world-answers" > "$CELLA_HOME/www/index.html"
 [ "$T" = t9 ] && dd if=/dev/zero of="$CELLA_HOME/www/bulk.bin" bs=1M count=16 status=none
-if [ "$T" = t10 ]; then
+if [ "$T" = t10 ] || [ "$T" = t11 ]; then
+    STUB_DELAY=0; [ "$T" = t11 ] && STUB_DELAY=3
     # t10's world keeps alive and never closes first: the trial's
     # upstreams did the same, which puts the active close -- and,
     # before the RST fix, a 60 s TIME_WAIT corpse -- on the
     # terminator's world port.
-    python3 - "$HOST_IP" "$HTTP_PORT" >/dev/null 2>&1 <<'PYSRV' &
-import socket, sys, threading
+    python3 - "$HOST_IP" "$HTTP_PORT" "$STUB_DELAY" >/dev/null 2>&1 <<'PYSRV' &
+import socket, sys, threading, time
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind((sys.argv[1], int(sys.argv[2]))); s.listen(64)
 def serve(c):
@@ -134,6 +135,7 @@ def serve(c):
                 r = c.recv(4096)
                 if not r: return
                 d += r
+            time.sleep(float(sys.argv[3]))
             c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
     except OSError: pass
     finally: c.close()
@@ -164,7 +166,10 @@ GRANTS="--grant arp:600 \
     --grant $HOST_IP:$HTTP_PORT/tcp:600 \
     --grant $HOST_IP:443/tcp:600 \
     --grant 9.9.9.9:53/udp:600"
-for p in $(seq 50000 50007); do
+REPLY_TOP=50007
+[ "$T" = t11 ] && REPLY_TOP=50015 \
+    && GRANTS="$GRANTS --grant $GW:$HTTP_PORT/tcp:600"
+for p in $(seq 50000 $REPLY_TOP); do
     GRANTS="$GRANTS --grant $MEMBER_IP:$p/tcp:600 --grant $MEMBER_IP:$p/udp:600"
 done
 # The named world (t6): the world-leg 443 destination is unknowable
@@ -194,6 +199,12 @@ say "  configure the pair (the gates' console hand; the field uses cmdline knobs
 # which faces the real world: the true upstream, no map.
 if [ "$T" = t6 ]; then
     APPLIANCE_CONF="wire_ip=$GW\nupstream_dns=9.9.9.9\nlisten=443,80\n"
+elif [ "$T" = t11 ]; then
+    # The storm speaks HTTP on a named flow: the appliance listens
+    # on the stub's own port so the world leg dials it unmapped
+    # (a mapped port is the nameless splice, which bounces mutely
+    # by design -- the 429 needs the voiced path).
+    APPLIANCE_CONF="wire_ip=$GW\nupstream_dns=$HOST_IP:$DNS_PORT\nlisten=443,80,$HTTP_PORT\n"
 else
     APPLIANCE_CONF="wire_ip=$GW\nupstream_dns=$HOST_IP:$DNS_PORT\nlisten=443,80\nmap=8080:w.test:$HTTP_PORT\n"
 fi
@@ -337,5 +348,35 @@ t10)
         || { echo "FAIL: only ${GOT:-0}/12 rapid crossings answered -- the reply window locked out"; evidence; exit 1; }
     echo "  12/12 rapid crossings answered: the window survives a retry storm"
     echo; echo "PASS: t10 -- the retry storm"
+    ;;
+
+t11)
+    say "t11: the spoken window -- a saturating storm hears 429, never silence"
+    # The member widens its window to sixteen -- a lawful, granted
+    # choice (the judge named sixteen exact reply destinations
+    # above). Twelve parallel crossings against a 3 s world then
+    # exceed the appliance's eight permits: eight seat, four hear
+    # a proper 429 with Retry-After inside a second, and a retry
+    # after the drain answers 200. Zero mute failures: every
+    # crossing gets words or bytes.
+    type_mem "echo 50000 50015 > /proc/sys/net/ipv4/ip_local_port_range; echo wide-o\"k\""
+    wait_console "$MEM_VM" "wide-ok" 20 || { echo "FAIL: the member could not widen its window"; evidence; exit 1; }
+    type_mem "rm -f /tmp/ok.* /tmp/err.*; for i in \$(seq 1 12); do (wget -q -O- -T 10 http://w.test:$HTTP_PORT/ >/tmp/ok.\$i 2>/tmp/err.\$i) & done; wait; H=\$(grep -l . /tmp/ok.* 2>/dev/null | wc -l); B=\$(grep -l 429 /tmp/err.* 2>/dev/null | wc -l); echo storm-h\"i\"ts=\$H busy=\$B"
+    wait_console "$MEM_VM" "storm-hits=" 60 || { echo "FAIL: the storm never finished"; evidence; exit 1; }
+    LINE=$(mem_log 'storm-hits=' | tail -1 | tr -d '\r')
+    H=$(echo "$LINE" | sed 's/.*storm-hits=\([0-9]*\).*/\1/')
+    B=$(echo "$LINE" | sed 's/.*busy=\([0-9]*\).*/\1/')
+    [ "${H:-0}" -eq 8 ] || { echo "FAIL: expected 8 seated crossings, saw ${H:-0} -- $LINE"; evidence; exit 1; }
+    [ "${B:-0}" -eq 4 ] || { echo "FAIL: expected 4 spoken 429s, saw ${B:-0} -- $LINE"; evidence; exit 1; }
+    echo "  8 seated, 4 heard 429 -- the window speaks instead of hanging up"
+    type_mem "wget -O- -T 10 http://w.test:$HTTP_PORT/ >/dev/null 2>/tmp/retry.err && echo retry-o\"k\" || echo retry-n\"o\": \$(cat /tmp/retry.err | tr '\\n' ' '); echo fin-mar\"k\""
+    wait_console "$MEM_VM" "fin-mark" 30 || { echo "FAIL: the post-drain retry never returned"; evidence; exit 1; }
+    mem_log "retry-ok" >/dev/null \
+        || { echo "FAIL: the post-drain retry did not answer -- $(mem_log 'retry-no' | tail -1)"
+             type_term "netstat -tn 2>/dev/null | head -25; echo diag-don\"e\"" || true
+             sleep 1; echo "-- appliance sockets at failure:"; grep -a -A24 "netstat" "$CELLA_HOME/machines/$TERM_VM/console.log" | grep -aE "tcp|udp" | cat -v
+             evidence; exit 1; }
+    echo "  the drained window answered the retry"
+    echo; echo "PASS: t11 -- the spoken window"
     ;;
 esac

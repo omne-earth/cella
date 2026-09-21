@@ -35,6 +35,18 @@ struct State {
     next_ticket: u64,
     serving: u64,
     in_use: u32,
+    /// Tickets that left the line before being served. The line
+    /// advances past a ghost wherever it meets one -- a mid-line
+    /// timeout must not wedge everyone behind it.
+    abandoned: std::collections::HashSet<u64>,
+}
+
+impl State {
+    fn advance_past_ghosts(&mut self) {
+        while self.abandoned.remove(&self.serving) {
+            self.serving += 1;
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -50,6 +62,7 @@ impl Gate {
                 next_ticket: 0,
                 serving: 0,
                 in_use: 0,
+                abandoned: std::collections::HashSet::new(),
             }),
             cv: Condvar::new(),
         }
@@ -62,6 +75,7 @@ impl Gate {
         let ticket = st.next_ticket;
         st.next_ticket += 1;
         loop {
+            st.advance_past_ghosts();
             if st.serving == ticket && st.in_use < WORLD_PERMITS {
                 st.serving += 1;
                 st.in_use += 1;
@@ -70,12 +84,13 @@ impl Gate {
             }
             let now = Instant::now();
             if now >= deadline {
-                // Leaving the line: the head must advance past an
-                // abandoned ticket or everyone behind starves.
-                if st.serving == ticket {
-                    st.serving += 1;
-                    self.cv.notify_all();
-                }
+                // Leaving the line: mark the ticket abandoned so
+                // the line advances past it wherever it stands --
+                // a head bounce moves serving now, and a mid-line
+                // bounce leaves a ghost the next advance skips.
+                st.abandoned.insert(ticket);
+                st.advance_past_ghosts();
+                self.cv.notify_all();
                 return Err(ticket);
             }
             let (guard, _) = self.cv.wait_timeout(st, deadline - now).unwrap();
@@ -157,6 +172,33 @@ mod tests {
         );
         h.join().unwrap();
         drop(held);
+    }
+
+    #[test]
+    fn a_mid_line_ghost_does_not_wedge_the_line() {
+        let g = std::sync::Arc::new(Gate::new());
+        let mut held: Vec<_> = (0..WORLD_PERMITS)
+            .map(|_| g.acquire_on(Duration::from_millis(10)).unwrap())
+            .collect();
+        // Ticket 8 waits patiently; ticket 9 gives up mid-line.
+        let g2 = g.clone();
+        let patient = std::thread::spawn(move || g2.acquire_on(Duration::from_secs(3)).is_ok());
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(
+            g.acquire_on(Duration::from_millis(30)).is_err(),
+            "ticket 9 should bounce"
+        );
+        // Drain everything; the patient waiter must seat, and a
+        // fresh arrival after the ghost must seat immediately.
+        held.clear();
+        assert!(
+            patient.join().unwrap(),
+            "the ghost wedged the patient waiter"
+        );
+        assert!(
+            g.acquire_on(Duration::from_millis(100)).is_ok(),
+            "the ghost wedged the line for later arrivals"
+        );
     }
 
     #[test]
