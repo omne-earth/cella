@@ -18,6 +18,20 @@ use crate::splice::splice_rst_world;
 /// through the upstream provider with the cache; the tests inject.
 pub type Resolver = dyn Fn(&str) -> Result<Ipv4Addr, String> + Send + Sync;
 
+/// The world connect's patience. A refused egress park drops
+/// silently at the membrane (fail-closed), so a denied name once
+/// stalled here for the guest kernel's full SYN ladder -- and the
+/// member paid 8-12 s to observe a 25 us verdict. Two seconds
+/// bounds the wait; the voiced paths then say 502 so a denial is
+/// observable in milliseconds and distinguishable from a stall.
+const WORLD_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What a member hears when the world leg cannot be reached --
+/// refused by policy or genuinely down, the terminator cannot
+/// tell, and 502 honestly says only "the far side did not answer".
+const WORLD_FAIL_REPLY: &[u8] =
+    b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
 /// One member connection, end to end. `world_port` overrides the
 /// dialed port (the tests' listener is ephemeral); production
 /// passes None and the world leg uses the port the member dialed
@@ -39,8 +53,11 @@ pub fn handle_conn(
         // member's stack sees the reset it already understands.
         let _permit = crate::gate::acquire()
             .map_err(|t| format!("world queue: ticket {t} bounced (splice, no voice)"))?;
-        let world = TcpStream::connect((ip, world_port.unwrap_or(m.port)))
-            .map_err(|e| format!("world {}:{}: {e}", m.host, m.port))?;
+        let world = TcpStream::connect_timeout(
+            &(ip, world_port.unwrap_or(m.port)).into(),
+            WORLD_CONNECT_TIMEOUT,
+        )
+        .map_err(|e| format!("world {}:{}: {e}", m.host, m.port))?;
         member.set_nonblocking(true).map_err(|e| e.to_string())?;
         world.set_nonblocking(true).map_err(|e| e.to_string())?;
         splice_rst_world(member, world);
@@ -69,8 +86,16 @@ pub fn handle_conn(
         }
     };
     let _permit = permit;
-    let mut world = TcpStream::connect((ip, world_port.unwrap_or(dialed)))
-        .map_err(|e| format!("world {host}:{dialed}: {e}"))?;
+    let mut world = match TcpStream::connect_timeout(
+        &(ip, world_port.unwrap_or(dialed)).into(),
+        WORLD_CONNECT_TIMEOUT,
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = member.write_all(WORLD_FAIL_REPLY);
+            return Err(format!("world {host}:{dialed}: {e} -- 502 spoken"));
+        }
+    };
     world.write_all(&head).map_err(|e| e.to_string())?;
     member.set_nonblocking(true).map_err(|e| e.to_string())?;
     world.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -133,8 +158,19 @@ fn terminate_tls(
         }
     };
     let _permit = permit;
-    let mut world = TcpStream::connect((ip, world_port.unwrap_or(dialed)))
-        .map_err(|e| format!("world {sni}:{dialed}: {e}"))?;
+    let mut world = match TcpStream::connect_timeout(
+        &(ip, world_port.unwrap_or(dialed)).into(),
+        WORLD_CONNECT_TIMEOUT,
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            let mut tls = rustls::StreamOwned::new(member_conn, member);
+            let _ = tls.write_all(WORLD_FAIL_REPLY);
+            tls.conn.send_close_notify();
+            let _ = tls.conn.complete_io(&mut tls.sock);
+            return Err(format!("world {sni}:{dialed}: {e} -- 502 spoken (tls)"));
+        }
+    };
     let client_cfg = rustls::ClientConfig::builder()
         .with_root_certificates(world_roots)
         .with_no_client_auth();
