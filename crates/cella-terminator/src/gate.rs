@@ -26,9 +26,12 @@ pub const WORLD_PERMITS: u32 = 8;
 /// window answers promptly.
 pub const GRACE: Duration = Duration::from_millis(500);
 
-/// What a bounced HTTP crossing hears. Retry-After matches the
-/// drain a released permit makes possible.
-pub const BUSY_REPLY: &[u8] = b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+/// What a bounced HTTP crossing hears. A bounce means the grace
+/// already failed -- sustained saturation, not a blip -- so the
+/// retry horizon is generous: five seconds thins the retry storm
+/// (each TLS retry costs a whole minted-leaf handshake), and the
+/// sub-second cases never reach a 429 at all.
+pub const BUSY_REPLY: &[u8] = b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 5\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 #[derive(Debug)]
 struct State {
