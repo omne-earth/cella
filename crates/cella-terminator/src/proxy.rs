@@ -35,6 +35,10 @@ pub fn handle_conn(
     // A statically mapped port is a nameless splice: the map names it.
     if let Some(m) = maps.iter().find(|m| m.listen_port == dialed) {
         let ip = resolve(&m.host)?;
+        // Raw TCP has no words: a bounced splice drops, and the
+        // member's stack sees the reset it already understands.
+        let _permit = crate::gate::acquire()
+            .map_err(|t| format!("world queue: ticket {t} bounced (splice, no voice)"))?;
         let world = TcpStream::connect((ip, world_port.unwrap_or(m.port)))
             .map_err(|e| format!("world {}:{}: {e}", m.host, m.port))?;
         member.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -52,6 +56,19 @@ pub fn handle_conn(
     }
     let (head, host) = http::read_head_and_host(&mut member, 16 * 1024)?;
     let ip = resolve(&host)?;
+    let permit = match crate::gate::acquire() {
+        Ok(p) => p,
+        Err(ticket) => {
+            // The window is full and the grace lapsed: say so in
+            // the member's own protocol, so its client backs off
+            // instead of guessing at silence.
+            let _ = member.write_all(crate::gate::BUSY_REPLY);
+            return Err(format!(
+                "world queue: ticket {ticket} bounced -- 429 spoken"
+            ));
+        }
+    };
+    let _permit = permit;
     let mut world = TcpStream::connect((ip, world_port.unwrap_or(dialed)))
         .map_err(|e| format!("world {host}:{dialed}: {e}"))?;
     world.write_all(&head).map_err(|e| e.to_string())?;
@@ -101,6 +118,21 @@ fn terminate_tls(
     // The world leg: the terminator's own connection, verified
     // against real roots -- never blindly (2.7 (j)).
     let ip = resolve(&sni)?;
+    let permit = match crate::gate::acquire() {
+        Ok(p) => p,
+        Err(ticket) => {
+            // The member handshake already stands, so the refusal
+            // rides the minted leaf as proper HTTP.
+            let mut tls = rustls::StreamOwned::new(member_conn, member);
+            let _ = tls.write_all(crate::gate::BUSY_REPLY);
+            tls.conn.send_close_notify();
+            let _ = tls.conn.complete_io(&mut tls.sock);
+            return Err(format!(
+                "world queue: ticket {ticket} bounced -- 429 spoken (tls)"
+            ));
+        }
+    };
+    let _permit = permit;
     let mut world = TcpStream::connect((ip, world_port.unwrap_or(dialed)))
         .map_err(|e| format!("world {sni}:{dialed}: {e}"))?;
     let client_cfg = rustls::ClientConfig::builder()
