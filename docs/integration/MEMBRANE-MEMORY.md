@@ -191,7 +191,9 @@ the client's image (the terminator image bakes exactly this
 window; docs/integration/TLS-TERMINATOR.md). Widening is lawful:
 a client that pins sixteen ports and a judge that grants sixteen
 lines have simply agreed on a larger budget (the t11 gate walks
-exactly this).
+exactly this). The agreement widens what the CLIENT can present;
+an appliance's own world-side width stays its build-time
+property (WORLD_PERMITS and its baked range), unmoved by policy.
 
 Two costs of a narrow window surfaced in the field (2026-09-20,
 the reply-window lockout) and are now handled in the terminator

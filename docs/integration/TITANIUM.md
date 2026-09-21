@@ -54,7 +54,8 @@ filesystem.
   The terminator can answer for itself on the pair leg
   (docs/integration/TLS-TERMINATOR.md, "Backpressure, spoken"):
   `429 Too Many Requests` with `Retry-After: 5` when its world
-  window is saturated, `502 Bad Gateway` when the world leg gets
+  window is saturated (width 8, a build-time property of the
+  appliance -- policy cannot raise it), `502 Bad Gateway` when the world leg gets
   no answer within 2 s (policy refusal and a dead upstream read
   the same from inside). Task agents whose HTTP stacks honor
   Retry-After degrade gracefully under load; a stack that

@@ -155,9 +155,21 @@ request is its own TCP connection through the eight-permit world
 window, so a parallel fetcher (uv, npm) meets the 429 gate
 sooner than an h2 proxy would; those tools honor Retry-After and
 degrade to pacing. A task that genuinely needs more concurrency
-should widen the window by policy -- a judge naming sixteen or
-thirty-two reply-port grants for that machine -- rather than ask
-for h2.
+faces a constant of the design, not a knob: the appliance's
+world width is eight (WORLD_PERMITS in
+crates/cella-terminator/src/gate.rs, matched by the baked port
+range in rootfs-terminator.sh), and it does not widen -- not by
+policy, not by configuration. Eight enumerable reply
+destinations is the point of the consistent reply port; a width
+that can grow is a doctrine that can leak, and the narrowness is
+also containment (eight is the standing-concurrency bound of a
+compromised appliance). A workload that needs more standing
+world flows scales out -- a second terminator on a second wire,
+separately judged, its own enumerable eight -- never wider.
+Distinguish this from the MEMBER's reply window, which is
+runtime and policy: a member that widens its range under wider
+grants presents more concurrent crossings, as the t11 gate does
+to saturate the eight.
 
 ## What to verify, t1-t11
 
