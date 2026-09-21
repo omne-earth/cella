@@ -23,7 +23,7 @@ set -uo pipefail
 
 T="${1:-}"
 case "$T" in
-t1|t2|t3|t4|t5|t6|t9) ;;
+t1|t2|t3|t4|t5|t6|t9|t10) ;;
 *) echo "usage: tls-terminator.sh <t1|t2|t3|t4|t5|t6|t9>"; exit 2 ;;
 esac
 
@@ -117,7 +117,7 @@ PYEOF
 DNS_PID=$!
 mkdir -p "$CELLA_HOME/www" && echo "the-world-answers" > "$CELLA_HOME/www/index.html"
 [ "$T" = t9 ] && dd if=/dev/zero of="$CELLA_HOME/www/bulk.bin" bs=1M count=16 status=none
-(cd "$CELLA_HOME/www" && exec python3 -m http.server "$HTTP_PORT" --bind "$HOST_IP" >/dev/null 2>&1) &
+(cd "$CELLA_HOME/www" && exec python3 -m http.server "$HTTP_PORT" --protocol HTTP/1.1 --bind "$HOST_IP" >/dev/null 2>&1) &
 HTTP_PID=$!
 
 say "$T: stand the pair, the judge, and the host world"
@@ -286,5 +286,24 @@ t6)
         || { echo "FAIL: expected exit 0 (the world answered) -- $(mem_log 'probe-rc=' | tail -1)"; evidence; exit 1; }
     echo "  real name, real roots, minted leaf: the whole seam against the world"
     echo; echo "PASS: t6 -- the named world"
+    ;;
+
+t10)
+    say "t10: the retry storm -- rapid crossings all answer"
+    # The reproduction of the ekdh4mm lockout: a client retrying
+    # briskly is the most ordinary traffic there is, and every
+    # crossing rides a world leg drawn from the appliance's
+    # consistent reply window (8 ports). The contract: twelve
+    # rapid sequential requests all answer. Under 60 s TIME_WAIT
+    # the window is a graveyard after ~8 and connect() dies with
+    # EADDRINUSE -- the member sees empty replies, this gate sees
+    # fewer than twelve, and it FAILS until the drain is fixed.
+    type_mem "for i in \$(seq 1 12); do (wget -q -O- -T 5 http://$GW:8080/ >/dev/null 2>&1 && echo hit >> /tmp/hits) & done; wait; echo burst-o\"k\"=\$(wc -l < /tmp/hits)"
+    wait_console "$MEM_VM" "burst-ok=" 120 || { echo "FAIL: the burst never finished"; evidence; exit 1; }
+    GOT=$(mem_log 'burst-ok=' | tail -1 | sed 's/.*burst-ok=//' | tr -dc 0-9)
+    [ "${GOT:-0}" -eq 12 ] \
+        || { echo "FAIL: only ${GOT:-0}/12 rapid crossings answered -- the reply window locked out"; evidence; exit 1; }
+    echo "  12/12 rapid crossings answered: the window survives a retry storm"
+    echo; echo "PASS: t10 -- the retry storm"
     ;;
 esac
