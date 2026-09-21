@@ -99,7 +99,15 @@ fn probe(a: &ProbeArgs) -> Result<bool, String> {
     match tls.read(&mut first) {
         Ok(n) if n > 0 => {
             let line = String::from_utf8_lossy(&first[..n]);
-            println!("probe: answered: {}", line.lines().next().unwrap_or(""));
+            let status = line.lines().next().unwrap_or("");
+            println!("probe: answered: {status}");
+            // The terminator itself speaks when the world does not:
+            // 502 means the leaf verified but nothing stood behind
+            // it, and 429 means the window refused the crossing --
+            // neither is the world answering (exit 3, not 0).
+            if status.contains(" 502 ") || status.contains(" 429 ") {
+                return Ok(false);
+            }
             Ok(true)
         }
         _ => Ok(false),

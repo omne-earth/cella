@@ -135,6 +135,30 @@ The nameless map lanes (bare TCP) carry no protocol to speak: a
 saturated or unreachable mapped crossing closes fast instead,
 and the client's own stack sees an ordinary reset.
 
+## HTTP/1.1, by design
+
+The terminator negotiates no ALPN on either leg, so clients fall
+back to HTTP/1.1 (a verbose client prints "server did not agree
+on a protocol"). This is a consequence of the trust model, not a
+missing feature. The member's handshake completes from pair
+trust alone -- minted leaf, baked CA, no reference to the
+world's state (the t2 proof). Offering h2 honestly would require
+either ALPN mirroring (connect the world first and echo its
+agreed protocol -- the untrusted side then shapes the pair-side
+handshake, and the sealed boundary gains an outside input) or
+protocol translation (the splice stops being a byte-honest pump
+and becomes a rewriter). Both trade away a property the pair
+currently proves.
+
+The practical consequence: no multiplexing. Every concurrent
+request is its own TCP connection through the eight-permit world
+window, so a parallel fetcher (uv, npm) meets the 429 gate
+sooner than an h2 proxy would; those tools honor Retry-After and
+degrade to pacing. A task that genuinely needs more concurrency
+should widen the window by policy -- a judge naming sixteen or
+thirty-two reply-port grants for that machine -- rather than ask
+for h2.
+
 ## What to verify, t1-t11
 
 The reference assertions are the eleven gates (`make
