@@ -113,9 +113,31 @@ an upstream retry, never a broken promise. Do not design around
 a terminator that never freezes: design around one that rarely
 does.
 
-## What to verify, t1-t8
+## Backpressure, spoken
 
-The reference assertions are the eight gates (`make
+The appliance's world side is metered by its eight-port reply
+window (docs/TLS-TERMINATOR.md, "The world window"). Two HTTP
+answers can therefore originate at the terminator itself, and a
+member's client stack should expect both:
+
+- `429 Too Many Requests` with `Retry-After: 5`: the window is
+  saturated and the crossing could not seat within the grace.
+  Back off for the stated seconds; a client that honors
+  Retry-After degrades gracefully, and a client that hot-loops
+  reconnects is the failure mode the 429 exists to prevent
+  (titanium trial ekdh4mm: an HTTP library retried a mute
+  failure at ~160 connects/s).
+- `502 Bad Gateway`: the world leg got no answer within 2 s --
+  the name is refused by policy, or the far side is down; the
+  terminator cannot tell which and says only what it knows.
+
+The nameless map lanes (bare TCP) carry no protocol to speak: a
+saturated or unreachable mapped crossing closes fast instead,
+and the client's own stack sees an ordinary reset.
+
+## What to verify, t1-t11
+
+The reference assertions are the eleven gates (`make
 smoke-tls-terminator`; docs/TLS-TERMINATOR.md shows each walk as
 a diagram). An integration test mirrors them one for one, with
 the harness's own tools. `<gw>` is the terminator's wire address;
@@ -201,3 +223,14 @@ Also verify the freeze story once: freeze the member
 mid-handshake, thaw it, and the session completes -- the member
 leg's patience is the pair's own (docs/TLS-TERMINATOR.md, "The
 two legs").
+
+
+9. **Throughput (t9).** A bulk transfer through the pair arrives
+   byte-exact at wire-adjacent pace; a stall points at the
+   verdict path, not the splice.
+10. **The retry storm (t10).** Paced sequential requests against
+   a keep-alive upstream all answer; a lockout at eight is the
+   reply window's TIME_WAIT drain resurfacing.
+11. **The spoken window (t11).** Saturate the world side (more
+   concurrent crossings than eight); the excess hears 429 within
+   the grace, and a retry after the drain answers 200.

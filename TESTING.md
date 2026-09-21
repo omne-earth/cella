@@ -65,7 +65,7 @@ the halves as its own family.
 | `make smoke-cella-vmm` | cella-vmm | shell, boot, device-state (AC1-AC5) |
 | `make smoke-cella-machine` | cella-machine | thaw, machine (selftest), clean, nested-boot (3 variants) |
 | `make smoke-cella-gateway` | cella-gateway | ping, udp, collide, gateway, gateway-cli, inspection, ledger, chain |
-| `make smoke-cella-network` | cella-network | wire, world, multinet, translator-port-neg |
+| `make smoke-cella-network` | cella-network | wire, world, multinet, translator-tether |
 | `make smoke-cella-probe` | cella-probe | witness, universe, extract, probe-inception |
 
 The order is blame direction: ground first (doctor), then the VMM,
@@ -98,7 +98,7 @@ target, and `make help` renders it. The map from gate to law:
 | `smoke-wire` | two machines, one wire, no host object; the frozen peer's mail discards and counts | scripts/test/wire.sh |
 | `smoke-world` | sockets instead of taps: ARP and the gateway echo answered at the edge, ICMP/UDP/TCP crossing decided both ways, the knock parks | scripts/test/world.sh |
 | `smoke-multinet` | N nics on one machine, every crossing decided per nic | scripts/test/multinet.sh |
-| `smoke-translator-port-neg` | the tether: an rm without destroy orphans no translator, and the knock port frees | scripts/test/translator-port-neg.sh |
+| `smoke-translator-tether` | the tether: an rm without destroy orphans no translator, and the knock port frees | scripts/test/translator-tether.sh |
 | `smoke-rootless` | no capability on any binary, no tap, bridge, nft table, or boot unit of cella's on the host | scripts/test/rootless.sh |
 | `smoke-device-state` | AC1-AC5: disk, network, exact in-flight state, external verdict, the true world | scripts/test/device-state.sh |
 | `smoke-nested-boot` | cella hosts cella, three network variants, at real nesting depth | scripts/test/nested-boot.sh |
@@ -108,7 +108,8 @@ target, and `make help` renders it. The map from gate to law:
 | `smoke-witness` | every verb is an event, in the right book, with uid, gid, persona | scripts/test/witness.sh |
 | `probe-inception` | the cryogenic clock, one nesting level down | via cella probe |
 | `smoke-membrane-memory` (membrane-memory-mm1..mm6) | the membrane's standing memory: the live park (mm1), grant isolation (mm2), self-expiry (mm3), the live refusal with its reason (mm4), the engine-seam door witnessed (mm5), and the fail-closed edges (mm6) | scripts/test/membrane-memory.sh |
-| `smoke-tls-terminator` (tls-terminator-t1..t9) | the terminated pair (docs/TLS-TERMINATOR.md shows each walk): the resolver intercepts, the minted leaf verifies against the pair CA, plain TCP splices with the durable name ratchet, the cache is TTL-honest, a foreign anchor refuses, the named world answers end to end, openssl -x509_strict plus python VERIFY_X509_STRICT accept the mint, and a 16 MiB bulk transfer crosses byte-exact at speed | scripts/test/tls-terminator.sh, tls-terminator-strict.sh, tls-terminator-python-strict.sh |
+| `smoke-reboot` | a guest-initiated reset ends the VMM: exit 0 within seconds, `guest requested shutdown` with the `exit=` forensic token on the record, and destroy recovers the dead machine without a stop | scripts/test/reboot.sh |
+| `smoke-tls-terminator` (tls-terminator-t1..t11) | the terminated pair (docs/TLS-TERMINATOR.md shows each walk): the resolver intercepts, the minted leaf verifies against the pair CA, plain TCP splices with the durable name ratchet, the cache is TTL-honest, a foreign anchor refuses, the named world answers end to end, openssl -x509_strict plus python VERIFY_X509_STRICT accept the mint, a 16 MiB bulk transfer crosses byte-exact at speed, a paced retry storm survives the reply window (t10), and a saturating storm hears 429 then a 200 on retry (t11) | scripts/test/tls-terminator.sh, tls-terminator-strict.sh, tls-terminator-python-strict.sh |
 | `smoke-engine` (engine-w1..w5) | the world-engine seam: the stream stands, decisions land, stillness on engine halt, the frozen machine, two judges (docs/WORLD-ENGINE.md, "The gates") | scripts/test/engine.sh |
 
 Design detail lives with the law: docs/NETWORK-MODEL.md (the

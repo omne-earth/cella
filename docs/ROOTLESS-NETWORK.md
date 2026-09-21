@@ -163,6 +163,17 @@ stateDiagram-v2
     Established --> [*]: RST from either side,\nwrite error,\nor 30 retransmits\n-> close() N.H.3
 ```
 
+The flow negotiates no TCP options -- no timestamps in
+particular. A consequence surfaced 2026-09-20: without the
+timestamp option, a guest-side TIME_WAIT socket facing this flow
+can never be recycled by tcp_tw_reuse (the kernel requires
+timestamp proof), so an actively-closed guest connection holds
+its port for the full 60 s. A guest with a narrow port window
+(the terminator's reply window) exhausts under churn. The
+terminator therefore ends its world legs by RST -- the
+"RST from either side" arrow above, used as the normal close --
+and teaching the flow the timestamp option remains open work.
+
 Two facts hold in every state. First, a segment that reaches
 this machine only reaches the guest after it parks in the
 ingress lane and a judge releases it; the state machine sees the
@@ -295,7 +306,7 @@ answered by the translator instead of the host stack. No golden
 image changes. No guest configuration changes. The gates are the
 proof: smoke-wire certifies the wire plane, smoke-world and the
 ear gates (smoke-ping, smoke-udp) certify the world plane, and
-smoke-translator-port-neg certifies the tether.
+smoke-translator-tether certifies the tether.
 
 ## Freeze and thaw, end to end
 

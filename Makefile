@@ -39,7 +39,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
         smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire \
-        smoke-world smoke-rootless smoke-translator-port-neg \
+        smoke-world smoke-rootless smoke-translator-tether \
         smoke-ping smoke-udp smoke-collide smoke-inspection \
         smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-extract \
@@ -106,7 +106,7 @@ SMOKE_TARGETS := smoke smoke-debug smoke-release \
         smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
         smoke-nested-boot-www smoke-machine smoke-clean \
         smoke-gateway smoke-gateway-cli smoke-wire smoke-world \
-        smoke-rootless smoke-translator-port-neg smoke-multinet \
+        smoke-rootless smoke-translator-tether smoke-multinet \
         smoke-universe smoke-ledger smoke-chain smoke-extract \
         smoke-membrane-memory membrane-memory-mm1 membrane-memory-mm2 \
         membrane-memory-mm3 membrane-memory-mm4 membrane-memory-mm5 \
@@ -464,9 +464,9 @@ smoke-rootless: build
 
 ## The tether (negative): a machine dir removed without destroy orphans no
 ## translator -- the process exits on its own and the knock port frees
-smoke-translator-port-neg: build golden
+smoke-translator-tether: build golden
 	$(LOG)
-	$(SCRIPTS)/test/translator-port-neg.sh
+	$(SCRIPTS)/test/translator-tether.sh
 
 ## engine-w1 (docs/WORLD-ENGINE.md, "The gates"): the stream stands --
 ## the bridge dials the motor, and a park arrives as a
@@ -720,7 +720,7 @@ smoke-cella-gateway: smoke-ping smoke-udp smoke-collide smoke-gateway \
 ## cella-network's part: the translator planes -- wire, world, multinet, and
 ## the tether
 smoke-cella-network: smoke-wire smoke-world smoke-multinet \
-        smoke-translator-port-neg
+        smoke-translator-tether
 
 ## cella-probe's part: the witness doors, the universe, and the deep clock
 ## probe
@@ -745,7 +745,7 @@ smoke-debug: smoke-shell smoke-boot smoke-gateway smoke-gateway-cli \
 ## (target/release/cella) and assert only on files, verbs, and the
 ## chronicle
 smoke-release: smoke-thaw smoke-machine smoke-rootless \
-        smoke-translator-port-neg smoke-witness smoke-collide smoke-ping \
+        smoke-translator-tether smoke-witness smoke-collide smoke-ping \
         smoke-chain smoke-extract smoke-clean doctor
 
 ## The whole battery: the no-KVM checks first (fail fast), then the dark

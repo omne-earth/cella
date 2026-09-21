@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# smoke-translator-port-neg: the tether (negative). An incomplete
+# smoke-translator-tether: the tether. An incomplete
 # teardown -- the machine dir removed without destroy -- must not
 # orphan the translator: the process exits on its own when its
 # edge.sock is gone, and the knock port frees with it. Before the
