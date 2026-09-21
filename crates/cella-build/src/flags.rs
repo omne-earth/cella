@@ -68,17 +68,15 @@ pub fn build_flags(axis: &str, flavor: &str, fresh: bool) -> Result<(), String> 
     write_golden_manifest(axis, flavor, &out)
 }
 
-/// Stale check: the name of the first build input whose digest no
-/// longer matches the manifest, None when everything matches. A
-/// missing or unreadable manifest is an error (rebuild).
-fn stale_inputs(axis: &str, flavor: &str, out: &Path) -> Result<Option<String>, String> {
-    let mpath = cella_libs::golden::manifest_path(out);
-    let text =
-        fs::read_to_string(&mpath).map_err(|_| format!("no manifest at {}", mpath.display()))?;
-    let _ = flavor;
+/// The pinned inputs for one artifact: the scripts and fragments
+/// that shape it -- and for the terminator, the proxy's own source
+/// tree, because the image bakes the binary and a code change must
+/// rebake without a manual manifest purge (the 2026-09-20 lockout
+/// hunt spent an afternoon testing a stale guest binary).
+fn build_inputs(axis: &str, flavor: &str, artifact_dir: &Path) -> Vec<std::path::PathBuf> {
     let root = crate::orchestrate::repo_root();
     let b = root.join("scripts/build");
-    let inputs: Vec<std::path::PathBuf> = match axis {
+    match axis {
         "kernel" => vec![
             b.join("kernel-fragment.config"),
             b.join("kernel-fragment-nested.config"),
@@ -92,11 +90,32 @@ fn stale_inputs(axis: &str, flavor: &str, out: &Path) -> Result<Option<String>, 
             if flavor == "terminator" {
                 // The pair's identity: a changed cert is a changed
                 // pair, and the manifest must say so.
-                v.push(out.parent().unwrap().join("ca.pem"));
+                v.push(artifact_dir.join("ca.pem"));
+                let src = root.join("crates/cella-terminator");
+                v.push(src.join("Cargo.toml"));
+                let mut rs: Vec<_> = std::fs::read_dir(src.join("src"))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+                    .collect();
+                rs.sort();
+                v.extend(rs);
             }
             v
         }
-    };
+    }
+}
+
+/// Stale check: the name of the first build input whose digest no
+/// longer matches the manifest, None when everything matches. A
+/// missing or unreadable manifest is an error (rebuild).
+fn stale_inputs(axis: &str, flavor: &str, out: &Path) -> Result<Option<String>, String> {
+    let mpath = cella_libs::golden::manifest_path(out);
+    let text =
+        fs::read_to_string(&mpath).map_err(|_| format!("no manifest at {}", mpath.display()))?;
+    let inputs = build_inputs(axis, flavor, out.parent().unwrap());
     for input in inputs {
         if !input.is_file() {
             continue;
@@ -115,30 +134,12 @@ fn stale_inputs(axis: &str, flavor: &str, out: &Path) -> Result<Option<String>, 
 /// build inputs pinned per axis: the kernel fragments for a kernel,
 /// the init script and the busybox fragment for a rootfs.
 fn write_golden_manifest(axis: &str, flavor: &str, artifact: &Path) -> Result<(), String> {
-    let root = crate::orchestrate::repo_root();
-    let b = root.join("scripts/build");
     let sources: Vec<(&str, &str)> = vec![
         ("kernel", crate::orchestrate::KERNEL_VERSION),
         ("busybox", crate::orchestrate::BUSYBOX_VERSION),
         ("bash", crate::orchestrate::GUEST_BASH_VERSION),
     ];
-    let inputs: Vec<std::path::PathBuf> = match axis {
-        "kernel" => vec![
-            b.join("kernel-fragment.config"),
-            b.join("kernel-fragment-nested.config"),
-        ],
-        _ => {
-            let mut v = vec![
-                b.join(format!("rootfs-{flavor}.sh")),
-                b.join("rootfs.sh"),
-                b.join("busybox-fragment.config"),
-            ];
-            if flavor == "terminator" {
-                v.push(artifact.parent().unwrap().join("ca.pem"));
-            }
-            v
-        }
-    };
+    let inputs = build_inputs(axis, flavor, artifact.parent().unwrap());
     let input_refs: Vec<&Path> = inputs.iter().map(|p| p.as_path()).collect();
     cella_libs::golden::write_manifest(artifact, axis, flavor, &sources, &input_refs)?;
     println!(
