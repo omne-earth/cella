@@ -155,9 +155,18 @@ request is its own TCP connection through the eight-permit world
 window, so a parallel fetcher (uv, npm) meets the 429 gate
 sooner than an h2 proxy would; those tools honor Retry-After and
 degrade to pacing. A task that genuinely needs more concurrency
-should widen the window by policy -- a judge naming sixteen or
-thirty-two reply-port grants for that machine -- rather than ask
-for h2.
+faces a build-time property, not a policy one: the appliance's
+world width is WORLD_PERMITS (crates/cella-terminator/src/gate.rs,
+8) and its own baked port range (rootfs-terminator.sh) -- a
+policy naming more reply-port grants lets more crossings arrive
+but cannot raise how many seat. Widening the world window means
+rebuilding the appliance (or, if the need becomes real, making
+the width a /etc/cella-terminator.conf value sized at boot --
+the design is understood, the ask has not yet been earned).
+Distinguish this from the MEMBER's reply window, which is
+runtime and policy: a member that widens its range under wider
+grants presents more concurrent crossings, as the t11 gate does
+to saturate the eight.
 
 ## What to verify, t1-t11
 
