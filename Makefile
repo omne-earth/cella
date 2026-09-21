@@ -39,7 +39,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-nested-boot smoke-nested-boot-airgapped \
         smoke-nested-boot-hybrid smoke-nested-boot-www \
         smoke-machine smoke-clean smoke-gateway smoke-gateway-cli smoke-wire \
-        smoke-world smoke-rootless smoke-translator-port-neg \
+        smoke-world smoke-rootless smoke-translator-tether \
         smoke-ping smoke-udp smoke-collide smoke-inspection \
         smoke-witness smoke-multinet smoke-universe smoke-ledger smoke-chain \
         smoke-extract \
@@ -49,7 +49,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         smoke-tls-terminator tls-terminator-t1 tls-terminator-t2 \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
         tls-terminator-t6 tls-terminator-t7 tls-terminator-t8 \
-        tls-terminator-t9 \
+        tls-terminator-t9 tls-terminator-t10 tls-terminator-t11 \
         golden-terminator \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
@@ -106,7 +106,7 @@ SMOKE_TARGETS := smoke smoke-debug smoke-release \
         smoke-nested-boot-airgapped smoke-nested-boot-hybrid \
         smoke-nested-boot-www smoke-machine smoke-clean \
         smoke-gateway smoke-gateway-cli smoke-wire smoke-world \
-        smoke-rootless smoke-translator-port-neg smoke-multinet \
+        smoke-rootless smoke-translator-tether smoke-multinet \
         smoke-universe smoke-ledger smoke-chain smoke-extract \
         smoke-membrane-memory membrane-memory-mm1 membrane-memory-mm2 \
         membrane-memory-mm3 membrane-memory-mm4 membrane-memory-mm5 \
@@ -114,7 +114,7 @@ SMOKE_TARGETS := smoke smoke-debug smoke-release \
         smoke-tls-terminator tls-terminator-t1 tls-terminator-t2 \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
         tls-terminator-t6 tls-terminator-t7 tls-terminator-t8 \
-        tls-terminator-t9 \
+        tls-terminator-t9 tls-terminator-t10 tls-terminator-t11 \
         golden-terminator \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
@@ -464,9 +464,9 @@ smoke-rootless: build
 
 ## The tether (negative): a machine dir removed without destroy orphans no
 ## translator -- the process exits on its own and the knock port frees
-smoke-translator-port-neg: build golden
+smoke-translator-tether: build golden
 	$(LOG)
-	$(SCRIPTS)/test/translator-port-neg.sh
+	$(SCRIPTS)/test/translator-tether.sh
 
 ## engine-w1 (docs/WORLD-ENGINE.md, "The gates"): the stream stands --
 ## the bridge dials the motor, and a park arrives as a
@@ -600,6 +600,17 @@ tls-terminator-t9: build-lab golden golden-terminator
 	$(LOG)
 	$(SCRIPTS)/test/tls-terminator.sh t9
 
+## t10: the retry storm -- rapid sequential crossings must all
+## answer (the reply-window lockout reproduction)
+tls-terminator-t10: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t10
+
+## t11: the spoken window -- a saturating storm hears 429
+tls-terminator-t11: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t11
+
 ## The terminated pair's family, the interceptor first; t6 is the
 ## named world (https://example.com, SKIPs without internet), t7
 ## the strict verifier (openssl judges the mint, no VMs), t8 the
@@ -607,7 +618,7 @@ tls-terminator-t9: build-lab golden golden-terminator
 smoke-tls-terminator: tls-terminator-t1 tls-terminator-t2 \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
         tls-terminator-t6 tls-terminator-t7 tls-terminator-t8 \
-        tls-terminator-t9
+        tls-terminator-t9 tls-terminator-t10 tls-terminator-t11
 
 ## The membrane-memory family, the door first (mm1-mm4 ride it)
 smoke-membrane-memory: membrane-memory-mm5 membrane-memory-mm1 \
@@ -709,7 +720,7 @@ smoke-cella-gateway: smoke-ping smoke-udp smoke-collide smoke-gateway \
 ## cella-network's part: the translator planes -- wire, world, multinet, and
 ## the tether
 smoke-cella-network: smoke-wire smoke-world smoke-multinet \
-        smoke-translator-port-neg
+        smoke-translator-tether
 
 ## cella-probe's part: the witness doors, the universe, and the deep clock
 ## probe
@@ -734,7 +745,7 @@ smoke-debug: smoke-shell smoke-boot smoke-gateway smoke-gateway-cli \
 ## (target/release/cella) and assert only on files, verbs, and the
 ## chronicle
 smoke-release: smoke-thaw smoke-machine smoke-rootless \
-        smoke-translator-port-neg smoke-witness smoke-collide smoke-ping \
+        smoke-translator-tether smoke-witness smoke-collide smoke-ping \
         smoke-chain smoke-extract smoke-clean doctor
 
 ## The whole battery: the no-KVM checks first (fail fast), then the dark

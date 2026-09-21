@@ -10,6 +10,7 @@
 mod ca;
 mod config;
 mod dns;
+mod gate;
 mod http;
 mod probe;
 mod proxy;

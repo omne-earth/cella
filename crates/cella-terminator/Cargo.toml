@@ -13,6 +13,7 @@ path = "src/main.rs"
 # not a persona -- no witness door, no install, no shim row -- and
 # its TLS stack stays quarantined here, linked by no other binary.
 [dependencies]
+libc = { workspace = true }
 rustls = { workspace = true }
 rcgen = { workspace = true }
 webpki-roots = { workspace = true }

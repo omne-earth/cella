@@ -10,11 +10,12 @@ mechanism and shows each gate's walk.
 
 Status: shipped (2026-09-15). The proxy (crates/cella-terminator),
 the image (`cella build rootfs terminator`), and the pair CA
-export are built. Nine gates run green (`make
+export are built. Eleven gates run green (`make
 smoke-tls-terminator`, TESTING.md rosters them).
 
 The identifiers: T.R is the resolver, T.C the pair CA, T.P the
-proxy lanes, T.V the probe voice, T.B the build door -- minted
+proxy lanes, T.V the probe voice, T.B the build door, T.W the
+world window -- minted
 here (T for this document, per the first-letter rule). All other
 identifiers are borrowed: N.* from docs/NETWORK-MODEL.md, W.*
 from docs/WORLD-ENGINE.md.
@@ -35,7 +36,7 @@ graph LR
     R1["T.R.1 the resolver: answers every name with the wire address"]
     P1["T.P.1 the peek: first bytes name the lane"]
     P2["T.P.2 terminate: member-leg TLS from a minted leaf"]
-    P3["T.P.3 splice: a plain byte pump, half-close honest"]
+    P3["T.P.3 splice: a plain byte pump; the world end<br/>dies by RST when the member is done (T.W.3)"]
     P4["T.P.4 map: static per-port routes for nameless flows"]
     C1["T.C.1 the minter: one leaf per SNI, cached"]
     C2["T.C.2 the pair CA, baked: /etc/cella/pair-ca.pem + .key"]
@@ -77,9 +78,9 @@ live instead of frozen.
 ```mermaid
 sequenceDiagram
     participant M as the member
-    participant A as the appliance
+    participant A as the appliance (T.P lanes, behind N.M.1)
     participant W as the world
-    Note over M,A: the member leg -- pair patience,<br/>freezes allowed, pair-CA trust
+    Note over M,A: the member leg -- pair patience,<br/>freezes allowed, pair-CA trust (T.C.2)
     M->>A: TCP + TLS against the minted leaf
     Note over A,W: the world leg -- wire speed,<br/>webpki trust, the appliance's own
     A->>W: TCP + TLS against the world's certificate
@@ -87,11 +88,61 @@ sequenceDiagram
     A-->>M: re-encrypted under the pair's leaf
 ```
 
+## The world window
+
+The appliance's world legs source from the eight-port reply
+window (T.W.1; docs/integration/MEMBRANE-MEMORY.md, "The
+consistent reply port"), so at most eight world connections exist
+at once. Four mechanisms keep the window from becoming a failure
+mode:
+
+- T.W.2, the gate: a FIFO line over eight permits around every
+  world connect. A crossing that cannot seat within a 500 ms
+  grace is refused in words on the voiced lanes (T.P.2 terminate
+  and the HTTP lane): 429 with Retry-After: 5. The nameless map
+  (T.P.4) has no protocol to speak and closes fast instead.
+  Saturation is a spoken state, not a stall.
+- T.W.3, the RST close: the world leg dies by RST, not FIN. The
+  world plane's peer is the translator's userspace TCP
+  (docs/ROOTLESS-NETWORK.md, "The translator's TCP"), which does
+  not negotiate the timestamp option, so a TIME_WAIT socket there
+  can never be recycled by tcp_tw_reuse and would hold its port
+  for 60 s. The splice aborts the world end when the member
+  finishes; RST is a lawful end of the flow's state machine, and
+  by then every relayed byte is delivered. For the kernel-peered
+  legs (member to appliance over the wire), where timestamps are
+  negotiated, the image's init sets tcp_tw_reuse=1 and 1 s
+  recycling is safe.
+- T.W.4, the bounded connect: 2 s. An unreachable world --
+  refused by policy or genuinely down; the terminator cannot tell
+  which -- answers 502 on the voiced lanes instead of holding the
+  member for the guest kernel's SYN ladder.
+- The resolver (T.R.1) makes three 1 s attempts upstream instead
+  of one 5 s attempt: a dropped query costs one second, not five.
+
+```mermaid
+graph TB
+    M["the member's crossing"]
+    G["T.W.2 the gate: FIFO, 8 permits, 500 ms grace"]
+    W1["T.W.1 the window: reply ports 50000-50007"]
+    CT["T.W.4 connect, bounded 2 s"]
+    RST["T.W.3 close by RST -- the port frees at once"]
+    B429["429 Retry-After: 5 (T.P.2 / HTTP lane)<br/>fast close (T.P.4 map)"]
+    B502["502 (voiced lanes)"]
+    M --> G
+    G -->|seated| W1
+    G -->|grace lapsed| B429
+    W1 --> CT
+    CT -->|connected, spliced, member done| RST
+    CT -->|no answer in 2 s| B502
+```
+
 ## The gates, one walk each
 
-The nine criteria live in scripts/test/tls-terminator.sh (t1-t6
-and t9, a live pair on KVM) and scripts/test/tls-terminator-strict.sh
-plus scripts/test/tls-terminator-python-strict.sh (t7-t8, the
+The eleven criteria live in scripts/test/tls-terminator.sh
+(t1-t6 and t9-t11, a live pair on KVM) and
+scripts/test/tls-terminator-strict.sh plus
+scripts/test/tls-terminator-python-strict.sh (t7-t8, the
 minter's bytes on a loopback wire, no VMs). TESTING.md rosters
 the family; `make smoke-tls-terminator` runs it.
 
@@ -295,6 +346,62 @@ sequenceDiagram
         N->>W: the window crosses
     end
     W-->>M: 16 MiB, byte-exact, inside the floor
+```
+
+### t10 -- the retry storm
+
+Twelve paced requests, each closing after its response, against a
+keep-alive world that never closes first: every crossing's world
+leg dies by the terminator's active close. Before the RST close
+this left a 60 s TIME_WAIT on one of eight ports per crossing,
+and the window locked out at eight -- the shape titanium measured
+in trial ekdh4mm (empty replies in under 0.15 s on a granted
+name, ~20 s drain, still intermittent at 20 s spacing). The gate
+asserts all twelve answer.
+
+```mermaid
+sequenceDiagram
+    participant M as the member
+    participant P as T.P lanes
+    participant W1 as T.W.1 the window
+    participant W as the keep-alive world
+    loop twelve, paced ~1 s
+        M->>P: request (member port recycles: tw_reuse, kernel peer)
+        P->>W1: one port for the world leg
+        W1->>W: connect, request, response
+        M->>P: close
+        Note over P,W1: T.W.3 -- RST, the port frees now,<br/>not in 60 s
+    end
+    Note over M: 12/12 answered -- no lockout
+```
+
+### t11 -- the spoken window
+
+The member widens its reply window to sixteen -- a lawful choice;
+the judge names sixteen exact grants -- and sends twelve parallel
+crossings at a world that takes 3 s to answer. Eight seat and
+hold the permits; four must hear 429 within the grace, not
+silence; and a retry after the drain must answer 200. The gate
+exists because the queue once wedged permanently after its first
+saturation (a mid-line timeout left the FIFO pointing at a
+departed ticket) -- four unit tests missed what this walk caught.
+
+```mermaid
+sequenceDiagram
+    participant M as the member (16-port window, 16 grants)
+    participant G as T.W.2 the gate
+    participant W as the 3 s world
+    par eight crossings
+        M->>G: seat (permits 1-8)
+        G->>W: held ~3 s each
+        W-->>M: 200
+    and four more
+        M->>G: wait the 500 ms grace
+        G-->>M: 429 Retry-After: 5 -- spoken, not silent
+    end
+    M->>G: retry after the drain
+    G->>W: seats at once
+    W-->>M: 200
 ```
 
 ## The minted leaf, exactly

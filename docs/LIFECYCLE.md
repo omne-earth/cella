@@ -94,7 +94,7 @@ stateDiagram-v2
     state "L.S.4 archived (a rock)" as S4
     [*] --> S1: create
     S1 --> S2: start
-    S2 --> S3: freeze, or its own egress parks (open valve)
+    S2 --> S3: freeze, or its own egress parks<br/>(open valve, no standing memory -- N.F.7 keeps it live)
     S3 --> S2: thaw
     S2 --> S1: stop
     S1 --> S4: archive
@@ -209,7 +209,10 @@ $HOME/.cella/
   kernel/<flavor>/bzImage        golden kernels (build)
   kernel/<flavor>/golden.json    the manifest: sha3-256, sources, inputs (mode 444)
   rootfs/<flavor>/rootfs.ext4    golden root filesystems (build)
-  rootfs/<flavor>/golden.json    the manifest, same rule
+  rootfs/<flavor>/golden.json    the manifest, same rule; an image that
+                                 bakes a binary pins that binary's source
+                                 tree too (the terminator), so a code
+                                 change rebakes without a manual purge
   machines/<name>/
     manifest.json                the machine: flavors, memory, net, root mode,
                                  and, from the universe verbs, the layer

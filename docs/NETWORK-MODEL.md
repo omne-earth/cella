@@ -78,8 +78,8 @@ graph LR
     T2p["N.T.2 world side (see N2)"]
     T3p["N.T.3 wire side (see N2)"]
     H1["N.H.1 ICMP DGRAM socket, one per echo id"]
-    H2["N.H.2 UDP socket, one per flow"]
-    H3["N.H.3 TCP socket, one per flow, plus the knock listeners"]
+    H2["N.H.2 UDP socket, one per flow, plus the udp knock listeners"]
+    H3["N.H.3 TCP socket, one per flow, plus the tcp knock listeners"]
     H4["N.H.4 CELLA_HOME/wires/NAME: one socket, two ends"]
     W(("the world"))
     PEER["N.T.1 of the peer machine (see N2)"]
@@ -122,6 +122,7 @@ graph LR
     F5["N.F.5 edge.pid"]
     F6["N.F.6 edge.log"]
     F7["N.F.7 membrane-memory"]
+    F8["N.F.8 network/names -- the name ratchet, durable"]
     Bp["W.B.1 the bridge (see docs/WORLD-ENGINE.md)"]
     X1p -->|"writes the posture"| F1
     M1p -->|"reads"| F1
@@ -133,8 +134,10 @@ graph LR
     X1p -->|"reads the held set"| F3
     T1p -->|"listens; exits when it is gone (the tether)"| F4
     L1p -->|"connects, one hello byte per nic"| F4
-    L1p -->|"writes at spawn; destroy kills by it"| F5
+    T1p -->|"writes its own pid at spawn"| F5
+    L1p -->|"reads; destroy kills by it"| F5
     T1p -->|"stdout, redirected at spawn"| F6
+    M1p -->|"appends at learning; folds at construction"| F8
 ```
 
 ## The membrane
@@ -257,7 +260,7 @@ sequenceDiagram
         F7-->>M1: the entry
         Note over M1: the machine keeps running --<br/>the decision applies live, no stillness.
     end
-    X1->>M1: release ID: append to the verdict (N.F.2),<br/>kick by SIGWINCH
+    X1->>M1: release ID: append to the verdict (N.F.2) --<br/>staged; it applies at the thaw, in park order
     M1->>T1: the frame, over the edge fd
     alt world nic (N.T.2)
         Note over T1: ARP and the gateway echo:<br/>answered inside N.T.2, never leaves it.
@@ -301,7 +304,7 @@ sequenceDiagram
     participant M2 as N.M.2 ingress lane
     participant X1 as N.X.1 cella-gateway
     participant G1 as N.G.1 guest
-    H->>T1: a reply on a flow socket (N.H.1-N.H.2-N.H.4),<br/>or a knock on a mapped port (N.H.3)
+    H->>T1: a reply on a flow socket (N.H.1-N.H.2-N.H.4),<br/>or a knock on a mapped port (N.H.2 udp, N.H.3 tcp)
     Note over T1: no VMM attached (a frozen epoch):<br/>discarded at the edge, counted in edge.log (N.F.6).
     T1->>M2: the frame, over the edge fd
     M2->>M2: park in the ingress lane,<br/>append the park to the ledger (N.F.3)
@@ -373,7 +376,7 @@ The one network appliance (ruled 2026-09-15): an ordinary cella
 machine wearing the `terminator` rootfs flavor, in the pair seat
 -- a member on a wire, the world on the other nic -- that splits
 every TCP connection in two and owns the names. This section is
-the law; the mechanism and the eight gates' walks are
+the law; the mechanism and the eleven gates' walks are
 docs/TLS-TERMINATOR.md, and the builder's contract is
 docs/integration/TLS-TERMINATOR.md.
 

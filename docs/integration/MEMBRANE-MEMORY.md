@@ -188,4 +188,26 @@ fail-closed. The window's width is the concurrency budget --
 TCP demuxes on the whole 4-tuple, so eight ports is eight live
 flows per remote service -- and sizing it is policy, stated in
 the client's image (the terminator image bakes exactly this
-window; docs/integration/TLS-TERMINATOR.md).
+window; docs/integration/TLS-TERMINATOR.md). Widening is lawful:
+a client that pins sixteen ports and a judge that grants sixteen
+lines have simply agreed on a larger budget (the t11 gate walks
+exactly this).
+
+Two costs of a narrow window surfaced in the field (2026-09-20,
+the reply-window lockout) and are now handled in the terminator
+image:
+
+- TIME_WAIT economics. A closed connection holds its port for
+  60 s when this side closed first, so a window of eight drains
+  at eight ports per minute under churn -- far below ordinary
+  client demand. The image sets tcp_tw_reuse=1, which recycles a
+  port after ~1 s on kernel-peered legs (TCP timestamps prove
+  the reuse safe). The appliance's world legs cannot use this
+  (their peer, the translator's userspace TCP, speaks no
+  timestamps) and close by RST instead
+  (docs/TLS-TERMINATOR.md, "The world window", T.W.3).
+- Shared demand. On an appliance, every world-side use -- member
+  crossings, upstream DNS -- draws from one window. The
+  terminator meters it with a FIFO gate and answers saturation
+  in words (429, Retry-After) rather than silence
+  (docs/TLS-TERMINATOR.md, T.W.2).

@@ -27,7 +27,7 @@ artifacts, the boot path, the pass criteria, and the results.
 ```mermaid
 flowchart TD
     L0["bare metal (or the outer host)"] --> L1["host: cella runs here (N.L.1 drives the verbs, N.M.1 is the VMM)"]
-    L1 --> L2["N.G.1 outer guest: bzImage-nested + rootfs-nested.ext4<br/>init runs the verbs: cella create, cella start (jailed)"]
+    L1 --> L2["N.G.1 outer guest: the nested flavor's bzImage + rootfs.ext4<br/>init runs the verbs: cella create, cella start (jailed)"]
     L2 --> L3["N.G.1 inner guest, one level down: canonical bzImage + rootfs.ext4<br/>init prints cella-rootfs lines"]
 ```
 

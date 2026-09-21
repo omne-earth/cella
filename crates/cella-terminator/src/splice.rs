@@ -15,15 +15,51 @@ pub trait End: Read + Write {
     /// half down (for TLS, close_notify first). Called once per
     /// direction; the splice tracks that.
     fn finish_write(&mut self);
+
+    /// Arrange an abortive close: the socket dies by RST when it
+    /// drops, not by FIN. For the world end of a proxy with an
+    /// eight-port reply window this is load-bearing -- an active
+    /// FIN close births a 60 s TIME_WAIT on a window port, and
+    /// the translator's userspace TCP speaks no timestamps, so
+    /// tw_reuse can never recycle the corpse
+    /// (docs/ROOTLESS-NETWORK.md, "The translator's TCP": RST
+    /// from either side is a lawful end of the flow). By the time
+    /// the splice aborts, the member has closed and every relayed
+    /// byte is delivered; the FIN dance would be ceremony.
+    fn abort(&mut self);
+}
+
+fn linger_rst(sock: &TcpStream) {
+    use std::os::fd::AsRawFd;
+    let lg = libc::linger {
+        l_onoff: 1,
+        l_linger: 0,
+    };
+    // SAFETY: our own socket fd, a plain setsockopt.
+    unsafe {
+        libc::setsockopt(
+            sock.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            &lg as *const libc::linger as *const libc::c_void,
+            std::mem::size_of::<libc::linger>() as libc::socklen_t,
+        );
+    }
 }
 
 impl End for TcpStream {
     fn finish_write(&mut self) {
         let _ = self.shutdown(std::net::Shutdown::Write);
     }
+    fn abort(&mut self) {
+        linger_rst(self);
+    }
 }
 
 impl End for rustls::StreamOwned<rustls::ServerConnection, TcpStream> {
+    fn abort(&mut self) {
+        linger_rst(&self.sock);
+    }
     fn finish_write(&mut self) {
         self.conn.send_close_notify();
         let _ = self.conn.complete_io(&mut self.sock);
@@ -32,6 +68,9 @@ impl End for rustls::StreamOwned<rustls::ServerConnection, TcpStream> {
 }
 
 impl End for rustls::StreamOwned<rustls::ClientConnection, TcpStream> {
+    fn abort(&mut self) {
+        linger_rst(&self.sock);
+    }
     fn finish_write(&mut self) {
         self.conn.send_close_notify();
         let _ = self.conn.complete_io(&mut self.sock);
@@ -47,7 +86,20 @@ enum Dir {
 
 /// Pump until both directions have ended. The caller hands ends
 /// already handshaken and set nonblocking.
-pub fn splice<A: End, B: End>(mut a: A, mut b: B) {
+#[cfg(test)]
+pub fn splice<A: End, B: End>(a: A, b: B) {
+    splice_inner(a, b, false)
+}
+
+/// The proxy's splice: like `splice`, except the b end (the world
+/// leg) dies by RST the moment the a end (the member) closes --
+/// the reply window cannot afford FIN's TIME_WAIT (see
+/// `End::abort`).
+pub fn splice_rst_world<A: End, B: End>(a: A, b: B) {
+    splice_inner(a, b, true)
+}
+
+fn splice_inner<A: End, B: End>(mut a: A, mut b: B, rst_b_on_a_eof: bool) {
     let mut a2b = Dir::Open;
     let mut b2a = Dir::Open;
     let mut buf = [0u8; 16 * 1024];
@@ -59,6 +111,18 @@ pub fn splice<A: End, B: End>(mut a: A, mut b: B) {
                 Pump::Idle => {}
                 Pump::Done => {
                     a2b = Dir::Eof;
+                    if rst_b_on_a_eof {
+                        // The a end is done: its bytes are
+                        // delivered, and the b end dies by RST,
+                        // not FIN -- no TIME_WAIT on the reply
+                        // window (see abort). The cost is the
+                        // half-close idiom: an a that FINs while
+                        // still listening loses the rest of b's
+                        // answer. The proxy's crossings accept
+                        // that trade; the plain splice does not.
+                        b.abort();
+                        return;
+                    }
                     b.finish_write();
                     progressed = true;
                 }

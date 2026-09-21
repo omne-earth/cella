@@ -12,11 +12,25 @@ use crate::ca::Minter;
 use crate::config::{Config, PortMap};
 use crate::dns;
 use crate::http;
-use crate::splice::splice;
+use crate::splice::splice_rst_world;
 
 /// Resolve a name to the real world address. Production resolves
 /// through the upstream provider with the cache; the tests inject.
 pub type Resolver = dyn Fn(&str) -> Result<Ipv4Addr, String> + Send + Sync;
+
+/// The world connect's patience. A refused egress park drops
+/// silently at the membrane (fail-closed), so a denied name once
+/// stalled here for the guest kernel's full SYN ladder -- and the
+/// member paid 8-12 s to observe a 25 us verdict. Two seconds
+/// bounds the wait; the voiced paths then say 502 so a denial is
+/// observable in milliseconds and distinguishable from a stall.
+const WORLD_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What a member hears when the world leg cannot be reached --
+/// refused by policy or genuinely down, the terminator cannot
+/// tell, and 502 honestly says only "the far side did not answer".
+const WORLD_FAIL_REPLY: &[u8] =
+    b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 /// One member connection, end to end. `world_port` overrides the
 /// dialed port (the tests' listener is ephemeral); production
@@ -35,11 +49,18 @@ pub fn handle_conn(
     // A statically mapped port is a nameless splice: the map names it.
     if let Some(m) = maps.iter().find(|m| m.listen_port == dialed) {
         let ip = resolve(&m.host)?;
-        let world = TcpStream::connect((ip, world_port.unwrap_or(m.port)))
-            .map_err(|e| format!("world {}:{}: {e}", m.host, m.port))?;
+        // Raw TCP has no words: a bounced splice drops, and the
+        // member's stack sees the reset it already understands.
+        let _permit = crate::gate::acquire()
+            .map_err(|t| format!("world queue: ticket {t} bounced (splice, no voice)"))?;
+        let world = TcpStream::connect_timeout(
+            &(ip, world_port.unwrap_or(m.port)).into(),
+            WORLD_CONNECT_TIMEOUT,
+        )
+        .map_err(|e| format!("world {}:{}: {e}", m.host, m.port))?;
         member.set_nonblocking(true).map_err(|e| e.to_string())?;
         world.set_nonblocking(true).map_err(|e| e.to_string())?;
-        splice(member, world);
+        splice_rst_world(member, world);
         return Ok(());
     }
 
@@ -52,12 +73,33 @@ pub fn handle_conn(
     }
     let (head, host) = http::read_head_and_host(&mut member, 16 * 1024)?;
     let ip = resolve(&host)?;
-    let mut world = TcpStream::connect((ip, world_port.unwrap_or(dialed)))
-        .map_err(|e| format!("world {host}:{dialed}: {e}"))?;
+    let permit = match crate::gate::acquire() {
+        Ok(p) => p,
+        Err(ticket) => {
+            // The window is full and the grace lapsed: say so in
+            // the member's own protocol, so its client backs off
+            // instead of guessing at silence.
+            let _ = member.write_all(crate::gate::BUSY_REPLY);
+            return Err(format!(
+                "world queue: ticket {ticket} bounced -- 429 spoken"
+            ));
+        }
+    };
+    let _permit = permit;
+    let mut world = match TcpStream::connect_timeout(
+        &(ip, world_port.unwrap_or(dialed)).into(),
+        WORLD_CONNECT_TIMEOUT,
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = member.write_all(WORLD_FAIL_REPLY);
+            return Err(format!("world {host}:{dialed}: {e} -- 502 spoken"));
+        }
+    };
     world.write_all(&head).map_err(|e| e.to_string())?;
     member.set_nonblocking(true).map_err(|e| e.to_string())?;
     world.set_nonblocking(true).map_err(|e| e.to_string())?;
-    splice(member, world);
+    splice_rst_world(member, world);
     Ok(())
 }
 
@@ -101,8 +143,34 @@ fn terminate_tls(
     // The world leg: the terminator's own connection, verified
     // against real roots -- never blindly (2.7 (j)).
     let ip = resolve(&sni)?;
-    let mut world = TcpStream::connect((ip, world_port.unwrap_or(dialed)))
-        .map_err(|e| format!("world {sni}:{dialed}: {e}"))?;
+    let permit = match crate::gate::acquire() {
+        Ok(p) => p,
+        Err(ticket) => {
+            // The member handshake already stands, so the refusal
+            // rides the minted leaf as proper HTTP.
+            let mut tls = rustls::StreamOwned::new(member_conn, member);
+            let _ = tls.write_all(crate::gate::BUSY_REPLY);
+            tls.conn.send_close_notify();
+            let _ = tls.conn.complete_io(&mut tls.sock);
+            return Err(format!(
+                "world queue: ticket {ticket} bounced -- 429 spoken (tls)"
+            ));
+        }
+    };
+    let _permit = permit;
+    let mut world = match TcpStream::connect_timeout(
+        &(ip, world_port.unwrap_or(dialed)).into(),
+        WORLD_CONNECT_TIMEOUT,
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            let mut tls = rustls::StreamOwned::new(member_conn, member);
+            let _ = tls.write_all(WORLD_FAIL_REPLY);
+            tls.conn.send_close_notify();
+            let _ = tls.conn.complete_io(&mut tls.sock);
+            return Err(format!("world {sni}:{dialed}: {e} -- 502 spoken (tls)"));
+        }
+    };
     let client_cfg = rustls::ClientConfig::builder()
         .with_root_certificates(world_roots)
         .with_no_client_auth();
@@ -118,7 +186,7 @@ fn terminate_tls(
 
     member.set_nonblocking(true).map_err(|e| e.to_string())?;
     world.set_nonblocking(true).map_err(|e| e.to_string())?;
-    splice(
+    splice_rst_world(
         rustls::StreamOwned::new(member_conn, member),
         rustls::StreamOwned::new(world_conn, world),
     );
@@ -151,21 +219,39 @@ pub fn upstream_resolver(
         if let Some(ip) = cache.lock().unwrap().get(name, now) {
             return Ok(ip);
         }
+        // Three one-second shots, not one five-second cliff: UDP
+        // drops, and a cold crossing's whole latency budget once
+        // hid inside a single lost query (titanium's 7.7 s cold
+        // call: this cliff plus the guest kernel's SYN ladder).
+        // Worst case shrinks to 3 s; the typical path is
+        // unchanged; each attempt re-sends under a fresh id.
         let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-        sock.set_read_timeout(Some(Duration::from_secs(5)))
+        sock.set_read_timeout(Some(Duration::from_secs(1)))
             .map_err(|e| e.to_string())?;
-        let id = (std::process::id() as u16) ^ (now.elapsed().subsec_nanos() as u16);
-        let q = dns::build_query(id, name);
-        sock.send_to(&q, (upstream, upstream_port))
-            .map_err(|e| e.to_string())?;
-        let mut buf = [0u8; 512];
-        let (n, _) = sock
-            .recv_from(&mut buf)
-            .map_err(|e| format!("upstream: {e}"))?;
-        let (ip, ttl) =
-            dns::parse_answer(&buf[..n], id).ok_or_else(|| format!("no A answer for {name}"))?;
-        cache.lock().unwrap().put(name, ip, ttl, now);
-        Ok(ip)
+        let mut last = String::from("upstream: no attempt");
+        for attempt in 0u16..3 {
+            let id = (std::process::id() as u16)
+                ^ (now.elapsed().subsec_nanos() as u16)
+                ^ attempt.wrapping_mul(0x9e37);
+            let q = dns::build_query(id, name);
+            if let Err(e) = sock.send_to(&q, (upstream, upstream_port)) {
+                last = e.to_string();
+                continue;
+            }
+            let mut buf = [0u8; 512];
+            match sock.recv_from(&mut buf) {
+                Ok((n, _)) => {
+                    let Some((ip, ttl)) = dns::parse_answer(&buf[..n], id) else {
+                        last = format!("no A answer for {name}");
+                        continue;
+                    };
+                    cache.lock().unwrap().put(name, ip, ttl, now);
+                    return Ok(ip);
+                }
+                Err(e) => last = format!("upstream: {e}"),
+            }
+        }
+        Err(last)
     }
 }
 
@@ -215,6 +301,34 @@ pub fn run(cfg: Config) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_resolver_retries_a_dropped_query() {
+        use super::*;
+        let up = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = up.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            // The first query drops on the floor -- the ladder's
+            // second shot must land inside the old single cliff.
+            let _ = up.recv_from(&mut buf);
+            let (n, from) = up.recv_from(&mut buf).unwrap();
+            let (id, q) = crate::dns::parse_query(&buf[..n]).unwrap();
+            let ans = crate::dns::answer_with_self(id, &q, std::net::Ipv4Addr::new(127, 9, 9, 9));
+            up.send_to(&ans, from).unwrap();
+        });
+        let resolve = upstream_resolver(std::net::Ipv4Addr::new(127, 0, 0, 1), port);
+        let t0 = Instant::now();
+        assert_eq!(
+            resolve("cold.test").unwrap(),
+            std::net::Ipv4Addr::new(127, 9, 9, 9)
+        );
+        assert!(
+            t0.elapsed() < Duration::from_millis(2500),
+            "the ladder took {:?}",
+            t0.elapsed()
+        );
+    }
+
     use super::*;
     use crate::ca;
     use std::io::Read;

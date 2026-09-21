@@ -28,9 +28,12 @@ graph LR
     LG -->|"tailed"| B
     B -->|"stream Event"| E
     E -->|"stream Decision"| B
-    B -->|"appends Decisions; lands the judge's<br/>membrane-memory (N.F.7)"| VD
+    MM["N.F.7 membrane-memory"]
+    B -->|"appends Decisions"| VD
+    B -->|"lands the judge's standing memory<br/>(never the verdict)"| MM
     B -->|"the kick, SIGWINCH"| M1
     VD -->|"read on the kick"| M1
+    MM -->|"read on the kick"| M1
 ```
 
 The judge is a gRPC rule engine, whoever implements it, and the
