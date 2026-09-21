@@ -378,6 +378,12 @@ pub fn dispatch(exit: VcpuExit, devices: &mut Devices) -> RunResult {
             RunResult::Shutdown
         }
         VcpuExit::Intr | VcpuExit::IrqWindowOpen => RunResult::Continue,
-        _ => RunResult::Continue,
+        // An exit this VMM does not handle is worth its name in the
+        // log: a silent Continue here once made a dying guest's last
+        // moments unreadable from vmm.log.
+        other => {
+            cella_libs::logln!("cella: unhandled vcpu exit: {other:?}");
+            RunResult::Continue
+        }
     }
 }

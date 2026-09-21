@@ -653,6 +653,24 @@ fn run_loop(
                 match vcpu::dispatch(exit, &mut devices) {
                     vcpu::RunResult::Continue | vcpu::RunResult::Halted => {}
                     vcpu::RunResult::Shutdown => {
+                        // The last breath: under reboot=t a deliberate
+                        // reboot and a guest crash arrive as the same
+                        // triple fault, so the exit logs the vCPU's
+                        // final state -- rip and any pending exception
+                        // -- and the reader tells a clean reboot (rip
+                        // in the kernel's restart path, no exception)
+                        // from a death (a fault's rip, an exception
+                        // pending). A dead guest must not read as a
+                        // completed one.
+                        let rip = vcpu_fd.get_regs().map(|r| r.rip).unwrap_or(0);
+                        let exc = vcpu_fd
+                            .get_vcpu_events()
+                            .map(|e| (e.exception.nr, e.exception.injected, e.exception.pending))
+                            .unwrap_or((0, 0, 0));
+                        cella_libs::logln!(
+                            "cella: guest exit: shutdown (triple fault or reboot) rip={rip:#x} exception nr={} injected={} pending={}",
+                            exc.0, exc.1, exc.2
+                        );
                         cella_libs::logln!("cella: guest requested shutdown");
                         std::process::exit(0);
                     }
