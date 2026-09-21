@@ -24,7 +24,7 @@ M="$CELLA_HOME/machines/$VM"
 OUT=$(mktemp -d /tmp/cella-extract-out.XXXXXX)
 teardown() {
     "$BIN" stop "$VM" >/dev/null 2>&1 || true
-    for m in "$VM" "$VM-extractor"; do
+    for m in "$VM" "$VM-extractor" holey holey-extractor; do
         p=$(cat "$CELLA_HOME/machines/$m/pid" 2>/dev/null || true)
         [ -n "$p" ] && kill -9 "$p" 2>/dev/null || true
     done
@@ -93,7 +93,45 @@ say "step 6: a running machine refuses the verb"
 "$BIN" stop "$VM" >/dev/null
 echo "  running is the one refusal, held"
 
-say "step 7: the reads are witnessed in the machine's book"
+say "step 7: a sparse file costs its allocated bytes, not its apparent size"
+# The pin on the sparse win: a 1 GiB-apparent, ~4 MiB-allocated
+# file must leave as a tar near the allocated size. Under busybox
+# tar (no SEEK_HOLE) this step drowns in a gigabyte of zeros and
+# the size assertion fails -- the regression this step exists for.
+# Writing the file takes a console, so the lab binary boots the
+# machine; the guest's own reboot ends it (the reboot=t contract).
+LAB=target/lab/cella
+if [ -f "$LAB" ]; then
+    VM2=holey
+    M2="$CELLA_HOME/machines/$VM2"
+    "$LAB" create "$VM2" >/dev/null || { echo "FAIL: create $VM2"; exit 1; }
+    "$LAB" start "$VM2" >/dev/null || { echo "FAIL: start $VM2"; exit 1; }
+    P2=$(cat "$M2/pid")
+    sleep 5
+    # dd alone makes the hole: 4 MiB of data seeked to the last
+    # 4 MiB of a 1 GiB span -- everything before it is unallocated.
+    (printf 'dd if=/dev/urandom of=/holey bs=1M count=4 seek=1020 && sync && reboot -f\n'; sleep 3) \
+        | timeout 30 "$LAB" enter "$VM2" >/dev/null 2>&1 || true
+    DEADLINE=$((SECONDS + 30))
+    while kill -0 "$P2" 2>/dev/null; do
+        [ $SECONDS -lt $DEADLINE ] || { echo "FAIL: the sparse machine never exited its reboot"; exit 1; }
+        sleep 0.5
+    done
+    "$BIN" extract "$VM2" /holey > "$OUT/holey.tar" \
+        || { echo "FAIL: extract /holey returned nonzero"; exit 1; }
+    HTAR=$(wc -c < "$OUT/holey.tar")
+    [ "$HTAR" -lt $((32 * 1024 * 1024)) ] \
+        || { echo "FAIL: the sparse file's tar is $HTAR bytes -- the holes were read as data"; exit 1; }
+    tar -xf "$OUT/holey.tar" -C "$OUT" || { echo "FAIL: the sparse tar does not extract"; exit 1; }
+    HAPP=$(stat -c %s "$OUT/holey")
+    [ "$HAPP" -eq $((1024 * 1024 * 1024)) ] \
+        || { echo "FAIL: the restored file's apparent size is $HAPP, want 1 GiB"; exit 1; }
+    echo "  1 GiB apparent left as a $HTAR-byte tar, and restores to 1 GiB"
+else
+    echo "  SKIP: $LAB not built -- the sparse pin needs the lab console"
+fi
+
+say "step 8: the reads are witnessed in the machine's book"
 COUNT=$("$BIN" --dump-ledger "$M/audit" 2>/dev/null | grep -c "verb=extract")
 [ "$COUNT" -ge 4 ] \
     || { echo "FAIL: expected >=4 extract entries in the audit book, found $COUNT"; exit 1; }

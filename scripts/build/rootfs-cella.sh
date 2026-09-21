@@ -33,11 +33,16 @@ if [ -b /dev/vdc ] && grep -q 'cella_extract=' /proc/cmdline; then
     P=$(sed -n 's/.*cella_extract=\([^ ]*\).*/\1/p' /proc/cmdline)
     T='cella-extract-0 the job died mid-tar'
     if [ -n "$P" ] && [ -e "/rock$P" ]; then
-        LEN=$(tar -cf - -C /rock ".$P" 2>/dev/null | wc -c)
-        SUM=$(tar -cf - -C /rock ".$P" 2>/dev/null | sha256sum | cut -d' ' -f1)
+        # GNU tar walks holes (SEEK_HOLE) so a sparse twin costs its
+        # allocated bytes, not its apparent size; busybox tar is the
+        # fallback and reads everything. Same command all three
+        # passes: the sparse map of a read-only source is stable.
+        if [ -x /bin/gtar ]; then evtar() { /bin/gtar --sparse -cf - -C /rock ".$P" 2>/dev/null; }
+        else evtar() { tar -cf - -C /rock ".$P" 2>/dev/null; }; fi
+        LEN=$(evtar | wc -c)
+        SUM=$(evtar | sha256sum | cut -d' ' -f1)
         if [ "$LEN" -gt 0 ] \
-            && tar -cf - -C /rock ".$P" 2>/dev/null \
-               | dd of=/dev/vdc bs=512 seek=1 conv=notrunc 2>/dev/null; then
+            && evtar | dd of=/dev/vdc bs=512 seek=1 conv=notrunc 2>/dev/null; then
             T="cella-extract-1 $LEN $SUM"
         fi
     else
