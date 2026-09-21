@@ -55,6 +55,15 @@ grep -q "cella: guest requested shutdown" "$M/vmm.log" || {
 }
 echo "  the word is on the record: guest requested shutdown"
 
+# The forensic line's stable token: a completed reboot=t triple
+# fault reads exit=reset, and titanium's books-level triage greps
+# exactly this.
+grep -q "cella: guest exit: shutdown exit=reset" "$M/vmm.log" || {
+    echo "FAIL: the forensic line lacks exit=reset for a completed reboot"
+    exit 1
+}
+echo "  the forensic token stands: exit=reset"
+
 # The books recover: the pid on disk names a dead process, so the
 # machine is not running, and destroy needs no stop first.
 "$BIN" destroy "$VM" >/dev/null || { echo "FAIL: destroy refused the dead machine"; exit 1; }
