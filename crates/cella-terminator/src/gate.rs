@@ -134,6 +134,34 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
+    fn the_gate_width_matches_the_baked_port_range() {
+        // Two hand-written eights must agree forever: the gate's
+        // permits and the image's ip_local_port_range. The width
+        // is a constant of the design (eight enumerable reply
+        // destinations; it scales out, never wider), so a change
+        // to either number without the other is a bug this test
+        // names.
+        let init = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/build/rootfs-terminator.sh"
+        ))
+        .expect("the terminator init script");
+        let line = init
+            .lines()
+            .find(|l| l.contains("ip_local_port_range"))
+            .expect("the port range line");
+        let mut nums = line
+            .split_whitespace()
+            .filter_map(|w| w.trim_matches('"').parse::<u32>().ok());
+        let (lo, hi) = (nums.next().unwrap(), nums.next().unwrap());
+        assert_eq!(
+            hi - lo + 1,
+            WORLD_PERMITS,
+            "the baked range {lo}-{hi} disagrees with WORLD_PERMITS"
+        );
+    }
+
+    #[test]
     fn a_window_wide_burst_all_seats() {
         let g = Gate::new();
         let permits: Vec<_> = (0..WORLD_PERMITS)
