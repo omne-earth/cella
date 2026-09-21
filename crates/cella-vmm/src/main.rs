@@ -667,8 +667,21 @@ fn run_loop(
                             .get_vcpu_events()
                             .map(|e| (e.exception.nr, e.exception.injected, e.exception.pending))
                             .unwrap_or((0, 0, 0));
+                        // exit=reset is the completed triple fault's
+                        // signature (rip at the reset vector) -- a
+                        // deliberate reboot=t and a crash both land
+                        // here, indistinguishable by design; exit=fault
+                        // is a shape that never reached reset. The
+                        // token is stable for books-level triage.
+                        let token = if rip == 0xfff0 || rip == 0xffff_fff0 {
+                            "reset"
+                        } else if exc.0 != 0 || exc.1 != 0 || exc.2 != 0 {
+                            "fault"
+                        } else {
+                            "unknown"
+                        };
                         cella_libs::logln!(
-                            "cella: guest exit: shutdown (triple fault or reboot) rip={rip:#x} exception nr={} injected={} pending={}",
+                            "cella: guest exit: shutdown exit={token} rip={rip:#x} exception nr={} injected={} pending={}",
                             exc.0, exc.1, exc.2
                         );
                         cella_libs::logln!("cella: guest requested shutdown");
