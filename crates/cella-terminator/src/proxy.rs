@@ -183,21 +183,39 @@ pub fn upstream_resolver(
         if let Some(ip) = cache.lock().unwrap().get(name, now) {
             return Ok(ip);
         }
+        // Three one-second shots, not one five-second cliff: UDP
+        // drops, and a cold crossing's whole latency budget once
+        // hid inside a single lost query (titanium's 7.7 s cold
+        // call: this cliff plus the guest kernel's SYN ladder).
+        // Worst case shrinks to 3 s; the typical path is
+        // unchanged; each attempt re-sends under a fresh id.
         let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-        sock.set_read_timeout(Some(Duration::from_secs(5)))
+        sock.set_read_timeout(Some(Duration::from_secs(1)))
             .map_err(|e| e.to_string())?;
-        let id = (std::process::id() as u16) ^ (now.elapsed().subsec_nanos() as u16);
-        let q = dns::build_query(id, name);
-        sock.send_to(&q, (upstream, upstream_port))
-            .map_err(|e| e.to_string())?;
-        let mut buf = [0u8; 512];
-        let (n, _) = sock
-            .recv_from(&mut buf)
-            .map_err(|e| format!("upstream: {e}"))?;
-        let (ip, ttl) =
-            dns::parse_answer(&buf[..n], id).ok_or_else(|| format!("no A answer for {name}"))?;
-        cache.lock().unwrap().put(name, ip, ttl, now);
-        Ok(ip)
+        let mut last = String::from("upstream: no attempt");
+        for attempt in 0u16..3 {
+            let id = (std::process::id() as u16)
+                ^ (now.elapsed().subsec_nanos() as u16)
+                ^ attempt.wrapping_mul(0x9e37);
+            let q = dns::build_query(id, name);
+            if let Err(e) = sock.send_to(&q, (upstream, upstream_port)) {
+                last = e.to_string();
+                continue;
+            }
+            let mut buf = [0u8; 512];
+            match sock.recv_from(&mut buf) {
+                Ok((n, _)) => {
+                    let Some((ip, ttl)) = dns::parse_answer(&buf[..n], id) else {
+                        last = format!("no A answer for {name}");
+                        continue;
+                    };
+                    cache.lock().unwrap().put(name, ip, ttl, now);
+                    return Ok(ip);
+                }
+                Err(e) => last = format!("upstream: {e}"),
+            }
+        }
+        Err(last)
     }
 }
 
@@ -247,6 +265,34 @@ pub fn run(cfg: Config) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_resolver_retries_a_dropped_query() {
+        use super::*;
+        let up = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = up.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            // The first query drops on the floor -- the ladder's
+            // second shot must land inside the old single cliff.
+            let _ = up.recv_from(&mut buf);
+            let (n, from) = up.recv_from(&mut buf).unwrap();
+            let (id, q) = crate::dns::parse_query(&buf[..n]).unwrap();
+            let ans = crate::dns::answer_with_self(id, &q, std::net::Ipv4Addr::new(127, 9, 9, 9));
+            up.send_to(&ans, from).unwrap();
+        });
+        let resolve = upstream_resolver(std::net::Ipv4Addr::new(127, 0, 0, 1), port);
+        let t0 = Instant::now();
+        assert_eq!(
+            resolve("cold.test").unwrap(),
+            std::net::Ipv4Addr::new(127, 9, 9, 9)
+        );
+        assert!(
+            t0.elapsed() < Duration::from_millis(2500),
+            "the ladder took {:?}",
+            t0.elapsed()
+        );
+    }
+
     use super::*;
     use crate::ca;
     use std::io::Read;
