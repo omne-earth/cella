@@ -336,14 +336,6 @@ pub fn connect_edge_nic(
 /// copy the rootfs flavor to the machine's own disk, and write the
 /// manifest. No process starts. The manifest records the resolved tap
 /// name, thus two machines cannot share one tap.
-/// The largest --mem-mb a machine may take: guest RAM is one flat
-/// region from zero and the virtio-MMIO windows sit at 0xd0000000,
-/// so 3328 MiB is the wall (boundary inclusive -- RAM may end
-/// exactly where the windows begin). A split high-memory layout
-/// would move this; until one exists, the door refuses what the
-/// machine cannot boot.
-pub const MAX_MEM_MB: u64 = 3328;
-
 pub fn create(m: &Manifest) -> Result<(), String> {
     if !valid_name(&m.name) {
         return Err(format!(
@@ -360,19 +352,6 @@ pub fn create(m: &Manifest) -> Result<(), String> {
         return Err("a machine cannot carry a scratch disk and a nic together \
              (the scratch shares nic0's IRQ; an extractor is airgapped)"
             .to_string());
-    }
-    // The memory ceiling, enforced at the door: guest RAM is one
-    // flat region from zero, and the virtio-MMIO windows sit at
-    // 0xd0000000 (3328 MiB). RAM past that shadows the devices --
-    // the kernel reads zeros where vda's window should be and
-    // panics unable to mount root. Refusing here names the wall;
-    // booting into a panic loop does not.
-    if m.mem_mb > MAX_MEM_MB {
-        return Err(format!(
-            "mem_mb {} exceeds the supported maximum {MAX_MEM_MB} \
-             (guest RAM would shadow the virtio windows at 0xd0000000)",
-            m.mem_mb
-        ));
     }
     let dir = machine_dir(&m.name);
     if dir.exists() {

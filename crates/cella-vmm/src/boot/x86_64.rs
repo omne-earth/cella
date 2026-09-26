@@ -112,13 +112,21 @@ pub fn load_kernel(
     params.hdr.ramdisk_image = 0;
     params.hdr.ramdisk_size = 0;
 
+    // The map mirrors the mapping (memory.rs): low RAM up to the
+    // hole at LOW_RAM_MAX, where the virtio windows live, and any
+    // remainder at 4 GiB. A map that told the kernel the hole was
+    // RAM would let it allocate pages the devices own.
+    let low_top = guest_mem_size.min(crate::memory::LOW_RAM_MAX);
     add_e820_entry(&mut params, 0, HIMEM_START, E820_RAM);
-    add_e820_entry(
-        &mut params,
-        HIMEM_START,
-        guest_mem_size - HIMEM_START,
-        E820_RAM,
-    );
+    add_e820_entry(&mut params, HIMEM_START, low_top - HIMEM_START, E820_RAM);
+    if guest_mem_size > crate::memory::LOW_RAM_MAX {
+        add_e820_entry(
+            &mut params,
+            crate::memory::HIGH_RAM_BASE,
+            guest_mem_size - crate::memory::LOW_RAM_MAX,
+            E820_RAM,
+        );
+    }
 
     let boot_params = BootParams::new(&params, GuestAddress(ZERO_PAGE_START));
     LinuxBootConfigurator::write_bootparams(&boot_params, mem).map_err(Error::Configurator)?;

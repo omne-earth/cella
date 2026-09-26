@@ -18,6 +18,15 @@ use vm_memory::{GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion};
 
 pub const GUEST_PHYS_START: u64 = 0x0;
 
+/// The PC memory hole. Low RAM ends where the virtio-MMIO windows
+/// begin (0xd0000000, matching main.rs's BLOCK_MMIO_BASE); memory
+/// past the hole lives at 4 GiB, exactly as physical machines lay
+/// it out. The RAM file stays one contiguous image -- low bytes
+/// then high bytes -- so the freeze format does not change: the
+/// split is a property of the mapping, never of the bytes.
+pub const LOW_RAM_MAX: u64 = 0xd000_0000;
+pub const HIGH_RAM_BASE: u64 = 0x1_0000_0000;
+
 /// Open (creating if needed) the RAM file, size it, and map it MAP_SHARED
 /// at guest physical address 0.
 ///
@@ -47,12 +56,28 @@ pub fn open_ram_file(path: &Path, size: u64, create: bool) -> io::Result<(File, 
     // vm-memory's mmap backend takes ownership of an fd via FileOffset and
     // maps MAP_SHARED, which is exactly the "RAM is the freeze image"
     // property we want: writes the guest makes go straight to the file.
+    // Guests larger than the hole split: file bytes past LOW_RAM_MAX
+    // map at HIGH_RAM_BASE, and the hole belongs to the devices.
+    let mut regions = Vec::new();
+    let low = size.min(LOW_RAM_MAX);
     let file_offset = vm_memory::FileOffset::new(file.try_clone()?, 0);
-    let region = vm_memory::mmap::MmapRegion::from_file(file_offset, size as usize)
-        .map_err(|e| io::Error::other(format!("mmap region: {e}")))?;
-    let guest_region = vm_memory::GuestRegionMmap::new(region, GuestAddress(GUEST_PHYS_START))
-        .map_err(|e| io::Error::other(format!("guest region: {e}")))?;
-    let mem = GuestMemoryMmap::from_regions(vec![guest_region])
+    let region = vm_memory::mmap::MmapRegion::from_file(file_offset, low as usize)
+        .map_err(|e| io::Error::other(format!("mmap low region: {e}")))?;
+    regions.push(
+        vm_memory::GuestRegionMmap::new(region, GuestAddress(GUEST_PHYS_START))
+            .map_err(|e| io::Error::other(format!("low region: {e}")))?,
+    );
+    if size > LOW_RAM_MAX {
+        let high = size - LOW_RAM_MAX;
+        let file_offset = vm_memory::FileOffset::new(file.try_clone()?, LOW_RAM_MAX);
+        let region = vm_memory::mmap::MmapRegion::from_file(file_offset, high as usize)
+            .map_err(|e| io::Error::other(format!("mmap high region: {e}")))?;
+        regions.push(
+            vm_memory::GuestRegionMmap::new(region, GuestAddress(HIGH_RAM_BASE))
+                .map_err(|e| io::Error::other(format!("high region: {e}")))?,
+        );
+    }
+    let mem = GuestMemoryMmap::from_regions(regions)
         .map_err(|e| io::Error::other(format!("guest memory: {e}")))?;
 
     Ok((file, mem))
