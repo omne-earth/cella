@@ -527,8 +527,7 @@ fn main() {
         });
         let boot_info = boot::load_kernel(&mem, &kernel, &args.cmdline, mem_size_bytes)
             .unwrap_or_else(|e| fatal(&format!("loading kernel: {e:?}")));
-        boot::build_page_tables(&mem, mem_size_bytes)
-            .unwrap_or_else(|e| fatal(&format!("page tables: {e:?}")));
+        boot::build_page_tables(&mem).unwrap_or_else(|e| fatal(&format!("page tables: {e:?}")));
         // enable_long_mode must run before setup_gdt -- see its doc
         // comment for why KVM rejects the other order.
         boot::enable_long_mode(&vcpu_fd)
