@@ -390,6 +390,15 @@ smoke-boot: build-lab build golden
 
 ## Create -> start -> freeze -> verify sidecar -> thaw -> one-shot check, then
 ## the clock probe
+## The guest memory line: each size pins a wall the VMM once hit
+## (flat boundary, first split, the titanium 4096 repro, the
+## page-table wall, a deep bank across the freeze)
+memory-m%: build-lab golden
+	$(LOG)
+	$(SCRIPTS)/test/memory.sh m$*
+
+smoke-memory: memory-m3328 memory-m3400 memory-m4096 memory-m4608 memory-m6144
+
 ## A guest-initiated reset ends the VMM: exit 0, on the record
 smoke-reboot: build golden
 	$(LOG)
@@ -750,7 +759,7 @@ smoke-release: smoke-thaw smoke-machine smoke-rootless \
 
 ## The whole battery: the no-KVM checks first (fail fast), then the dark
 ## half against the field flavor, then the console half against the lab
-smoke: test smoke-release smoke-debug smoke-reboot smoke-membrane-memory smoke-tls-terminator
+smoke: test smoke-release smoke-debug smoke-reboot smoke-memory smoke-membrane-memory smoke-tls-terminator
 	$(LOG)
 	echo ""
 	echo "=== make smoke: done (see above for any SKIPs) ==="
@@ -781,7 +790,7 @@ device-state-ac3: build-lab golden
 
 ## AC4: the verdict is external -- the request toward a world that does not
 ## exist parks and freezes; the world grows while the machine sleeps; the
-## release lands the same request (the world-ratchet gate)
+## release lands the same request (the freeze-ratchet gate)
 device-state-ac4: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac4

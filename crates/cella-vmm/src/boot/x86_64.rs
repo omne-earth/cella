@@ -46,7 +46,7 @@ const X86_CR4_PAE: u64 = 1 << 5;
 const EFER_LME: u64 = 1 << 8; // long mode enable
 const EFER_LMA: u64 = 1 << 10; // long mode active
 
-const MAX_ADDRESSABLE_1G_PAGES: u64 = 4; // identity map up to 4 GiB of guest RAM
+const MAX_ADDRESSABLE_1G_PAGES: u64 = 4; // boot tables cover a fixed first 4 GiB
 
 #[allow(dead_code)] // fields read via {:?} in error messages, not field access
 #[derive(Debug)]
@@ -56,7 +56,6 @@ pub enum Error {
     Configurator(linux_loader::configurator::Error),
     Cmdline(linux_loader::cmdline::Error),
     Kvm(kvm_ioctls::Error),
-    MemoryTooLarge,
     GuestMemory,
 }
 
@@ -112,13 +111,21 @@ pub fn load_kernel(
     params.hdr.ramdisk_image = 0;
     params.hdr.ramdisk_size = 0;
 
+    // The map mirrors the mapping (memory.rs): low RAM up to the
+    // hole at LOW_RAM_MAX, where the virtio windows live, and any
+    // remainder at 4 GiB. A map that told the kernel the hole was
+    // RAM would let it allocate pages the devices own.
+    let low_top = guest_mem_size.min(crate::memory::LOW_RAM_MAX);
     add_e820_entry(&mut params, 0, HIMEM_START, E820_RAM);
-    add_e820_entry(
-        &mut params,
-        HIMEM_START,
-        guest_mem_size - HIMEM_START,
-        E820_RAM,
-    );
+    add_e820_entry(&mut params, HIMEM_START, low_top - HIMEM_START, E820_RAM);
+    if guest_mem_size > crate::memory::LOW_RAM_MAX {
+        add_e820_entry(
+            &mut params,
+            crate::memory::HIGH_RAM_BASE,
+            guest_mem_size - crate::memory::LOW_RAM_MAX,
+            E820_RAM,
+        );
+    }
 
     let boot_params = BootParams::new(&params, GuestAddress(ZERO_PAGE_START));
     LinuxBootConfigurator::write_bootparams(&boot_params, mem).map_err(Error::Configurator)?;
@@ -245,14 +252,16 @@ fn kvm_segment_from_gdt(entry: u64, selector: u16) -> kvm_segment {
     }
 }
 
-/// Build identity-mapped page tables (2 MiB pages) covering `mem_size`
-/// bytes. Pure function of guest memory -- no vCPU involved -- so it's
+/// Build identity-mapped page tables (2 MiB pages) covering a fixed
+/// first 4 GiB. Boot tables exist only to get the kernel's first
+/// instructions running -- the image, zero page, and cmdline all sit
+/// under 1 GiB, and the kernel builds its own tables from the E820
+/// map -- so their reach must not scale with guest memory: a high
+/// bank at 4 GiB and beyond boots through these same four tables.
+/// Pure function of guest memory -- no vCPU involved -- so it's
 /// unit-testable without KVM; see the `tests` module below.
-pub fn build_page_tables(mem: &GuestMemoryMmap, mem_size: u64) -> Result<(), Error> {
-    let gib = mem_size.div_ceil(1 << 30).max(1);
-    if gib > MAX_ADDRESSABLE_1G_PAGES {
-        return Err(Error::MemoryTooLarge);
-    }
+pub fn build_page_tables(mem: &GuestMemoryMmap) -> Result<(), Error> {
+    let gib = MAX_ADDRESSABLE_1G_PAGES;
 
     // PML4[0] -> PDPTE table
     write_pte(mem, PML4_START, 0, PDPTE_START | 0x03)?;
@@ -360,7 +369,7 @@ mod tests {
     fn page_tables_identity_map_first_page() {
         // 1 GiB guest: exercises exactly one PDPTE/PDE table pair.
         let mem = test_mem(1 << 30);
-        build_page_tables(&mem, 1 << 30).unwrap();
+        build_page_tables(&mem).unwrap();
 
         let pml4_0: u64 = mem.read_obj(GuestAddress(PML4_START)).unwrap();
         assert_eq!(pml4_0 & 0x03, 0x03, "PML4[0] present+writable");
@@ -391,11 +400,10 @@ mod tests {
 
     #[test]
     fn page_tables_span_multiple_gib() {
-        // 2.5 GiB guest must round up to 3 GiB-worth of PDE tables and
-        // populate a second PDPTE entry.
+        // The fixed map populates every PDPTE entry; spot-check the
+        // second table and the third GiB.
         let mem = test_mem(3 << 30);
-        let mem_size = (2 << 30) + (512 << 20); // 2.5 GiB
-        build_page_tables(&mem, mem_size).unwrap();
+        build_page_tables(&mem).unwrap();
 
         let pdpte_1: u64 = mem.read_obj(GuestAddress(PDPTE_START + 8)).unwrap();
         let expected_pde_table_1 = PDE_START + 0x1000;
@@ -409,12 +417,15 @@ mod tests {
     }
 
     #[test]
-    fn page_tables_reject_oversized_memory() {
+    fn page_tables_cover_a_fixed_four_gib() {
+        // Coverage must not scale with guest size: a small guest still
+        // gets all four PDPTE entries, and a guest with a high bank at
+        // 4 GiB boots through these same tables.
         let mem = test_mem(1 << 20);
-        let too_big = (MAX_ADDRESSABLE_1G_PAGES + 1) << 30;
-        assert!(matches!(
-            build_page_tables(&mem, too_big),
-            Err(Error::MemoryTooLarge)
-        ));
+        build_page_tables(&mem).unwrap();
+        for g in 0..MAX_ADDRESSABLE_1G_PAGES {
+            let pdpte: u64 = mem.read_obj(GuestAddress(PDPTE_START + g * 8)).unwrap();
+            assert_eq!(pdpte & !0xfff, PDE_START + g * 0x1000);
+        }
     }
 }

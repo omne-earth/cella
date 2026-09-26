@@ -243,7 +243,7 @@ ac3)
 	"$BIN" destroy "$VM" >/dev/null
 	;;
 ac4)
-	echo "AC4: the verdict is external (the world-ratchet gate). Every egress"
+	echo "AC4: the verdict is external (the freeze-ratchet gate). Every egress"
 	echo "frame parks; the test, as the stand-in engine, renders the verdicts."
 	HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
 	command -v python3 >/dev/null || { echo "SKIP: python3 not found (the stand-in endpoints)"; exit 0; }

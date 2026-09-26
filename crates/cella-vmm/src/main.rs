@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use kvm_bindings::{kvm_pit_config, kvm_userspace_memory_region};
 use kvm_ioctls::Kvm;
-use vm_memory::{GuestAddress, GuestMemory};
+use vm_memory::GuestMemory;
 
 use devices::serial::SerialDevice;
 use devices::virtio::block::Block;
@@ -262,22 +262,23 @@ fn main() {
         .unwrap_or_else(|e| fatal(&format!("guest RAM: {e}")));
     memory::harden_ram(&mem);
 
-    let base_ptr = mem
-        .find_region(GuestAddress(0))
-        .expect("region at guest address 0")
-        .as_ptr() as u64;
-    // SAFETY: `mem` covers exactly [0, mem_size_bytes) at `base_ptr`,
-    // backed by `_ram_file`, which is kept alive for the whole process
+    // One KVM slot per mapped region: low RAM at zero, and past the
+    // hole (memory.rs LOW_RAM_MAX, where the virtio windows live)
+    // the remainder at 4 GiB -- the PC layout. SAFETY: each region
+    // is backed by `_ram_file`, kept alive for the whole process
     // lifetime by staying in this function's scope.
-    unsafe {
-        vm.set_user_memory_region(kvm_userspace_memory_region {
-            slot: 0,
-            guest_phys_addr: 0,
-            memory_size: mem_size_bytes,
-            userspace_addr: base_ptr,
-            flags: 0,
-        })
-        .unwrap_or_else(|e| fatal(&format!("KVM_SET_USER_MEMORY_REGION: {e}")));
+    for (slot, region) in mem.iter().enumerate() {
+        use vm_memory::GuestMemoryRegion;
+        unsafe {
+            vm.set_user_memory_region(kvm_userspace_memory_region {
+                slot: slot as u32,
+                guest_phys_addr: vm_memory::Address::raw_value(&region.start_addr()),
+                memory_size: region.len(),
+                userspace_addr: region.as_ptr() as u64,
+                flags: 0,
+            })
+            .unwrap_or_else(|e| fatal(&format!("KVM_SET_USER_MEMORY_REGION: {e}")));
+        }
     }
 
     let cpuid = vcpu::supported_cpuid(&kvm).unwrap_or_else(|e| fatal(&format!("cpuid: {e:?}")));
@@ -409,10 +410,10 @@ fn main() {
         match mode.as_str() {
             "off" => {}
             "ept" => {
-                prefault_ept(&vcpu_fd, mem_size_bytes);
+                prefault_ept_regions(&vcpu_fd, &mem);
             }
             _ => {
-                prefault_ept(&vcpu_fd, mem_size_bytes);
+                prefault_ept_regions(&vcpu_fd, &mem);
                 warm::warm_stage2(&vm, &mut vcpu_fd, mem_size_bytes);
             }
         }
@@ -526,8 +527,7 @@ fn main() {
         });
         let boot_info = boot::load_kernel(&mem, &kernel, &args.cmdline, mem_size_bytes)
             .unwrap_or_else(|e| fatal(&format!("loading kernel: {e:?}")));
-        boot::build_page_tables(&mem, mem_size_bytes)
-            .unwrap_or_else(|e| fatal(&format!("page tables: {e:?}")));
+        boot::build_page_tables(&mem).unwrap_or_else(|e| fatal(&format!("page tables: {e:?}")));
         // enable_long_mode must run before setup_gdt -- see its doc
         // comment for why KVM rejects the other order.
         boot::enable_long_mode(&vcpu_fd)
@@ -1515,7 +1515,18 @@ fn fatal(msg: &str) -> ! {
     std::process::exit(1);
 }
 
-fn prefault_ept(vcpu: &kvm_ioctls::VcpuFd, size: u64) {
+fn prefault_ept_regions(vcpu: &kvm_ioctls::VcpuFd, mem: &vm_memory::GuestMemoryMmap) {
+    use vm_memory::GuestMemoryRegion;
+    for region in mem.iter() {
+        prefault_ept(
+            vcpu,
+            vm_memory::Address::raw_value(&region.start_addr()),
+            region.len(),
+        );
+    }
+}
+
+fn prefault_ept(vcpu: &kvm_ioctls::VcpuFd, gpa: u64, size: u64) {
     use std::os::fd::AsRawFd;
     #[repr(C)]
     struct KvmPreFaultMemory {
@@ -1528,7 +1539,7 @@ fn prefault_ept(vcpu: &kvm_ioctls::VcpuFd, size: u64) {
     const KVM_PRE_FAULT_MEMORY: libc::c_ulong = 0xc040_aed5;
     let t = std::time::Instant::now();
     let mut arg = KvmPreFaultMemory {
-        gpa: 0,
+        gpa,
         size,
         flags: 0,
         padding: [0; 5],
