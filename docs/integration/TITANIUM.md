@@ -73,7 +73,9 @@ filesystem.
   ```
 
 - Resource keys (`mem_mb`, `storage_mb`) -- create flags and the
-  ext4 sizing at conversion.
+  ext4 sizing at conversion. `mem_mb` past 3328 is supported: the
+  remainder maps as a high bank at guest-phys 4 GiB, above the
+  MMIO hole (docs/DEVICE-STATE.md, "The guest address map").
 
   ```sh
   cella create trial --kernel task --rootfs <task-name> --mem-mb 2048 --net none

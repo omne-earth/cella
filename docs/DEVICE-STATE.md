@@ -30,6 +30,18 @@ Until AC1 landed, the shell gate (now `make smoke-shell`) ran its
 guest with ROOT=ro, and a
 thawed guest lived on what its RAM held at the freeze instant.
 
+## The guest address map
+
+The layout is the PC's own. Low RAM runs from zero to the hole at
+`0xd0000000` (3328 MiB), where the virtio-MMIO windows live --
+4 KiB per device, IRQs per docs of each. A machine larger than the
+hole carries the remainder as a high bank at guest-phys 4 GiB
+(`0x100000000`); the E820 map names both banks and leaves the hole
+to the devices. `--mem-mb` therefore has no layout ceiling -- the
+bound is what the host can back. The RAM file stays one contiguous
+image (low bytes then high bytes): the split is a property of the
+mapping, never of the bytes, and the freeze format is unchanged.
+
 ## What the device holds, and what RAM holds
 
 The rings themselves live in guest RAM, and the freeze already
