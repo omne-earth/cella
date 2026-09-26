@@ -244,6 +244,18 @@ fn main() {
         args.mem_mb * 1024 * 1024
     };
 
+    // The second door: a hand-rolled invocation gets the same wall
+    // as create. RAM covering BLOCK_MMIO_BASE shadows every virtio
+    // window (KVM serves slots before MMIO exits) and the guest
+    // panics unable to find its disk.
+    if mem_size_bytes > BLOCK_MMIO_BASE {
+        fatal(&format!(
+            "guest RAM of {} bytes would shadow the virtio windows at {BLOCK_MMIO_BASE:#x} -- the maximum is {} MiB",
+            mem_size_bytes,
+            BLOCK_MMIO_BASE / (1024 * 1024)
+        ));
+    }
+
     let kvm = Kvm::new().unwrap_or_else(|e| fatal(&format!("open /dev/kvm: {e}")));
     let vm = kvm
         .create_vm()

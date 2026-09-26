@@ -781,7 +781,7 @@ device-state-ac3: build-lab golden
 
 ## AC4: the verdict is external -- the request toward a world that does not
 ## exist parks and freezes; the world grows while the machine sleeps; the
-## release lands the same request (the world-ratchet gate)
+## release lands the same request (the freeze-ratchet gate)
 device-state-ac4: build-lab golden
 	$(LOG)
 	$(SCRIPTS)/test/device-state.sh ac4

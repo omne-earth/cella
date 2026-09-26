@@ -221,14 +221,14 @@ target (`make device-state-ac1` .. `device-state-ac5`), and
 | **AC1 -- the disk survives the thaw** | The sidecar carries the transport state, the thaw restores it before the first KVM_RUN, and `make smoke-shell` runs on a rw root. The gate writes a file, freezes, thaws, reads it back, and syncs. |
 | **AC2 -- the network survives the thaw** | The transport restore covers virtio-net, and the machine-lifetime translator holds the machine's flows across the freeze. The gate knocks, decides the guest's parked answer, freezes, thaws, and decides the answer of the new epoch: the same nic, the same translator, a fresh epoch's judgments. |
 | **AC3 -- the in-flight layer is exact** | The park point sits in the net TX handler, the open verb arms the membrane, the sidecar carries the parked frames with their descriptor head indices, and the operations survive the thaw as held -- ids rebound through the ledger. A decision by id releases each one, in park order. The gate walks a fetch against the host's stand-in endpoint, one decision per frame, deterministically: a freeze loses in-flight sender segments, thus the exactness leg stays local and the true-world leg is AC5. |
-| **AC4 -- the verdict is external** | Every egress frame parks under the open valve into an operation with an id, the park reports its destination, and the decisions come from outside, by id, applied in park order. The world-ratchet gate proves it end to end: the request toward an endpoint that does not exist parks and freezes the machine, the world grows while it sleeps, and the release lands the same request. The guest never knows. |
+| **AC4 -- the verdict is external** | Every egress frame parks under the open valve into an operation with an id, the park reports its destination, and the decisions come from outside, by id, applied in park order. The freeze-ratchet gate proves it end to end: the request toward an endpoint that does not exist parks and freezes the machine, the world grows while it sleeps, and the release lands the same request. The guest never knows. |
 | **AC5 -- the true world** | A real internet fetch crosses the total membrane, one decision per frame (a small plain-HTTP endpoint; the gate skips when the host is offline). The leg rides the peer-patience bound: a segment that arrives at a frozen machine is lost at the edge, and the far end must retransmit -- thus AC3 keeps the deterministic stand-in, and this leg touches the world. |
 
 The clock gates must not move: the transport restore adds host-time
 work outside the clock window, and the probes verify that nothing
 entered the guest clock.
 
-## The world-ratchet gate
+## The freeze-ratchet gate
 
 The main acceptance criterion, above the disk and net gates. The
 world moves like a ratchet: each request for a missing part adds the
