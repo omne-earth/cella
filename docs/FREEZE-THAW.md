@@ -56,7 +56,11 @@ Two qualifications:
 ## Architecture
 
 Guest RAM is one MAP_SHARED file (`ram.img`). The RAM file is the
-freeze image. A sidecar file (`state`, format v9) holds the vCPU
+freeze image. The file is contiguous even when the mapping is not:
+a guest larger than the MMIO hole maps file bytes past 3328 MiB at
+guest-phys 4 GiB (docs/DEVICE-STATE.md, "The guest address map"),
+so an inspector walking `ram.img` translates offsets past the hole
+by that rule. A sidecar file (`state`, format v9) holds the vCPU
 state, the irqchip and PIT state, the kvmclock value, the serial
 registers, one block per virtio transport (with any held egress
 frames, and the ingress lane's held and deliverable frames), and
