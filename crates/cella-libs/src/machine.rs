@@ -411,13 +411,68 @@ pub fn create(m: &Manifest) -> Result<(), String> {
         }
     }
     fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-    fs::copy(&rootfs, dir.join("disk.img")).map_err(|e| format!("copying the disk: {e}"))?;
+    copy_sparse(&rootfs, &dir.join("disk.img")).map_err(|e| format!("copying the disk: {e}"))?;
     write_atomic(&dir.join("manifest.json"), m.to_json().as_bytes())
         .map_err(|e| format!("writing the manifest: {e}"))?;
     // The valve automaton's birth state: closed. The record lives
     // beside the machine, and only the gateway verbs change it.
     set_valve_record(&m.name, "closed")?;
     Ok(())
+}
+
+/// Copy a golden's artifact hole for hole. A flavor's ext4 is mostly
+/// holes, and `fs::copy` (`copy_file_range` end to end) writes every
+/// hole as data on a filesystem without reflink -- ext4, which is what
+/// a cella guest's own disk is, so a 4 GiB flavor became a 4 GiB write
+/// there. The length is set once, then only the data extents are
+/// copied, found with SEEK_DATA and SEEK_HOLE. Returns the bytes copied.
+pub fn copy_sparse(src: &Path, dst: &Path) -> io::Result<u64> {
+    use std::os::fd::AsRawFd;
+    let from = fs::File::open(src)?;
+    let to = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(dst)?;
+    let meta = from.metadata()?;
+    let len = meta.len() as libc::off_t;
+    let (sfd, dfd) = (from.as_raw_fd(), to.as_raw_fd());
+    if unsafe { libc::ftruncate(dfd, len) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut copied = 0u64;
+    let mut pos: libc::off_t = 0;
+    while pos < len {
+        let data = unsafe { libc::lseek(sfd, pos, libc::SEEK_DATA) };
+        if data < 0 {
+            let e = io::Error::last_os_error();
+            if e.raw_os_error() == Some(libc::ENXIO) {
+                break; // only holes remain
+            }
+            return Err(e);
+        }
+        let hole = unsafe { libc::lseek(sfd, data, libc::SEEK_HOLE) };
+        if hole < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut off_in: libc::off64_t = data;
+        let mut off_out: libc::off64_t = data;
+        let mut left = (hole - data) as usize;
+        while left > 0 {
+            let n = unsafe { libc::copy_file_range(sfd, &mut off_in, dfd, &mut off_out, left, 0) };
+            if n < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if n == 0 {
+                break;
+            }
+            left -= n as usize;
+            copied += n as u64;
+        }
+        pos = hole;
+    }
+    to.set_permissions(meta.permissions())?;
+    Ok(copied)
 }
 
 /// True when the machine's pid file names a live process.
@@ -1757,5 +1812,41 @@ mod tests {
             assert!(!machine_dir("m1").exists());
             assert!(destroy("m1").is_err());
         });
+    }
+}
+
+#[cfg(test)]
+mod copy_sparse_tests {
+    use super::copy_sparse;
+    use std::io::{Seek, SeekFrom, Write};
+    use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn holes_stay_holes() {
+        let dir = std::env::temp_dir().join(format!("cella-sparse-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src");
+        let dst = dir.join("dst");
+        let mut f = std::fs::File::create(&src).unwrap();
+        f.write_all(b"head").unwrap();
+        f.seek(SeekFrom::Start(64 << 20)).unwrap();
+        f.write_all(b"tail").unwrap();
+        drop(f);
+        let copied = copy_sparse(&src, &dst).unwrap();
+        let (s, d) = (
+            std::fs::metadata(&src).unwrap(),
+            std::fs::metadata(&dst).unwrap(),
+        );
+        assert_eq!(d.len(), s.len());
+        assert_eq!(std::fs::read(&dst).unwrap(), std::fs::read(&src).unwrap());
+        // Two data extents copied, nothing for the 64 MiB hole between them.
+        assert!(copied < 1 << 20, "copied {copied} bytes");
+        assert!(
+            d.blocks() <= s.blocks() + 16,
+            "dst blocks {} vs src {}",
+            d.blocks(),
+            s.blocks()
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

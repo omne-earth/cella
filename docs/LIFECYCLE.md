@@ -217,7 +217,11 @@ $HOME/.cella/
     manifest.json                the machine: flavors, memory, net, root mode,
                                  and, from the universe verbs, the layer
                                  digests and the latch
-    disk.img                     the machine's own disk (a copy at create)
+    disk.img                     the machine's own disk: the golden rootfs,
+                                 copied hole for hole at create (the image is
+                                 mostly holes, and on a filesystem without
+                                 reflink -- ext4, a guest's own disk -- a plain
+                                 copy would write every hole as data)
     ram.img                      guest RAM, present from the first start
     state                        the freeze sidecar, present only while frozen
     pid                          the VMM pid, present only while running

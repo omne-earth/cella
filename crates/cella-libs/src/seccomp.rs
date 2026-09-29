@@ -113,7 +113,8 @@ pub const CLI_BASE: &[Entry] = &[
     // extension.
     (73,  "flock: cella_libs::ledger::append_chained's exclusive lock"),
     (91,  "fchmod: cella_libs::golden's mode stamp on a copied artifact (disk.img at create)"),
-    (326, "copy_file_range: cella_libs::golden's artifact copy (disk.img from the golden rootfs)"),
+    (326, "copy_file_range: machine::copy_sparse, each data extent of disk.img from the golden rootfs"),
+    (77,  "ftruncate: machine::copy_sparse sets disk.img's length once, so the holes stay holes"),
 ];
 
 /// Build and install the real BPF filter: `allowed` syscalls pass;
