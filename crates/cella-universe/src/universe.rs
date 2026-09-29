@@ -300,8 +300,16 @@ pub fn extract(vm: &str, path: &str) -> Result<(), String> {
         // but a reset is not a reliable exit (the kernel may boot
         // again instead of shutting the VMM down), thus the host
         // polls the trailer and stops the appliance itself. The
-        // budget scales with the evidence.
-        let budget = std::time::Duration::from_secs(60 + evidence_len / (4 << 20));
+        // budget scales with the evidence, at a rate the host can
+        // state: 4 MiB/s is a host's own disk; a cella guest hosting
+        // this extract reads through two VMMs and names a lower one
+        // in CELLA_EXTRACT_MIB_PER_SEC (docs/LIFECYCLE.md, extract).
+        let mib_per_sec: u64 = std::env::var("CELLA_EXTRACT_MIB_PER_SEC")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|rate| *rate > 0)
+            .unwrap_or(4);
+        let budget = std::time::Duration::from_secs(60 + evidence_len / (mib_per_sec << 20));
         let t0 = std::time::Instant::now();
         loop {
             if trailer_present(&scratch) {

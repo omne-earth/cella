@@ -175,7 +175,10 @@ verb refuses.
   human: a temporary machine named `<machine>-extractor` boots the
   stock rootfs with the evidence at /rock (the same ro, noexec,
   nosuid, nodev, norecovery mount) and a blank scratch disk as a
-  third virtio-blk. The guest init tars the named path to the raw
+  third virtio-blk. The host gives the job 60 s plus the evidence's
+  size at 4 MiB/s -- a host disk's rate; a cella guest hosting the
+  extract reads through two VMMs and names a lower rate in
+  `CELLA_EXTRACT_MIB_PER_SEC`. The guest init tars the named path to the raw
   scratch (offset 512), writes a trailer to sector 0 last -- the
   byte length and the sha256 on success, the reason on failure --
   and halts. The host polls for the trailer (a fact on disk, not a
