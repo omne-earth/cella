@@ -52,7 +52,8 @@ impl Minter {
         if let Some(c) = self.minted.lock().unwrap().get(name) {
             return Ok(c.clone());
         }
-        let leaf_key = rcgen::KeyPair::generate().map_err(|e| e.to_string())?;
+        let leaf_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384)
+            .map_err(|e| e.to_string())?;
         let mut params =
             rcgen::CertificateParams::new(vec![name.to_string()]).map_err(|e| e.to_string())?;
         params.distinguished_name = rcgen::DistinguishedName::new();
@@ -104,8 +105,13 @@ fn pem_to_der(pem: &str) -> Result<CertificateDer<'static>, String> {
 /// Mint a fresh pair CA -- the image *build*'s door, used by
 /// `cella build rootfs terminator` (phase C) and by the tests.
 /// Returns (cert_pem, key_pem).
+/// ECDSA P-384 with SHA-384, for the CA and every leaf: the strongest
+/// curve the `ring` provider signs and verifies (no P-521 there), and one
+/// curve for the whole pair so a nested inner pair, minted elsewhere,
+/// matches it exactly.
 pub fn mint_pair_ca(pair_name: &str) -> Result<(String, String), String> {
-    let key = rcgen::KeyPair::generate().map_err(|e| e.to_string())?;
+    let key =
+        rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).map_err(|e| e.to_string())?;
     let mut params =
         rcgen::CertificateParams::new(Vec::<String>::new()).map_err(|e| e.to_string())?;
     params.distinguished_name = rcgen::DistinguishedName::new();

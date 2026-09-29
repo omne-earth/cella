@@ -261,7 +261,10 @@ the harness's own tools. `<gw>` is the terminator's wire address;
     and the member hears 502; with `ca_extra=<pem>` in the conf (the
     image's init writes it when `/etc/cella/extra-roots.pem` exists)
     the same fetch answers. Verify both halves: refused first, then
-    answered.
+    answered. A nested copy also bakes `/etc/cella/terminator.defaults`
+    (`pair=1`, `upstream_dns=<outer appliance>`) and its own pair CA;
+    the init reads the defaults where no cmdline knob is given
+    (docs/TLS-TERMINATOR.md, "Baked defaults").
 
 Also verify the freeze story once: freeze the member
 mid-handshake, thaw it, and the session completes -- the member

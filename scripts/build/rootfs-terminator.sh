@@ -37,7 +37,15 @@ echo "cella_terminator: reply ports 50000-50007"
 echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse
 echo "cella_terminator: tw_reuse on (1s port recycling)"
 
+# The image's own defaults, for a golden a verb machine boots (no
+# cmdline of its own): /etc/cella/terminator.defaults, key=value in the
+# conf's grammar -- pair=N, upstream_dns=IP[:PORT]. A cmdline knob wins.
+# A nested terminator's copy carries pair=1 and the outer appliance as
+# its resolver (docs/TLS-TERMINATOR.md, "Baked defaults").
+DEFAULTS=/etc/cella/terminator.defaults
+baked() { [ -f "$DEFAULTS" ] && sed -n "s/^$1=//p" "$DEFAULTS" | head -1; }
 PAIR=$(sed -n 's/.*cella_pair=\([0-9]*\).*/\1/p' /proc/cmdline)
+[ -z "$PAIR" ] && PAIR=$(baked pair)
 [ -z "$PAIR" ] && [ -e /sys/class/net/eth1 ] && PAIR=0
 WIRE_IP="10.77.${PAIR:-0}.1"
 if [ -e /sys/class/net/eth1 ]; then
@@ -49,6 +57,7 @@ else
 fi
 
 DNS=$(sed -n "s/.*cella_dns=\([0-9.:]*\).*/\1/p" /proc/cmdline)
+[ -z "$DNS" ] && DNS=$(baked upstream_dns)
 LISTEN=$(sed -n 's/.*cella_listen=\([0-9,]*\).*/\1/p' /proc/cmdline)
 MAPS=$(sed -n 's/.*cella_map=\([^ ]*\).*/\1/p' /proc/cmdline)
 {

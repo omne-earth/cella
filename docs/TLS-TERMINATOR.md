@@ -438,6 +438,21 @@ sequenceDiagram
     Note over O,W: the gate stands the middle alone, a private authority's server answering as the world -- nested for real, the middle is cella's own terminator and the world is behind it
 ```
 
+## Baked defaults
+
+The appliance's init writes `/etc/cella-terminator.conf` at every boot
+from the kernel command line (`cella_pair=`, `cella_dns=`,
+`cella_listen=`, `cella_map=`) or from its defaults. A golden that a
+verb machine boots has no command line of its own, so an image may
+carry `/etc/cella/terminator.defaults` -- `key=value` lines in the
+conf's grammar, `pair=N` and `upstream_dns=IP[:PORT]` -- and the init
+reads them where a knob is absent; a knob still wins. Two files beside
+it complete a nested terminator's copy: `/etc/cella/extra-roots.pem`,
+the outer pair CA the world leg trusts (t12), and its own fresh
+`pair-ca.pem` / `pair-ca.key`, so the inner mint never shares the
+outer's key. The inner pair then lives on `10.77.1.0/24` with the outer
+appliance (`10.77.0.1`) as its resolver and its world.
+
 ## The minted leaf, exactly
 
 The member's verifier is not the pair's to choose, so the leaf
@@ -445,6 +460,7 @@ serves the strictest honest one (t7 and t8 hold it there):
 
 | Field | Value | Why |
 |---|---|---|
+| Key | ECDSA P-384, SHA-384 -- the CA and every leaf | the strongest curve `ring` signs and verifies (no P-521 there); one curve for the whole pair, so a nested inner pair minted elsewhere matches it |
 | Subject / SAN | the SNI, verbatim | hostname verification's anchor |
 | Validity | 1975-01-01 to 2200-01-01 | the frozen-member corollary (2.7 (c)): a member validates against its own past clock |
 | AKI | the pair CA's SKI | RFC 5280 chain building under strict semantics |
