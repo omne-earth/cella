@@ -259,6 +259,26 @@ pub fn run(cfg: Config) -> Result<(), String> {
     let minter = Arc::new(Minter::load(&cfg.ca_cert, &cfg.ca_key)?);
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    // The consented authority beside the public roots: nested, this
+    // terminator's world is an outer terminator, whose leaves come from
+    // the outer pair CA. Named and unreadable is fatal, never a silent
+    // fall back to the public roots alone.
+    if let Some(path) = &cfg.ca_extra {
+        let pem = std::fs::read(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+        let mut reader = std::io::BufReader::new(pem.as_slice());
+        let mut added = 0usize;
+        for cert in rustls_pemfile::certs(&mut reader) {
+            let cert = cert.map_err(|e| format!("{}: {e}", path.display()))?;
+            roots
+                .add(cert)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            added += 1;
+        }
+        if added == 0 {
+            return Err(format!("{}: no certificate in it", path.display()));
+        }
+        println!("terminator: {added} extra root(s) from {}", path.display());
+    }
     let roots = Arc::new(roots);
     let resolve: Arc<Resolver> = Arc::new(upstream_resolver(cfg.upstream_dns, cfg.upstream_port));
     let maps = Arc::new(cfg.maps.clone());

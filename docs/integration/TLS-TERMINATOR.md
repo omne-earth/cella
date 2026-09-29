@@ -171,9 +171,9 @@ runtime and policy: a member that widens its range under wider
 grants presents more concurrent crossings, as the t11 gate does
 to saturate the eight.
 
-## What to verify, t1-t11
+## What to verify, t1-t12
 
-The reference assertions are the eleven gates (`make
+The reference assertions are the twelve gates (`make
 smoke-tls-terminator`; docs/TLS-TERMINATOR.md shows each walk as
 a diagram). An integration test mirrors them one for one, with
 the harness's own tools. `<gw>` is the terminator's wire address;
@@ -254,6 +254,14 @@ the harness's own tools. `<gw>` is the terminator's wire address;
    docs/WORLD-ENGINE.md, or the engine's own decision latency --
    after cella's ear, the engine's per-verdict cost is the
    ceiling, so know yours).
+
+10. **The authorized middle (t12).** When this terminator's world is
+    another terminator (a nested pair), its upstream presents a leaf
+    from the outer pair CA. Without consent the world leg refuses it
+    and the member hears 502; with `ca_extra=<pem>` in the conf (the
+    image's init writes it when `/etc/cella/extra-roots.pem` exists)
+    the same fetch answers. Verify both halves: refused first, then
+    answered.
 
 Also verify the freeze story once: freeze the member
 mid-handshake, thaw it, and the session completes -- the member

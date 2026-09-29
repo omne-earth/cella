@@ -55,6 +55,11 @@ MAPS=$(sed -n 's/.*cella_map=\([^ ]*\).*/\1/p' /proc/cmdline)
     echo "wire_ip=$WIRE_IP"
     echo "upstream_dns=${DNS:-9.9.9.9}"
     echo "listen=${LISTEN:-443,80}"
+    # A nested terminator: the image carries the outer pair CA at this
+    # path, and the world leg trusts it beside the public roots.
+    if [ -f /etc/cella/extra-roots.pem ]; then
+        echo "ca_extra=/etc/cella/extra-roots.pem"
+    fi
     if [ -n "$MAPS" ]; then
         echo "$MAPS" | tr '+' '\n' | while read -r m; do
             [ -n "$m" ] && echo "map=$m"

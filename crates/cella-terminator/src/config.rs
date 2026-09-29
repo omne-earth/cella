@@ -7,6 +7,9 @@
 //!     listen=443,80
 //!     ca_cert=/etc/cella/pair-ca.pem
 //!     ca_key=/etc/cella/pair-ca.key
+//!     # an authority the world leg trusts beside the public roots:
+//!     # the pair CA of an outer terminator, when this one is nested
+//!     ca_extra=/etc/cella/extra-roots.pem
 //!     # a nameless bare-TCP port routes only by a static map:
 //!     map=2222:git.internal.example:22
 
@@ -36,6 +39,10 @@ pub struct Config {
     pub listen: Vec<u16>,
     pub ca_cert: PathBuf,
     pub ca_key: PathBuf,
+    /// A PEM of authorities the world leg trusts beside the public
+    /// roots. A terminator behind a terminator meets the outer pair
+    /// CA's leaf upstream, and would refuse it as unknown without this.
+    pub ca_extra: Option<PathBuf>,
     /// The static maps for nameless flows.
     pub maps: Vec<PortMap>,
 }
@@ -53,6 +60,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let mut listen: Vec<u16> = Vec::new();
     let mut ca_cert = None;
     let mut ca_key = None;
+    let mut ca_extra = None;
     let mut maps = Vec::new();
     for (idx, raw) in text.lines().enumerate() {
         let n = idx + 1;
@@ -94,6 +102,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
             }
             "ca_cert" => ca_cert = Some(PathBuf::from(value.trim())),
             "ca_key" => ca_key = Some(PathBuf::from(value.trim())),
+            "ca_extra" => ca_extra = Some(PathBuf::from(value.trim())),
             "map" => {
                 let mut parts = value.trim().splitn(3, ':');
                 let (a, b, c) = (parts.next(), parts.next(), parts.next());
@@ -128,6 +137,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         },
         ca_cert: ca_cert.unwrap_or_else(|| PathBuf::from("/etc/cella/pair-ca.pem")),
         ca_key: ca_key.unwrap_or_else(|| PathBuf::from("/etc/cella/pair-ca.key")),
+        ca_extra,
         maps,
     })
 }

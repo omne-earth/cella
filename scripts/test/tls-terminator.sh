@@ -19,12 +19,16 @@
 #       and fast -- the verdict path must never be the bottleneck
 #       (t7 and t8, the no-VM verifier gates, live in their own
 #       scripts)
+#   t12 the authorized middle: a world behind a private authority
+#       is refused until that authority is a consented extra root
+#       (ca_extra) -- the nested terminator, a terminator's own
+#       world being another terminator
 set -uo pipefail
 
 T="${1:-}"
 case "$T" in
-t1|t2|t3|t4|t5|t6|t9|t10|t11) ;;
-*) echo "usage: tls-terminator.sh <t1|t2|t3|t4|t5|t6|t9>"; exit 2 ;;
+t1|t2|t3|t4|t5|t6|t9|t10|t11|t12) ;;
+*) echo "usage: tls-terminator.sh <t1|t2|t3|t4|t5|t6|t9|t10|t11|t12>"; exit 2 ;;
 esac
 
 cd "$(dirname "$0")/../.."
@@ -34,6 +38,7 @@ WORLD_PORT=$(( (RANDOM % 8976) + 1024 ))
 DIAL_PORT=$(( (RANDOM % 8976) + 1024 ))
 DNS_PORT=$(( (RANDOM % 8976) + 1024 ))
 HTTP_PORT=$(( (RANDOM % 8976) + 1024 ))
+MID_PORT=$(( (RANDOM % 8976) + 1024 ))
 # The world services live on the host's LAN address: from a guest,
 # 127.0.0.1 is the guest's own loopback and never leaves the wire.
 HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1); [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
@@ -59,14 +64,14 @@ TERM_VM=appliance
 MEM_VM=member
 WIRE="pair$RANDOM"
 DNS_COUNT="$CELLA_HOME/dns-count"
-MOTOR_PID=""; BT_PID=""; BM_PID=""; DNS_PID=""; HTTP_PID=""
+MOTOR_PID=""; BT_PID=""; BM_PID=""; DNS_PID=""; HTTP_PID=""; MID_PID=""
 evidence() {
     echo "-- member console:"; tail -25 "$CELLA_HOME/machines/$MEM_VM/console.log" 2>/dev/null | cat -v
     echo "-- appliance console:"; tail -25 "$CELLA_HOME/machines/$TERM_VM/console.log" 2>/dev/null | cat -v
     echo "-- motor (full):"; cat "$MOTOR_LOG" 2>/dev/null; echo "-- member probe lines:"; grep -a "probe" "$CELLA_HOME/machines/$MEM_VM/console.log" 2>/dev/null | cat -v
 }
 teardown() {
-    for p in "$BT_PID" "$BM_PID" "$MOTOR_PID" "$DNS_PID" "$HTTP_PID"; do
+    for p in "$BT_PID" "$BM_PID" "$MOTOR_PID" "$DNS_PID" "$HTTP_PID" "$MID_PID"; do
         [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
     if [ -n "${CELLA_KEEP_SANDBOX:-}" ]; then
@@ -147,6 +152,42 @@ else
     (cd "$CELLA_HOME/www" && exec python3 -m http.server "$HTTP_PORT" --protocol HTTP/1.1 --bind "$HOST_IP" >/dev/null 2>&1) &
 fi
 HTTP_PID=$!
+if [ "$T" = t12 ]; then
+    # The middle: a TLS world for w.test whose leaf comes from a private
+    # authority -- exactly what an outer terminator is to an inner one.
+    MID="$CELLA_HOME/mid"; mkdir -p "$MID"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
+        -keyout "$MID/ca.key" -out "$MID/ca.pem" -subj "/CN=the middle" \
+        -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+    openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+        -keyout "$MID/leaf.key" -out "$MID/leaf.csr" -subj "/CN=w.test" 2>/dev/null
+    printf 'subjectAltName=DNS:w.test\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature\n' > "$MID/leaf.ext"
+    openssl x509 -req -in "$MID/leaf.csr" -CA "$MID/ca.pem" -CAkey "$MID/ca.key" -CAcreateserial \
+        -out "$MID/leaf.pem" -days 2 -extfile "$MID/leaf.ext" 2>/dev/null
+    [ -s "$MID/leaf.pem" ] || { echo "FAIL: openssl minted no middle"; exit 1; }
+    python3 - "$HOST_IP" "$MID_PORT" "$MID/leaf.pem" "$MID/leaf.key" >/dev/null 2>&1 <<'PYMID' &
+import socket, ssl, sys, threading
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(sys.argv[3], sys.argv[4])
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind((sys.argv[1], int(sys.argv[2]))); s.listen(16)
+def serve(c):
+    try:
+        t = ctx.wrap_socket(c, server_side=True)
+        d = b""
+        while b"\r\n\r\n" not in d:
+            r = t.recv(4096)
+            if not r: return
+            d += r
+        t.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 18\r\nConnection: close\r\n\r\nthe-middle-answers")
+    except Exception: pass
+    finally: c.close()
+while True:
+    c, _ = s.accept()
+    threading.Thread(target=serve, args=(c,), daemon=True).start()
+PYMID
+    MID_PID=$!
+fi
 
 say "$T: stand the pair, the judge, and the host world"
 "$BIN" create "$TERM_VM" --rootfs terminator --net "world:$WORLD_PORT/udp,wire:$WIRE" >/dev/null
@@ -169,6 +210,7 @@ GRANTS="--grant arp:600 \
 REPLY_TOP=50007
 [ "$T" = t11 ] && REPLY_TOP=50015 \
     && GRANTS="$GRANTS --grant $GW:$HTTP_PORT/tcp:600"
+[ "$T" = t12 ] && GRANTS="$GRANTS --grant $GW:$MID_PORT/tcp:600 --grant $HOST_IP:$MID_PORT/tcp:600"
 for p in $(seq 50000 $REPLY_TOP); do
     GRANTS="$GRANTS --grant $MEMBER_IP:$p/tcp:600 --grant $MEMBER_IP:$p/udp:600"
 done
@@ -199,6 +241,10 @@ say "  configure the pair (the gates' console hand; the field uses cmdline knobs
 # which faces the real world: the true upstream, no map.
 if [ "$T" = t6 ]; then
     APPLIANCE_CONF="wire_ip=$GW\nupstream_dns=9.9.9.9\nlisten=443,80\n"
+elif [ "$T" = t12 ]; then
+    # The middle's port is a named flow: the appliance listens on it
+    # and dials the world unmapped, so the world leg is TLS, verified.
+    APPLIANCE_CONF="wire_ip=$GW\nupstream_dns=$HOST_IP:$DNS_PORT\nlisten=443,80,$MID_PORT\n"
 elif [ "$T" = t11 ]; then
     # The storm speaks HTTP on a named flow: the appliance listens
     # on the stub's own port so the world leg dials it unmapped
@@ -323,6 +369,34 @@ t6)
         || { echo "FAIL: expected exit 0 (the world answered) -- $(mem_log 'probe-rc=' | tail -1)"; evidence; exit 1; }
     echo "  real name, real roots, minted leaf: the whole seam against the world"
     echo; echo "PASS: t6 -- the named world"
+    ;;
+
+t12)
+    say "t12: the authorized middle -- a world behind a private authority"
+    # The negative first: the world's leaf comes from an authority the
+    # appliance does not hold. The member leg verifies (the mint is the
+    # pair's), the world leg refuses, the member hears 502: exit 3.
+    type_mem "/bin/cella-terminator --probe w.test $MID_PORT $GW /etc/cella/pair-ca.pem; echo probe-r\"c\"=\$?"
+    wait_console "$MEM_VM" "probe-rc=" 60 || { echo "FAIL: the probe never returned"; evidence; exit 1; }
+    mem_log "probe: verified w.test" >/dev/null \
+        || { echo "FAIL: the member-leg handshake did not verify"; evidence; exit 1; }
+    mem_log "probe-rc=3" >/dev/null \
+        || { echo "FAIL: expected exit 3 (an unknown authority upstream) -- $(mem_log 'probe-rc=' | tail -1)"; evidence; exit 1; }
+    echo "  unknown authority: the world leg refused, the member heard 502"
+    # Consent the middle: its authority becomes an extra root, and the
+    # terminator restarts on the new conf (the respawn loop brings it).
+    PEM_LINES=$(awk '{printf "%s\\n", $0}' "$MID/ca.pem")
+    type_term "printf '$PEM_LINES' > /etc/cella/extra-roots.pem; printf '$APPLIANCE_CONF' > /etc/cella-terminator.conf; echo ca_extra=/etc/cella/extra-roots.pem >> /etc/cella-terminator.conf; pkill cella-terminator; echo extra-o\"k\""
+    wait_console "$TERM_VM" "extra-ok" 30 || { echo "FAIL: the appliance took no extra root"; evidence; exit 1; }
+    wait_console "$TERM_VM" "extra root(s) from" 30 || { echo "FAIL: the terminator did not read the extra root"; evidence; exit 1; }
+    type_mem "/bin/cella-terminator --probe w.test $MID_PORT $GW /etc/cella/pair-ca.pem; echo probe2-r\"c\"=\$?"
+    wait_console "$MEM_VM" "probe2-rc=" 60 || { echo "FAIL: the second probe never returned"; evidence; exit 1; }
+    mem_log "probe: answered: HTTP/1.1 200" >/dev/null \
+        || { echo "FAIL: the world did not answer through the consented middle"; evidence; exit 1; }
+    mem_log "probe2-rc=0" >/dev/null \
+        || { echo "FAIL: expected exit 0 -- $(mem_log 'probe2-rc=' | tail -1)"; evidence; exit 1; }
+    echo "  consented authority: two terminations, one verified world"
+    echo; echo "PASS: t12 -- the authorized middle"
     ;;
 
 t10)

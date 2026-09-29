@@ -50,7 +50,7 @@ export KERNEL_VERSION BUSYBOX_VERSION GUEST_BASH_VERSION
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
         tls-terminator-t6 tls-terminator-t7 tls-terminator-t8 \
         tls-terminator-t9 tls-terminator-t10 tls-terminator-t11 \
-        golden-terminator \
+        tls-terminator-t12 golden-terminator \
         smoke-device-state device-state-ac1 device-state-ac2 \
         device-state-ac3 device-state-ac4 device-state-ac5 \
         test-jail test-seccomp test-seccomp-vmm-kvm test-seccomp-personas \
@@ -115,7 +115,7 @@ SMOKE_TARGETS := smoke smoke-debug smoke-release \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
         tls-terminator-t6 tls-terminator-t7 tls-terminator-t8 \
         tls-terminator-t9 tls-terminator-t10 tls-terminator-t11 \
-        golden-terminator \
+        tls-terminator-t12 golden-terminator \
         smoke-cella-doctor smoke-cella-vmm smoke-cella-machine \
         smoke-cella-gateway smoke-cella-network smoke-cella-probe \
         smoke-engine engine-w1 engine-w2 engine-w3 engine-w4 engine-w5 \
@@ -620,6 +620,13 @@ tls-terminator-t11: build-lab golden golden-terminator
 	$(LOG)
 	$(SCRIPTS)/test/tls-terminator.sh t11
 
+## t12: the authorized middle -- a world behind a private authority is
+## refused until that authority is a consented extra root (the nested
+## terminator)
+tls-terminator-t12: build-lab golden golden-terminator
+	$(LOG)
+	$(SCRIPTS)/test/tls-terminator.sh t12
+
 ## The terminated pair's family, the interceptor first; t6 is the
 ## named world (https://example.com, SKIPs without internet), t7
 ## the strict verifier (openssl judges the mint, no VMs), t8 the
@@ -627,7 +634,8 @@ tls-terminator-t11: build-lab golden golden-terminator
 smoke-tls-terminator: tls-terminator-t1 tls-terminator-t2 \
         tls-terminator-t3 tls-terminator-t4 tls-terminator-t5 \
         tls-terminator-t6 tls-terminator-t7 tls-terminator-t8 \
-        tls-terminator-t9 tls-terminator-t10 tls-terminator-t11
+        tls-terminator-t9 tls-terminator-t10 tls-terminator-t11 \
+        tls-terminator-t12
 
 ## The membrane-memory family, the door first (mm1-mm4 ride it)
 smoke-membrane-memory: membrane-memory-mm5 membrane-memory-mm1 \

@@ -404,6 +404,40 @@ sequenceDiagram
     W-->>M: 200
 ```
 
+### t12 -- the authorized middle
+
+A terminator's world is not always the world: nested, it is another
+terminator, whose leaves come from the outer pair CA -- an authority
+the public roots do not know. The gate stands a private authority's
+world for `w.test` and probes twice. First the appliance holds only
+the public roots: the member leg verifies (the mint is the pair's),
+the world leg refuses the unknown authority, and the member hears
+502 (exit 3). Then the authority's certificate is consented as
+`ca_extra`, the terminator restarts, and the same probe answers 200
+(exit 0): two terminations, one verified world. The consent is a
+file the operator can read, never a compile-time root and never a
+blind splice.
+
+```mermaid
+sequenceDiagram
+    participant M as the member
+    participant T as the inner terminator (public roots)
+    participant O as the middle -- an outer terminator with its own pair CA
+    participant W as the world
+    M->>T: TLS w.test (the inner pair's mint verifies)
+    T->>O: TLS w.test
+    O-->>T: leaf from the outer pair CA -- unknown here
+    T-->>M: 502 -- refused, exit 3
+    Note over T: ca_extra=/etc/cella/extra-roots.pem (the outer pair CA), restart
+    M->>T: TLS w.test
+    T->>O: TLS w.test, the outer authority now held
+    O->>W: TLS w.test, verified against the public roots
+    W-->>O: 200
+    O-->>T: 200, on the outer mint
+    T-->>M: 200, on the inner mint -- exit 0
+    Note over O,W: the gate stands the middle alone, a private authority's server answering as the world -- nested for real, the middle is cella's own terminator and the world is behind it
+```
+
 ## The minted leaf, exactly
 
 The member's verifier is not the pair's to choose, so the leaf
