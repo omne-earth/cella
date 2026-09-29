@@ -96,13 +96,8 @@ pub const ALLOWED: &[Entry] = &[
     (293, "pipe2: not currently used, reserved for a future self-pipe"),
     (302, "prlimit64: std::fs / allocator introspection on some libcs"),
     (318, "getrandom: glibc/Rust runtime init, and ledger::uuid7's random fill"),
-    // The vDSO serves clock_gettime on most hosts, and the syscall then
-    // never reaches this filter. Inside a guest, kvm-clock without
-    // PVCLOCK_TSC_STABLE_BIT makes the vDSO refuse, and glibc falls
-    // back to the real syscall. The timing instrumentation of the
-    // freeze and the thaw reads the clock, thus a cella that runs
-    // inside a cella guest dies with SIGSYS in do_freeze without this
-    // entry. probe-inception found this.
+    // The vDSO fallback inside a guest: see CLI_BASE's entry in
+    // cella-libs, the one home for the rationale.
     (228, "clock_gettime: freeze/thaw timing instrumentation; vDSO fallback inside a guest"),
     (288, "accept4: the console socket client; the listener binds before this filter, and socket(2) stays the canary"),
     (45,  "recvfrom: std reads a unix stream with recv, not read (console client input)"),

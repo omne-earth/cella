@@ -90,6 +90,14 @@ pub const CLI_BASE: &[Entry] = &[
     (217, "getdents64: fs::read_dir listing the machines directory (list, and tap enumeration)"),
     (302, "prlimit64: std::fs / allocator introspection on some libcs"),
     (318, "getrandom: glibc/Rust runtime init, and ledger::uuid7's random fill"),
+    // The vDSO serves clock_gettime on most hosts, and the syscall then
+    // never reaches a filter. Inside a guest, kvm-clock without
+    // PVCLOCK_TSC_STABLE_BIT makes the vDSO refuse, and glibc falls back
+    // to the real syscall -- so every persona that runs inside a cella
+    // guest needs it, not only the VMM's freeze path (which found it
+    // first, via probe-inception). Without it `cella create` inside a
+    // guest dies with SIGSYS (audit syscall=228) before it prints.
+    (228, "clock_gettime: std::time and log timestamps; vDSO fallback inside a guest"),
     (332, "statx: fs::create_dir_all confirming an existing path is a directory, on some libc versions"),
     (334, "rseq: glibc's restartable-sequence registration, runs once at startup"),
     (273, "set_robust_list: glibc thread setup, runs once at startup"),
