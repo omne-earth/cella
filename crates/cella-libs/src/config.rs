@@ -16,7 +16,14 @@
 // membrane its router solicitations and MLD reports would park and
 // freeze the machine on chatter no one sent (docs/NETWORK-MODEL.md).
 // Chatter that exists still parks; this removes the pointless source.
-pub const DEFAULT_BASE_ARGS: &str = "console=ttyS0 reboot=t panic=1 pci=off ipv6.disable=1";
+// no-kvmapf: the guest never enrolls in KVM async page faults, so a
+// host page-in is a pure vCPU stall -- no shared page, no injected
+// events, no in-guest handler for an inside agent to hammer. The
+// overlap async PF buys is worthless here (one vCPU, RAM mlocked),
+// and a stall is time-loss of exactly the shape the clock model
+// already absorbs.
+pub const DEFAULT_BASE_ARGS: &str =
+    "console=ttyS0 reboot=t panic=1 pci=off ipv6.disable=1 no-kvmapf";
 
 /// The kernel arguments that control time in the guest.
 ///

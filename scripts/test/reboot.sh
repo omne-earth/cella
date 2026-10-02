@@ -55,6 +55,19 @@ grep -q "cella: guest requested shutdown" "$M/vmm.log" || {
 }
 echo "  the word is on the record: guest requested shutdown"
 
+# The async-PF contract has two layers. The lock is the VMM's CPUID
+# mask (vcpu.rs mask_async_pf, unit-tested): the feature is never
+# advertised, so no guest kernel can enroll. The belt is the
+# no-kvmapf cmdline token, whose delivery IS console-observable --
+# the kernel echoes its command line at boot. (Enrollment itself
+# prints only at pr_debug in 7.2, so a console grep for it would be
+# blind; the lock's proof lives in the unit test, not here.)
+grep -aq "Command line:.*no-kvmapf" "$M/console.log" || {
+    echo "FAIL: the no-kvmapf token never reached the guest's command line"
+    exit 1
+}
+echo "  no-kvmapf rode the command line; the CPUID mask stands below it"
+
 # The forensic line's stable token: a completed reboot=t triple
 # fault reads exit=reset, and titanium's books-level triage greps
 # exactly this.

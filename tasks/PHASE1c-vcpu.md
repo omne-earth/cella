@@ -43,6 +43,12 @@ the plan, not the work.)
   machine -- every other vCPU halts coherently (immediate_exit,
   then a barrier) before the ledger flush declares the park; no
   vCPU runs an instruction past the freeze line.
+- The paravirt surface re-worded, not re-ruled: async PF stays
+  refused (the mask already covers every vCPU stamped from the
+  template, and N handlers would be N times the refused surface),
+  but the "one vCPU has nothing to overlap" sentence in
+  docs/DEVICE-STATE.md and vcpu.rs thins at N -- restate the
+  argument in its SMP form.
 - Freeze/thaw v10: save and restore N vCPU states; TSCs restored
   in lockstep (one offset, applied to all, verified after
   KVM_SET_MSRS); kvmclock stays the single source it is.
