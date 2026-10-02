@@ -28,9 +28,33 @@ impl From<kvm_ioctls::Error> for Error {
 }
 
 /// Filtered CPUID: whatever this host's KVM supports, capped to the
-/// bindings' max entry count.
+/// bindings' max entry count, minus the paravirt features this VMM
+/// refuses to offer.
 pub fn supported_cpuid(kvm: &Kvm) -> Result<CpuId, Error> {
-    Ok(kvm.get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)?)
+    let mut cpuid = kvm.get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)?;
+    mask_async_pf(&mut cpuid);
+    Ok(cpuid)
+}
+
+/// Never advertise KVM async page faults (features leaf 0x4000_0001,
+/// EAX bits 4/10/14). The guest-side machinery -- a shared page, host-
+/// injected events, an interrupt handler under attacker-influenced
+/// timing -- is a state machine an inside agent can hammer, and its
+/// benefit (overlapping guest work with host page-ins) is worthless
+/// here: one vCPU, RAM mlocked. Unadvertised beats unenrolled: the
+/// guest's kernel.c gates enrollment on this very bit, so no guest --
+/// ours or an integrator's custom image -- can opt back in. The
+/// no-kvmapf cmdline token is the belt; this mask is the lock.
+fn mask_async_pf(cpuid: &mut CpuId) {
+    const KVM_CPUID_FEATURES: u32 = 0x4000_0001;
+    const ASYNC_PF: u32 = 1 << 4;
+    const ASYNC_PF_VMEXIT: u32 = 1 << 10;
+    const ASYNC_PF_INT: u32 = 1 << 14;
+    for entry in cpuid.as_mut_slice() {
+        if entry.function == KVM_CPUID_FEATURES {
+            entry.eax &= !(ASYNC_PF | ASYNC_PF_VMEXIT | ASYNC_PF_INT);
+        }
+    }
 }
 
 pub fn create_vcpu(vm: &VmFd, cpuid: &CpuId) -> Result<VcpuFd, Error> {
@@ -385,5 +409,36 @@ pub fn dispatch(exit: VcpuExit, devices: &mut Devices) -> RunResult {
             cella_libs::logln!("cella: unhandled vcpu exit: {other:?}");
             RunResult::Continue
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn async_pf_bits_masked_others_kept() {
+        let entry = kvm_bindings::kvm_cpuid_entry2 {
+            function: 0x4000_0001,
+            eax: u32::MAX,
+            ..Default::default()
+        };
+        let other = kvm_bindings::kvm_cpuid_entry2 {
+            function: 0x4000_0000,
+            eax: u32::MAX,
+            ..Default::default()
+        };
+        let mut cpuid = CpuId::from_entries(&[entry, other]).unwrap();
+        mask_async_pf(&mut cpuid);
+        let e = &cpuid.as_slice()[0];
+        assert_eq!(e.eax & (1 << 4), 0, "ASYNC_PF cleared");
+        assert_eq!(e.eax & (1 << 10), 0, "ASYNC_PF_VMEXIT cleared");
+        assert_eq!(e.eax & (1 << 14), 0, "ASYNC_PF_INT cleared");
+        assert_eq!(
+            e.eax,
+            !((1 << 4) | (1 << 10) | (1 << 14)),
+            "every other feature bit survives"
+        );
+        assert_eq!(cpuid.as_slice()[1].eax, u32::MAX, "other leaves untouched");
     }
 }
