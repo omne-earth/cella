@@ -42,6 +42,23 @@ bound is what the host can back. The RAM file stays one contiguous
 image (low bytes then high bytes): the split is a property of the
 mapping, never of the bytes, and the freeze format is unchanged.
 
+## The paravirt surface
+
+The guest sees KVM's paravirt features through a filtered CPUID,
+and the filter subtracts as policy: async page faults are never
+advertised (the three feature bits are masked in the VMM), and the
+default command line carries `no-kvmapf` as the belt under that
+lock. The machinery refused -- a guest-registered shared page,
+host-injected not-present events, an in-guest handler running
+under attacker-influenced timing -- is state-machine surface an
+inside agent could hammer, and its benefit is void here: one vCPU
+has nothing to overlap with a page-in, and RAM is mlocked where
+the host allows. A host page-in is therefore a pure vCPU stall --
+the guest is simply not running, nothing is injected, and the lost
+time has the same shape as host jitter, which the clock model
+already absorbs. kvm-clock and PV EOI remain advertised: they are
+the time discipline's own instruments.
+
 ## What the device holds, and what RAM holds
 
 The rings themselves live in guest RAM, and the freeze already
